@@ -347,9 +347,16 @@ def resolve_asientos_with_gemini():
     # Solo cuentas de 5 dígitos: el usuario indicó que este es el nivel operativo de TANA.
     pcge_5 = [[code, desc] for code, desc in pcge_map.items() if re.fullmatch(r"\d{5}", code)]
 
-    prompt = ASIENTOS_PROMPT.format(
-        pcge=json.dumps(pcge_5, ensure_ascii=False),
-        operaciones=json.dumps(st.session_state.get("monografia_json", {}), ensure_ascii=False),
+    # No usamos str.format() aquí porque ASIENTOS_PROMPT contiene un ejemplo
+    # JSON con llaves. format() interpretaría esas llaves como placeholders
+    # y produciría errores del tipo: "\n  \"asientos\"".
+    prompt = (
+        ASIENTOS_PROMPT
+        .replace("{pcge}", json.dumps(pcge_5, ensure_ascii=False))
+        .replace(
+            "{operaciones}",
+            json.dumps(st.session_state.get("monografia_json", {}), ensure_ascii=False),
+        )
     )
 
     response = client.models.generate_content(
