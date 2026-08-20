@@ -5,6 +5,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+from decimal import Decimal, InvalidOperation
 
 import streamlit as st
 import openpyxl
@@ -30,6 +31,11 @@ from google.genai import types
 SUPPORTED_TYPES = ["pdf", "doc", "docx", "xls", "xlsx", "jpg", "jpeg", "png"]
 
 GEMINI_MODEL = "gemini-3.5-flash"
+
+# Cargar el PCGE antes del motor de resolución, incluso antes de generar el Excel.
+with open("pcge_data.json", encoding="utf-8") as f:
+    PCGE_DATA = json.load(f)
+
 
 def get_gemini_client():
     api_key = st.secrets.get("GEMINI_API_KEY", "")
@@ -213,6 +219,208 @@ if "monografia_json" in st.session_state:
         "Esta primera etapa usa Gemini para leer y estructurar la monografía. "
         "Los asientos contables todavía deben pasar por el motor contable de TANA."
     )
+
+
+# ============================================================
+# MOTOR DE ASIENTOS CONTABLES
+# ============================================================
+
+ASIENTOS_PROMPT = """
+Eres el motor contable de TANA, una aplicación de contabilidad peruana.
+
+Tienes dos fuentes obligatorias:
+1) Las operaciones extraídas de la monografía.
+2) El PCGE de TANA que se adjunta abajo.
+
+OBJETIVO:
+Desarrollar los asientos contables de TODAS las operaciones detectadas.
+
+REGLAS OBLIGATORIAS:
+- Usa EXCLUSIVAMENTE códigos de cuenta que existan en el PCGE proporcionado.
+- Cada código debe tener exactamente 5 dígitos.
+- No inventes códigos.
+- No uses cuentas de 2, 3 o 4 dígitos si existe la cuenta de 5 dígitos aplicable.
+- Cada asiento debe cuadrar exactamente: total Debe = total Haber.
+- Separa en asientos independientes los registros que correspondan a una misma operación.
+- Conserva las fechas y datos de la monografía.
+- Calcula los importes cuando la monografía permita determinarlos.
+- Si un importe o tratamiento contable no puede determinarse con seguridad,
+  NO inventes: marca la línea/asiento con "requiere_revision": true y explica por qué.
+- No agregues información que no esté sustentada por la monografía o por las reglas contables necesarias para registrar la operación.
+- La glosa debe ser breve y profesional.
+- Los importes deben ser números positivos; el lado se expresa con debe/haber.
+
+Devuelve SOLO JSON válido con esta estructura:
+{
+  "asientos": [
+    {
+      "numero": 1,
+      "fecha": "2026-04-02",
+      "glosa": "...",
+      "documento": "...",
+      "operacion_numero": 1,
+      "requiere_revision": false,
+      "observacion": "",
+      "lineas": [
+        {
+          "codigo": "12345",
+          "denominacion": "",
+          "debe": 0.0,
+          "haber": 0.0,
+          "concepto": ""
+        }
+      ]
+    }
+  ],
+  "alertas": []
+}
+
+PCGE DE TANA:
+{pcge}
+
+OPERACIONES DE LA MONOGRAFÍA:
+{operaciones}
+"""
+
+def _money(value):
+    try:
+        if value is None or value == "":
+            return Decimal("0")
+        return Decimal(str(value).replace(",", ""))
+    except (InvalidOperation, ValueError):
+        return None
+
+def validate_asientos(data, pcge_map):
+    errors = []
+    warnings = []
+    valid = []
+
+    for a_idx, asiento in enumerate(data.get("asientos", []), start=1):
+        lines = asiento.get("lineas", []) or []
+        total_d = Decimal("0")
+        total_h = Decimal("0")
+        asiento_errors = []
+
+        for l_idx, line in enumerate(lines, start=1):
+            code = str(line.get("codigo", "")).strip()
+            if not re.fullmatch(r"\d{5}", code):
+                asiento_errors.append(f"Línea {l_idx}: código '{code}' no tiene 5 dígitos.")
+            elif code not in pcge_map:
+                asiento_errors.append(f"Línea {l_idx}: código {code} no existe en el PCGE de TANA.")
+
+            debe = _money(line.get("debe"))
+            haber = _money(line.get("haber"))
+            if debe is None or haber is None:
+                asiento_errors.append(f"Línea {l_idx}: importe inválido.")
+                continue
+            if debe < 0 or haber < 0:
+                asiento_errors.append(f"Línea {l_idx}: los importes no pueden ser negativos.")
+            if debe > 0 and haber > 0:
+                asiento_errors.append(f"Línea {l_idx}: una línea no puede tener Debe y Haber simultáneamente.")
+            total_d += debe
+            total_h += haber
+
+        diff = total_d - total_h
+        if abs(diff) > Decimal("0.01"):
+            asiento_errors.append(
+                f"Asiento {asiento.get('numero', a_idx)} descuadra: Debe {total_d:.2f} / Haber {total_h:.2f}."
+            )
+
+        if asiento.get("requiere_revision"):
+            warnings.append(
+                f"Asiento {asiento.get('numero', a_idx)} requiere revisión: {asiento.get('observacion', '')}"
+            )
+
+        if asiento_errors:
+            errors.extend(asiento_errors)
+        else:
+            valid.append(asiento)
+
+    return valid, errors, warnings
+
+def resolve_asientos_with_gemini():
+    client = get_gemini_client()
+    if client is None:
+        raise RuntimeError("No está configurada GEMINI_API_KEY en Streamlit Secrets.")
+
+    pcge_map = {str(cod).strip(): str(desc) for cod, desc in PCGE_DATA}
+    # Solo cuentas de 5 dígitos: el usuario indicó que este es el nivel operativo de TANA.
+    pcge_5 = [[code, desc] for code, desc in pcge_map.items() if re.fullmatch(r"\d{5}", code)]
+
+    prompt = ASIENTOS_PROMPT.format(
+        pcge=json.dumps(pcge_5, ensure_ascii=False),
+        operaciones=json.dumps(st.session_state.get("monografia_json", {}), ensure_ascii=False),
+    )
+
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=[prompt],
+        config=types.GenerateContentConfig(response_mime_type="application/json"),
+    )
+    data = json.loads(response.text or "{}")
+    return data, pcge_map
+
+if "monografia_json" in st.session_state:
+    st.divider()
+    st.subheader("🧮 2. Desarrollo de asientos contables")
+    st.write(
+        "TANA utilizará las operaciones detectadas y su PCGE de 5 dígitos. "
+        "Antes de aceptar un asiento, verifica que la cuenta exista y que Debe = Haber."
+    )
+
+    if st.button("🧮 Resolver asientos contables", type="primary"):
+        with st.spinner("Desarrollando y validando los asientos contables..."):
+            try:
+                resolved, pcge_map = resolve_asientos_with_gemini()
+                valid, errors, warnings = validate_asientos(resolved, pcge_map)
+                st.session_state["asientos_contables"] = resolved
+                st.session_state["asientos_validos"] = valid
+                st.session_state["errores_asientos"] = errors
+                st.session_state["alertas_asientos"] = warnings
+            except json.JSONDecodeError:
+                st.error("Gemini devolvió una respuesta que no es JSON válido. Vuelve a intentarlo.")
+            except Exception as exc:
+                st.error(f"No se pudieron desarrollar los asientos: {exc}")
+
+    if "asientos_contables" in st.session_state:
+        asientos = st.session_state["asientos_contables"]
+        validos = st.session_state.get("asientos_validos", [])
+        errores = st.session_state.get("errores_asientos", [])
+        alertas = st.session_state.get("alertas_asientos", [])
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Asientos generados", len(asientos))
+        c2.metric("Asientos validados", len(validos))
+        c3.metric("Errores", len(errores))
+
+        if errores:
+            st.error("Hay asientos que TANA NO acepta todavía:")
+            for e in errores:
+                st.write(f"- {e}")
+        else:
+            st.success("Todos los asientos generados cuadran y utilizan cuentas existentes de 5 dígitos.")
+
+        for asiento in asientos:
+            numero = asiento.get("numero", "")
+            with st.expander(
+                f"Asiento {numero} — {asiento.get('fecha', '')} — {asiento.get('glosa', '')}",
+                expanded=False,
+            ):
+                rows = []
+                for line in asiento.get("lineas", []):
+                    rows.append({
+                        "Código": line.get("codigo", ""),
+                        "Cuenta": pcge_map.get(str(line.get("codigo", "")).strip(), line.get("denominacion", "")),
+                        "Concepto": line.get("concepto", ""),
+                        "Debe": line.get("debe", 0),
+                        "Haber": line.get("haber", 0),
+                    })
+                st.dataframe(rows, use_container_width=True, hide_index=True)
+                if asiento.get("requiere_revision"):
+                    st.warning(asiento.get("observacion", "Requiere revisión."))
+
+        if alertas:
+            st.warning("\n".join(f"- {x}" for x in alertas))
 
 st.divider()
 
@@ -761,6 +969,35 @@ ws9.cell(row=5, column=3).comment = Comment(
     "El motor actual no tiene un tipo de operación 'COMPRA_ACTIVO_FIJO' ni 'APORTE_CAPITAL', así que Equipos Diversos, "
     "Capital Social y Resultados Acumulados anteriores se ingresan manualmente (celdas amarillas) hasta que agreguemos esas reglas.", "Sistema")
 print("Hoja SF lista")
+
+# ============================================================
+# HOJA: ASIENTOS_CONTABLES (resueltos y validados por TANA)
+# ============================================================
+if "asientos_contables" in st.session_state:
+    ws_ac = wb.create_sheet("Asientos_Contables")
+    ac_headers = ["N° Asiento", "Fecha", "Glosa", "Documento", "Operación", "Código", "Denominación", "Concepto", "Debe S/", "Haber S/"]
+    for i, h in enumerate(ac_headers, start=1):
+        ws_ac.cell(row=1, column=i, value=h)
+    style_header(ws_ac, 1, 1, len(ac_headers))
+    rr = 2
+    pcge_map_export = {str(cod).strip(): str(desc) for cod, desc in PCGE_DATA}
+    for asiento in st.session_state["asientos_contables"]:
+        for line in asiento.get("lineas", []):
+            code = str(line.get("codigo", "")).strip()
+            values = [
+                asiento.get("numero", ""), asiento.get("fecha", ""),
+                asiento.get("glosa", ""), asiento.get("documento", ""),
+                asiento.get("operacion_numero", ""), code,
+                pcge_map_export.get(code, line.get("denominacion", "")),
+                line.get("concepto", ""), line.get("debe", 0), line.get("haber", 0)
+            ]
+            for cc, value in enumerate(values, start=1):
+                ws_ac.cell(row=rr, column=cc, value=value).font = BLACK
+            ws_ac.cell(row=rr, column=9).number_format = '#,##0.00;(#,##0.00);"-"'
+            ws_ac.cell(row=rr, column=10).number_format = '#,##0.00;(#,##0.00);"-"'
+            rr += 1
+    autofit(ws_ac, [12, 13, 35, 18, 12, 12, 48, 42, 14, 14])
+    ws_ac.freeze_panes = "A2"
 
 # ============================================================
 # HOJA: MONOGRAFIA (fuente leída por TANA)
