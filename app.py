@@ -42,6 +42,157 @@ with open("pcge_data.json", encoding="utf-8") as f:
 pcge_map = {str(cod).strip(): str(desc) for cod, desc in PCGE_DATA}
 
 
+# ============================================================
+# MOTOR DE CÁLCULOS CONTABLES V5
+# ============================================================
+# Estas funciones son deliberadamente deterministas: Gemini interpreta
+# la operación, pero los cálculos se hacen aquí para evitar redondeos,
+# porcentajes o IGV inventados por el modelo.
+def _to_float(value, default=0.0):
+    try:
+        if value is None or value == "":
+            return default
+        return float(str(value).replace(",", "").strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def calcular_igv_desde_base(base, tasa=0.18):
+    base = _to_float(base)
+    igv = round(base * tasa, 2)
+    return {"base": round(base, 2), "igv": igv, "total": round(base + igv, 2)}
+
+
+def calcular_igv_incluido(total, tasa=0.18):
+    total = _to_float(total)
+    base = round(total / (1 + tasa), 2)
+    igv = round(total - base, 2)
+    return {"base": base, "igv": igv, "total": round(total, 2)}
+
+
+def calcular_porcentaje(importe, porcentaje):
+    return round(_to_float(importe) * _to_float(porcentaje) / 100, 2)
+
+
+def calcular_depreciacion(costo, tasa_anual, meses=1, meses_pendientes=0):
+    costo = _to_float(costo)
+    tasa_anual = _to_float(tasa_anual)
+    meses = int(_to_float(meses, 1))
+    meses_pendientes = int(_to_float(meses_pendientes, 0))
+    total_meses = max(0, meses + meses_pendientes)
+    mensual = round(costo * tasa_anual / 100 / 12, 2)
+    return {
+        "depreciacion_mensual": mensual,
+        "meses": total_meses,
+        "depreciacion_periodo": round(mensual * total_meses, 2),
+    }
+
+
+def calcular_esalud(remuneracion, tasa=0.09):
+    return round(_to_float(remuneracion) * tasa, 2)
+
+
+def calcular_onp(remuneracion, tasa=0.13):
+    return round(_to_float(remuneracion) * tasa, 2)
+
+
+def calcular_asignacion_familiar(rmv, tiene_hijos=True, porcentaje=10):
+    if not tiene_hijos:
+        return 0.0
+    return calcular_porcentaje(rmv, porcentaje)
+
+
+def calcular_costo_neto(costo, depreciacion_acumulada):
+    return round(_to_float(costo) - _to_float(depreciacion_acumulada), 2)
+
+
+def calcular_disminucion_valor(valor_neto, porcentaje):
+    return calcular_porcentaje(valor_neto, porcentaje)
+
+
+def calcular_operacion_contable(operacion):
+    """
+    Ejecuta cálculos explícitos cuando Gemini entrega los campos necesarios.
+    No inventa datos faltantes: devuelve 'requiere_datos' cuando no puede
+    calcular de forma determinista.
+    """
+    if not isinstance(operacion, dict):
+        return {"requiere_datos": True, "motivo": "Operación no estructurada."}
+
+    tipo = str(operacion.get("tipo_calculo", "")).strip().lower()
+    tasa_igv = _to_float(operacion.get("tasa_igv", 18)) / 100
+
+    if tipo in ("igv_base", "igv_desde_base"):
+        return calcular_igv_desde_base(operacion.get("base"), tasa_igv)
+
+    if tipo in ("igv_incluido", "igv_desde_total"):
+        return calcular_igv_incluido(operacion.get("total"), tasa_igv)
+
+    if tipo in ("porcentaje", "participacion"):
+        return {
+            "importe": calcular_porcentaje(
+                operacion.get("importe"),
+                operacion.get("porcentaje"),
+            )
+        }
+
+    if tipo in ("depreciacion", "depreciación"):
+        return calcular_depreciacion(
+            operacion.get("costo"),
+            operacion.get("tasa_anual"),
+            operacion.get("meses", 1),
+            operacion.get("meses_pendientes", 0),
+        )
+
+    if tipo == "esalud":
+        return {"esalud": calcular_esalud(operacion.get("remuneracion"))}
+
+    if tipo == "onp":
+        return {"onp": calcular_onp(operacion.get("remuneracion"))}
+
+    if tipo in ("asignacion_familiar", "asignación_familiar"):
+        return {
+            "asignacion_familiar": calcular_asignacion_familiar(
+                operacion.get("rmv"),
+                operacion.get("tiene_hijos", True),
+            )
+        }
+
+    if tipo in ("valor_neto", "valor_neto_libros"):
+        return {
+            "valor_neto": calcular_costo_neto(
+                operacion.get("costo"),
+                operacion.get("depreciacion_acumulada"),
+            )
+        }
+
+    if tipo in ("disminucion_valor", "deterioro"):
+        return {
+            "disminucion": calcular_disminucion_valor(
+                operacion.get("valor_neto"),
+                operacion.get("porcentaje"),
+            )
+        }
+
+    return {"calculo_aplicado": False}
+
+
+def aplicar_calculos_deterministas(operaciones):
+    resultados = []
+    for op in operaciones or []:
+        copia = dict(op) if isinstance(op, dict) else {"descripcion": str(op)}
+        try:
+            calculo = calcular_operacion_contable(copia)
+            copia["calculo_tana"] = calculo
+        except Exception as exc:
+            copia["calculo_tana"] = {
+                "requiere_datos": True,
+                "motivo": f"No se pudo calcular automáticamente: {exc}",
+            }
+        resultados.append(copia)
+    return resultados
+
+
 def get_gemini_client():
     api_key = st.secrets.get("GEMINI_API_KEY", "")
     if not api_key:
