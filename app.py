@@ -1444,17 +1444,29 @@ for code in cuentas_reporte:
 
 HT_LAST_ROW = r - 1
 
-# Contrapartida determinista 69121 -> 61111 en Ajustes y Eliminación.
-# Se toma el importe que quedó en el Haber de 69121, sin inventar cifras.
+# Contrapartidas deterministas en HT.
+# 69121 -> 61111 en Ajustes y Eliminación.
+# 60121 debe quedar acreedora y 61111 deudora en Saldos Ajustados.
+importe_69121 = 0.0
 for rr in range(4, HT_LAST_ROW + 1):
     if str(ws6.cell(rr, 1).value).strip() == "69121":
-        importe_69121 = ws6.cell(rr, 8).value or 0.0
-        if isinstance(importe_69121, (int, float)) and importe_69121:
-            for rr2 in range(4, HT_LAST_ROW + 1):
-                if str(ws6.cell(rr2, 1).value).strip() == "61111":
-                    ws6.cell(rr2, 7, importe_69121)
-                    break
+        v = ws6.cell(rr, 8).value or 0.0
+        if isinstance(v, (int, float)):
+            importe_69121 = float(v)
         break
+
+for rr in range(4, HT_LAST_ROW + 1):
+    code_rr = str(ws6.cell(rr, 1).value).strip()
+    if code_rr == "61111" and importe_69121:
+        ws6.cell(rr, 7, importe_69121)
+    elif code_rr == "60121":
+        saldo = float(ws6.cell(rr, 6).value or 0.0)
+        ws6.cell(rr, 9, 0.0)
+        ws6.cell(rr, 10, saldo)
+    elif code_rr == "61111":
+        saldo = float(ws6.cell(rr, 5).value or 0.0)
+        ws6.cell(rr, 9, saldo)
+        ws6.cell(rr, 10, 0.0)
 
 HT_TOTAL_ROW = r
 ws6.cell(r, 2, "TOTAL").font = BOLD
