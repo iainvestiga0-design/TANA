@@ -1352,24 +1352,100 @@ for c, label in enumerate(headers_ht, 1):
 style_header(ws6, 3, 1, 18)
 
 # Clasificación contable para la HT.
+# Regla oficial del PCGE: toda cuenta cuyo primer dígito es 6, 7, 8 o 9
+# es una cuenta de resultados (nunca de balance). 1-5 son de balance.
 def clasificar_resultado(code):
-    p2 = code[:2]
-    p1 = code[:1]
-    if p2 in {"60", "61", "62", "63", "64", "65", "66", "67", "68", "69", "70", "71", "72", "73", "74", "75", "76", "77", "78", "80", "81", "82", "83", "84", "85", "87", "88", "89"}:
-        return True
-    return p1 in {"6", "7"}
+    return code[:1] in {"6", "7", "8", "9"}
+
+def es_elemento9(code):
+    return code[:1] == "9"
+
+def es_costo_ventas(code):
+    return code[:2] == "69"
+
+def es_variacion_existencias(code):
+    return code[:2] == "61"
+
+def es_cuenta79(code):
+    return code[:2] == "79"
 
 def es_naturaleza(code):
-    # 79 es cuenta de destino: no representa ingreso/gasto adicional.
-    return code[:2] not in {"79"} and clasificar_resultado(code)
+    # 69 (costo de ventas) y el elemento 9 se reclasifican íntegramente a
+    # R.Función; 79 es cuenta puente y no aparece en ningún resultado.
+    if not clasificar_resultado(code):
+        return False
+    if es_costo_ventas(code) or es_elemento9(code) or es_cuenta79(code):
+        return False
+    return True
 
 def es_funcion(code):
-    # El resultado por función se presenta por costo de ventas y gastos
-    # de venta/administración; 79 es cuenta de destino y se excluye.
-    return code[:2] in {"69", "94", "95"} or code[:2] in {"68"}
+    # Costo de ventas (69), elemento 9 completo (gastos por función) y
+    # depreciación/desvalorización (68) se presentan por función.
+    return es_costo_ventas(code) or es_elemento9(code) or code[:2] == "68"
 
 def es_balance(code):
-    return not clasificar_resultado(code) and code[:2] != "79"
+    return not clasificar_resultado(code)
+
+# ------------------------------------------------------------
+# AJUSTES Y ELIMINACIÓN (HT) — cálculo previo (dos pasadas)
+# ------------------------------------------------------------
+# Regla 1: Costo de Ventas (69) <-> Variación de Existencias (61),
+# emparejadas por el mismo sufijo (ej. 69111 "Mercadería" <-> 61111
+# "Mercadería"). El 69 cancela su saldo deudor completo al HABER de
+# ajustes; ese mismo importe pasa al DEBE de ajustes del 61 emparejado,
+# reduciendo su saldo acreedor. Así 69 queda solo en R.Función y el
+# neto de 61 queda solo en R.Naturaleza.
+#
+# Regla 2: Elemento 9 (94, 95, ... cualquier código que inicia en "9")
+# <-> 79. Cada cuenta del elemento 9 cancela su saldo deudor completo
+# al HABER de ajustes (queda solo en R.Función). La(s) cuenta(s) 79
+# reciben en el DEBE de ajustes la suma total de esas cancelaciones,
+# repartida a prorrata de su propio saldo acreedor si hay más de una.
+# ------------------------------------------------------------
+ajustes_deudor = {}
+ajustes_acreedor = {}
+
+def _deudor_acreedor(code):
+    debe = movimientos[code]["debe"]
+    haber = movimientos[code]["haber"]
+    return max(debe - haber, 0.0), max(haber - debe, 0.0)
+
+# Regla 1: 69 <-> 61 por sufijo
+cuentas_61 = [c for c in cuentas_reporte if es_variacion_existencias(c)]
+mapa_61_por_sufijo = {c[2:]: c for c in cuentas_61}
+for code69 in [c for c in cuentas_reporte if es_costo_ventas(c)]:
+    deudor69, _ = _deudor_acreedor(code69)
+    if deudor69 <= 0:
+        continue
+    code61 = mapa_61_por_sufijo.get(code69[2:])
+    if code61 is None and len(cuentas_61) == 1:
+        code61 = cuentas_61[0]
+    if code61 is None:
+        continue  # sin cuenta 61 emparejada: no se puede cancelar, se deja como está
+    ajustes_acreedor[code69] = ajustes_acreedor.get(code69, 0.0) + deudor69
+    ajustes_deudor[code61] = ajustes_deudor.get(code61, 0.0) + deudor69
+
+# Regla 2: elemento 9 <-> 79
+cuentas_9 = [c for c in cuentas_reporte if es_elemento9(c)]
+cuentas_79 = [c for c in cuentas_reporte if es_cuenta79(c)]
+total_elemento9 = 0.0
+for code9 in cuentas_9:
+    deudor9, _ = _deudor_acreedor(code9)
+    if deudor9 <= 0:
+        continue
+    ajustes_acreedor[code9] = ajustes_acreedor.get(code9, 0.0) + deudor9
+    total_elemento9 += deudor9
+
+if total_elemento9 > 0 and cuentas_79:
+    acreedores_79 = {c: _deudor_acreedor(c)[1] for c in cuentas_79}
+    total_acreedor_79 = sum(acreedores_79.values())
+    if total_acreedor_79 > 0:
+        for code79, acreedor79 in acreedores_79.items():
+            parte = total_elemento9 * (acreedor79 / total_acreedor_79)
+            ajustes_deudor[code79] = ajustes_deudor.get(code79, 0.0) + parte
+    else:
+        # Sin saldo acreedor registrado en 79: se asigna todo a la primera cuenta 79.
+        ajustes_deudor[cuentas_79[0]] = ajustes_deudor.get(cuentas_79[0], 0.0) + total_elemento9
 
 r = 4
 for code in cuentas_reporte:
@@ -1379,58 +1455,43 @@ for code in cuentas_reporte:
     deudor = max(debe - haber, 0.0)
     acreedor = max(haber - debe, 0.0)
 
+    aj_deudor = ajustes_deudor.get(code, 0.0)
+    aj_acreedor = ajustes_acreedor.get(code, 0.0)
+
     ws6.cell(r, 1, code)
     ws6.cell(r, 2, desc)
     ws6.cell(r, 3, debe)
     ws6.cell(r, 4, haber)
     ws6.cell(r, 5, deudor)
     ws6.cell(r, 6, acreedor)
+    ws6.cell(r, 7, aj_deudor)
+    ws6.cell(r, 8, aj_acreedor)
 
-    # No hay una columna de ajustes independiente en los asientos validados:
-    # los asientos de ajuste (depreciación, desvalorización, etc.) ya forman
-    # parte del diario y por eso llegan incorporados a las sumas.
-    ws6.cell(r, 7, 0.0)
-    ws6.cell(r, 8, 0.0)
-    ws6.cell(r, 9, deudor)
-    ws6.cell(r, 10, acreedor)
+    # Saldos ajustados: si la cuenta tuvo algún ajuste, queda en 0
+    # (el neto ya se refleja directamente en R.Naturaleza/R.Función,
+    # igual que en la plantilla de referencia). Sin ajuste, mantiene
+    # el saldo original.
+    if aj_deudor or aj_acreedor:
+        sa_debe, sa_haber = 0.0, 0.0
+    else:
+        sa_debe, sa_haber = deudor, acreedor
+    ws6.cell(r, 9, sa_debe)
+    ws6.cell(r, 10, sa_haber)
+
+    # Saldo neto tras ajuste, usado para R.Naturaleza / R.Función.
+    neto = (deudor + aj_deudor) - (acreedor + aj_acreedor)
+    neto_deudor = max(neto, 0.0)
+    neto_acreedor = max(-neto, 0.0)
 
     if es_naturaleza(code):
-        ws6.cell(r, 11, deudor)
-        ws6.cell(r, 12, acreedor)
+        ws6.cell(r, 11, neto_deudor)
+        ws6.cell(r, 12, neto_acreedor)
     if es_funcion(code):
-        ws6.cell(r, 13, deudor)
-        ws6.cell(r, 14, acreedor)
+        ws6.cell(r, 13, neto_deudor)
+        ws6.cell(r, 14, neto_acreedor)
     if es_balance(code):
         ws6.cell(r, 15, deudor)
         ws6.cell(r, 16, acreedor)
-
-    # ------------------------------------------------------------
-    # AJUSTES Y ELIMINACIÓN (HT)
-    # ------------------------------------------------------------
-    # La distribución de resultados por naturaleza/función se refleja
-    # aquí sin crear nuevos asientos en el Libro Diario.
-    #
-    # Regla específica de la práctica: el costo de ventas 69121 se
-    # cancela contra la variación de existencias 61111. Por eso: 
-    #
-    #       61111  DEBE
-    #       69121  HABER
-    #
-    # El importe es exactamente el saldo de 69121.
-    #
-    # Para 79: HABER -> DEBE.
-    # Para 94/95 y demás gastos por función del elemento 9: DEBE -> HABER.
-    # ------------------------------------------------------------
-    if code == "69121":
-        ws6.cell(r, 8, deudor)
-    elif code == "79" or code.startswith("79"):
-        ws6.cell(r, 7, acreedor)
-    elif code.startswith("94") or code.startswith("95"):
-        ws6.cell(r, 8, deudor)
-
-    # 61111 recibe en el DEBE exactamente el importe que se cancela
-    # de 69121. Se asigna después del bucle para que funcione aunque
-    # 61111 aparezca antes o después de 69121 en el catálogo.
 
     # Distribución y ajuste final: reservado para el cierre/transformación.
     ws6.cell(r, 17, 0.0)
@@ -1443,31 +1504,6 @@ for code in cuentas_reporte:
     r += 1
 
 HT_LAST_ROW = r - 1
-
-# Contrapartidas deterministas en HT.
-# 69121 -> 61111 en Ajustes y Eliminación.
-# 60121 debe quedar acreedora y 61111 deudora en Saldos Ajustados.
-importe_69121 = 0.0
-for rr in range(4, HT_LAST_ROW + 1):
-    if str(ws6.cell(rr, 1).value).strip() == "69121":
-        v = ws6.cell(rr, 8).value or 0.0
-        if isinstance(v, (int, float)):
-            importe_69121 = float(v)
-        break
-
-for rr in range(4, HT_LAST_ROW + 1):
-    code_rr = str(ws6.cell(rr, 1).value).strip()
-    if code_rr == "61111" and importe_69121:
-        ws6.cell(rr, 7, importe_69121)
-    elif code_rr == "60121":
-        saldo = float(ws6.cell(rr, 6).value or 0.0)
-        ws6.cell(rr, 9, 0.0)
-        ws6.cell(rr, 10, saldo)
-    elif code_rr == "61111":
-        saldo = float(ws6.cell(rr, 5).value or 0.0)
-        ws6.cell(rr, 9, saldo)
-        ws6.cell(rr, 10, 0.0)
-
 HT_TOTAL_ROW = r
 ws6.cell(r, 2, "TOTAL").font = BOLD
 for c in range(3, 19):
