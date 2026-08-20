@@ -1379,9 +1379,12 @@ def es_naturaleza(code):
     return True
 
 def es_funcion(code):
-    # Costo de ventas (69), elemento 9 completo (gastos por función) y
-    # depreciación/desvalorización (68) se presentan por función.
-    return es_costo_ventas(code) or es_elemento9(code) or code[:2] == "68"
+    # Costo de ventas (69), elemento 9 completo (gastos por función),
+    # depreciación/desvalorización (68) y gastos/ingresos financieros o
+    # por valuación (66, 67, 76, 77) se presentan por función: no pasan
+    # por el mecanismo de cancelación 9<->79, se muestran directamente
+    # con su propio saldo neto (igual que en R.Naturaleza).
+    return es_costo_ventas(code) or es_elemento9(code) or code[:2] in {"66", "67", "68", "76", "77"}
 
 def es_balance(code):
     return not clasificar_resultado(code)
@@ -1594,8 +1597,39 @@ r += 1
 ws8.cell(r, 2, "Depreciación y deterioro (68)").font = BLACK
 ws8.cell(r, 4, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="68")*HT!$M$4:$M${HT_LAST_ROW})*-1').font = BLACK
 r += 1
+DEP_ROW = r - 1
+
+# Gastos e ingresos financieros / por valuación (66, 67, 76, 77): se
+# presentan por función con su propio saldo neto. Solo se agregan las
+# filas de los prefijos que realmente aparecen en esta monografía.
+prefijos_financieros = [("67", "Gastos financieros"), ("66", "Pérdida por valuación de activos"),
+                         ("77", "Ingresos financieros"), ("76", "Ganancia por valuación de activos")]
+prefijos_presentes_funcion = {c[:2] for c in cuentas_reporte if es_funcion(c)}
+filas_financieras = []
+for prefix, label in prefijos_financieros:
+    if prefix not in prefijos_presentes_funcion:
+        continue
+    ws8.cell(r, 2, f"{label} ({prefix})").font = BLACK
+    signo = "*-1" if prefix[:1] == "6" else ""
+    ws8.cell(r, 4, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*HT!$M$4:$M${HT_LAST_ROW}){signo}').font = BLACK
+    filas_financieras.append(r)
+    r += 1
+
+# Catch-all: cualquier otro prefijo de función (ej. elemento 9 más allá
+# de 94/95) que no haya sido cubierto arriba, para que nunca falte nada.
+prefijos_ya_cubiertos = {"69", "94", "95", "68", "67", "66", "77", "76"}
+prefijos_faltantes_funcion = sorted(prefijos_presentes_funcion - prefijos_ya_cubiertos)
+for prefix in prefijos_faltantes_funcion:
+    label = pcge_map.get(prefix, f"Otros ({prefix})")
+    ws8.cell(r, 2, f"{label} ({prefix})").font = BLACK
+    signo = "*-1" if prefix[:1] in {"6", "9"} else ""
+    ws8.cell(r, 4, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*HT!$M$4:$M${HT_LAST_ROW}){signo}').font = BLACK
+    filas_financieras.append(r)
+    r += 1
+
 ws8.cell(r, 2, "RESULTADO OPERATIVO").font = BOLD
-ws8.cell(r, 4, f'=D{UTILIDAD_BRUTA_ROW}+D{GV_ROW}+D{GA_ROW}+D{r-1}').font = BOLD
+suma_financieras = "".join(f'+D{x}' for x in filas_financieras)
+ws8.cell(r, 4, f'=D{UTILIDAD_BRUTA_ROW}+D{GV_ROW}+D{GA_ROW}+D{DEP_ROW}{suma_financieras}').font = BOLD
 ERF_RESULTADO_ROW = r
 for rr in range(5, r+1):
     ws8.cell(rr, 4).number_format = '#,##0.00;(#,##0.00);"-"'
