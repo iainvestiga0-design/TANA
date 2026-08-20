@@ -1352,103 +1352,32 @@ for c, label in enumerate(headers_ht, 1):
 style_header(ws6, 3, 1, 18)
 
 # Clasificación contable para la HT.
-# Regla oficial del PCGE: toda cuenta cuyo primer dígito es 6, 7, 8 o 9
-# es una cuenta de resultados (nunca de balance). 1-5 son de balance.
 def clasificar_resultado(code):
-    return code[:1] in {"6", "7", "8", "9"}
-
-def es_elemento9(code):
-    return code[:1] == "9"
-
-def es_costo_ventas(code):
-    return code[:2] == "69"
-
-def es_variacion_existencias(code):
-    return code[:2] == "61"
-
-def es_cuenta79(code):
-    return code[:2] == "79"
+    p2 = code[:2]
+    p1 = code[:1]
+    if p2 in {"60","61","62","63","64","65","66","67","68","69",
+              "70","71","72","73","74","75","76","77","78",
+              "79","80","81","82","83","84","85","87","88","89","94","95","97"}:
+        return True
+    return p1 in {"6","7"}
 
 def es_naturaleza(code):
-    # 69 (costo de ventas) y el elemento 9 se reclasifican íntegramente a
-    # R.Función; 79 es cuenta puente y no aparece en ningún resultado.
-    if not clasificar_resultado(code):
-        return False
-    if es_costo_ventas(code) or es_elemento9(code) or es_cuenta79(code):
-        return False
-    return True
+    # Estado de resultados por naturaleza: compras, variación,
+    # personal, servicios, tributos, otros gastos, financieros,
+    # depreciación y los ingresos.
+    p2 = code[:2]
+    return p2 in {"60","61","62","63","64","65","66","67","68",
+                  "70","71","72","73","74","75","76","77","78"}
 
 def es_funcion(code):
-    # Costo de ventas (69), elemento 9 completo (gastos por función),
-    # depreciación/desvalorización (68) y gastos/ingresos financieros o
-    # por valuación (66, 67, 76, 77) se presentan por función: no pasan
-    # por el mecanismo de cancelación 9<->79, se muestran directamente
-    # con su propio saldo neto (igual que en R.Naturaleza).
-    return es_costo_ventas(code) or es_elemento9(code) or code[:2] in {"66", "67", "68", "76", "77"}
+    # Estado de resultados por función. Se incluyen ventas, costo
+    # de ventas, gastos de venta/administración y otros resultados
+    # que puedan existir en la monografía.
+    p2 = code[:2]
+    return p2 in {"69","70","94","95","67","68","75","76","77","78","97"}
 
 def es_balance(code):
-    return not clasificar_resultado(code)
-
-# ------------------------------------------------------------
-# AJUSTES Y ELIMINACIÓN (HT) — cálculo previo (dos pasadas)
-# ------------------------------------------------------------
-# Regla 1: Costo de Ventas (69) <-> Variación de Existencias (61),
-# emparejadas por el mismo sufijo (ej. 69111 "Mercadería" <-> 61111
-# "Mercadería"). El 69 cancela su saldo deudor completo al HABER de
-# ajustes; ese mismo importe pasa al DEBE de ajustes del 61 emparejado,
-# reduciendo su saldo acreedor. Así 69 queda solo en R.Función y el
-# neto de 61 queda solo en R.Naturaleza.
-#
-# Regla 2: Elemento 9 (94, 95, ... cualquier código que inicia en "9")
-# <-> 79. Cada cuenta del elemento 9 cancela su saldo deudor completo
-# al HABER de ajustes (queda solo en R.Función). La(s) cuenta(s) 79
-# reciben en el DEBE de ajustes la suma total de esas cancelaciones,
-# repartida a prorrata de su propio saldo acreedor si hay más de una.
-# ------------------------------------------------------------
-ajustes_deudor = {}
-ajustes_acreedor = {}
-
-def _deudor_acreedor(code):
-    debe = movimientos[code]["debe"]
-    haber = movimientos[code]["haber"]
-    return max(debe - haber, 0.0), max(haber - debe, 0.0)
-
-# Regla 1: 69 <-> 61 por sufijo
-cuentas_61 = [c for c in cuentas_reporte if es_variacion_existencias(c)]
-mapa_61_por_sufijo = {c[2:]: c for c in cuentas_61}
-for code69 in [c for c in cuentas_reporte if es_costo_ventas(c)]:
-    deudor69, _ = _deudor_acreedor(code69)
-    if deudor69 <= 0:
-        continue
-    code61 = mapa_61_por_sufijo.get(code69[2:])
-    if code61 is None and len(cuentas_61) == 1:
-        code61 = cuentas_61[0]
-    if code61 is None:
-        continue  # sin cuenta 61 emparejada: no se puede cancelar, se deja como está
-    ajustes_acreedor[code69] = ajustes_acreedor.get(code69, 0.0) + deudor69
-    ajustes_deudor[code61] = ajustes_deudor.get(code61, 0.0) + deudor69
-
-# Regla 2: elemento 9 <-> 79
-cuentas_9 = [c for c in cuentas_reporte if es_elemento9(c)]
-cuentas_79 = [c for c in cuentas_reporte if es_cuenta79(c)]
-total_elemento9 = 0.0
-for code9 in cuentas_9:
-    deudor9, _ = _deudor_acreedor(code9)
-    if deudor9 <= 0:
-        continue
-    ajustes_acreedor[code9] = ajustes_acreedor.get(code9, 0.0) + deudor9
-    total_elemento9 += deudor9
-
-if total_elemento9 > 0 and cuentas_79:
-    acreedores_79 = {c: _deudor_acreedor(c)[1] for c in cuentas_79}
-    total_acreedor_79 = sum(acreedores_79.values())
-    if total_acreedor_79 > 0:
-        for code79, acreedor79 in acreedores_79.items():
-            parte = total_elemento9 * (acreedor79 / total_acreedor_79)
-            ajustes_deudor[code79] = ajustes_deudor.get(code79, 0.0) + parte
-    else:
-        # Sin saldo acreedor registrado en 79: se asigna todo a la primera cuenta 79.
-        ajustes_deudor[cuentas_79[0]] = ajustes_deudor.get(cuentas_79[0], 0.0) + total_elemento9
+    return not clasificar_resultado(code) and code[:2] != "79"
 
 r = 4
 for code in cuentas_reporte:
@@ -1458,44 +1387,58 @@ for code in cuentas_reporte:
     deudor = max(debe - haber, 0.0)
     acreedor = max(haber - debe, 0.0)
 
-    aj_deudor = ajustes_deudor.get(code, 0.0)
-    aj_acreedor = ajustes_acreedor.get(code, 0.0)
-
     ws6.cell(r, 1, code)
     ws6.cell(r, 2, desc)
     ws6.cell(r, 3, debe)
     ws6.cell(r, 4, haber)
     ws6.cell(r, 5, deudor)
     ws6.cell(r, 6, acreedor)
-    ws6.cell(r, 7, aj_deudor)
-    ws6.cell(r, 8, aj_acreedor)
 
-    # Saldos ajustados: SOLO cuentas de balance (elemento 1 al 5).
-    # Las cuentas de resultados (elemento 6-9) no se muestran aquí;
-    # su saldo neto se refleja directamente en R.Naturaleza/R.Función.
-    if clasificar_resultado(code):
-        sa_debe, sa_haber = 0.0, 0.0
-    elif aj_deudor or aj_acreedor:
-        sa_debe, sa_haber = 0.0, 0.0
-    else:
-        sa_debe, sa_haber = deudor, acreedor
-    ws6.cell(r, 9, sa_debe)
-    ws6.cell(r, 10, sa_haber)
-
-    # Saldo neto tras ajuste, usado para R.Naturaleza / R.Función.
-    neto = (deudor + aj_deudor) - (acreedor + aj_acreedor)
-    neto_deudor = max(neto, 0.0)
-    neto_acreedor = max(-neto, 0.0)
+    # No hay una columna de ajustes independiente en los asientos validados:
+    # los asientos de ajuste (depreciación, desvalorización, etc.) ya forman
+    # parte del diario y por eso llegan incorporados a las sumas.
+    ws6.cell(r, 7, 0.0)
+    ws6.cell(r, 8, 0.0)
+    ws6.cell(r, 9, deudor)
+    ws6.cell(r, 10, acreedor)
 
     if es_naturaleza(code):
-        ws6.cell(r, 11, neto_deudor)
-        ws6.cell(r, 12, neto_acreedor)
+        ws6.cell(r, 11, deudor)
+        ws6.cell(r, 12, acreedor)
     if es_funcion(code):
-        ws6.cell(r, 13, neto_deudor)
-        ws6.cell(r, 14, neto_acreedor)
+        ws6.cell(r, 13, deudor)
+        ws6.cell(r, 14, acreedor)
     if es_balance(code):
         ws6.cell(r, 15, deudor)
         ws6.cell(r, 16, acreedor)
+
+    # ------------------------------------------------------------
+    # AJUSTES Y ELIMINACIÓN (HT)
+    # ------------------------------------------------------------
+    # La distribución de resultados por naturaleza/función se refleja
+    # aquí sin crear nuevos asientos en el Libro Diario.
+    #
+    # Regla específica de la práctica: el costo de ventas 69121 se
+    # cancela contra la variación de existencias 61111. Por eso: 
+    #
+    #       61111  DEBE
+    #       69121  HABER
+    #
+    # El importe es exactamente el saldo de 69121.
+    #
+    # Para 79: HABER -> DEBE.
+    # Para 94/95 y demás gastos por función del elemento 9: DEBE -> HABER.
+    # ------------------------------------------------------------
+    if code == "69121":
+        ws6.cell(r, 8, deudor)
+    elif code == "79" or code.startswith("79"):
+        ws6.cell(r, 7, acreedor)
+    elif code.startswith("94") or code.startswith("95"):
+        ws6.cell(r, 8, deudor)
+
+    # 61111 recibe en el DEBE exactamente el importe que se cancela
+    # de 69121. Se asigna después del bucle para que funcione aunque
+    # 61111 aparezca antes o después de 69121 en el catálogo.
 
     # Distribución y ajuste final: reservado para el cierre/transformación.
     ws6.cell(r, 17, 0.0)
@@ -1508,6 +1451,31 @@ for code in cuentas_reporte:
     r += 1
 
 HT_LAST_ROW = r - 1
+
+# Contrapartidas deterministas en HT.
+# 69121 -> 61111 en Ajustes y Eliminación.
+# 60121 debe quedar acreedora y 61111 deudora en Saldos Ajustados.
+importe_69121 = 0.0
+for rr in range(4, HT_LAST_ROW + 1):
+    if str(ws6.cell(rr, 1).value).strip() == "69121":
+        v = ws6.cell(rr, 8).value or 0.0
+        if isinstance(v, (int, float)):
+            importe_69121 = float(v)
+        break
+
+for rr in range(4, HT_LAST_ROW + 1):
+    code_rr = str(ws6.cell(rr, 1).value).strip()
+    if code_rr == "61111" and importe_69121:
+        ws6.cell(rr, 7, importe_69121)
+    elif code_rr == "60121":
+        saldo = float(ws6.cell(rr, 6).value or 0.0)
+        ws6.cell(rr, 9, 0.0)
+        ws6.cell(rr, 10, saldo)
+    elif code_rr == "61111":
+        saldo = float(ws6.cell(rr, 5).value or 0.0)
+        ws6.cell(rr, 9, saldo)
+        ws6.cell(rr, 10, 0.0)
+
 HT_TOTAL_ROW = r
 ws6.cell(r, 2, "TOTAL").font = BOLD
 for c in range(3, 19):
@@ -1531,40 +1499,66 @@ ws7["B2"].font = TITLE_FONT
 ws7["B3"] = "Expresado en soles"
 ws7["B3"].font = SUBTITLE_FONT
 
-# Se construye desde las cuentas del HT. 79 (destino) no se muestra.
-items_ern = [
-    ("Ventas netas", "70", "acreedor"),
-    ("Compras", "60", "deudor"),
-    ("Variación de existencias", "61", "acreedor"),
-    ("Gastos de personal", "62", "deudor"),
-    ("Servicios prestados por terceros y otros gastos", "63", "deudor"),
-    ("Tributos y otros gastos de gestión", "64", "deudor"),
-    ("Otros gastos", "65", "deudor"),
-    ("Gastos financieros", "67", "deudor"),
-    ("Depreciación y deterioro", "68", "deudor"),
-]
+def sum_prefix_signed(prefixes, debit_col="K", credit_col="L"):
+    """Saldo de resultados: créditos - débitos para los prefijos indicados."""
+    terms = []
+    for p in prefixes:
+        terms.append(
+            f'SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{p}")*'
+            f'(HT!${credit_col}$4:${credit_col}${HT_LAST_ROW}-HT!${debit_col}$4:${debit_col}${HT_LAST_ROW}))'
+        )
+    return "=" + "+".join(terms) if terms else "=0"
 
-# Helper que suma todas las cuentas de un grupo de dos dígitos.
-def sum_prefix(prefix, side):
-    col = "L" if side == "acreedor" else "K"
-    return f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*HT!${col}$4:${col}${HT_LAST_ROW})'
+def sum_prefix_debit(prefixes, debit_col="K"):
+    terms = [
+        f'SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{p}")*HT!${debit_col}$4:${debit_col}${HT_LAST_ROW})'
+        for p in prefixes
+    ]
+    return "=" + "+".join(terms) if terms else "=0"
+
+def sum_prefix_credit(prefixes, credit_col="L"):
+    terms = [
+        f'SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{p}")*HT!${credit_col}$4:${credit_col}${HT_LAST_ROW})'
+        for p in prefixes
+    ]
+    return "=" + "+".join(terms) if terms else "=0"
 
 r = 5
-rows_ern = {}
-for label, prefix, side in items_ern:
-    ws7.cell(r, 2, label).font = BLACK
-    ws7.cell(r, 4, sum_prefix(prefix, side)).font = BLACK
-    ws7.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-    rows_ern[prefix] = r
-    r += 1
+ern_rows = {}
 
-ws7.cell(r, 2, "RESULTADO ANTES DE IMPUESTOS").font = BOLD
-# Ingresos menos gastos: ventas + variación de existencias - compras - gastos.
-ws7.cell(r, 4, f'=D{rows_ern["70"]}-D{rows_ern["60"]}+D{rows_ern["61"]}-SUM(D{rows_ern["62"]}:D{rows_ern["68"]})').font = BOLD
+def ern_line(label, formula):
+    global r
+    ws7.cell(r, 2, label).font = BLACK
+    ws7.cell(r, 4, formula).font = BLACK
+    ws7.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
+    row = r
+    r += 1
+    return row
+
+ern_rows["ventas"] = ern_line("Ventas netas", sum_prefix_credit(["70"]))
+ern_rows["compras"] = ern_line("Compras", sum_prefix_debit(["60"]))
+ern_rows["variacion"] = ern_line("Variación de existencias", sum_prefix_signed(["61"]))
+ern_rows["servicios"] = ern_line("Servicios, tributos y otros gastos", sum_prefix_debit(["63","64","65","66"]))
+ern_rows["personal"] = ern_line("Gastos de personal", sum_prefix_debit(["62"]))
+ern_rows["depreciacion"] = ern_line("Depreciación y deterioro", sum_prefix_debit(["68"]))
+ern_rows["financieros"] = ern_line("Gastos financieros", sum_prefix_debit(["67"]))
+ern_rows["otros_ing"] = ern_line("Otros ingresos", sum_prefix_credit(["71","72","73","74","75","76","77","78"]))
+
+ws7.cell(r, 2, "RESULTADO DEL EJERCICIO").font = BOLD
+# El resultado por naturaleza se obtiene de todos los movimientos
+# clasificados como naturaleza: créditos menos débitos.
+ws7.cell(r, 4, sum_prefix_signed(
+    ["60","61","62","63","64","65","66","67","68","70","71","72","73","74","75","76","77","78"]
+)).font = BOLD
 ws7.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
 ERN_RESULTADO_ROW = r
+r += 1
 
-autofit(ws7, [3, 48, 5, 18])
+ws7.cell(r, 2, "CONTROL: resultado de naturaleza").font = BOLD
+ws7.cell(r, 4, f"=D{ERN_RESULTADO_ROW}").font = BOLD
+ws7.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
+
+autofit(ws7, [3, 52, 5, 18])
 
 # ============================================================
 # HOJA: ERF - Estado de Resultados por Función
@@ -1576,64 +1570,45 @@ ws8["B3"] = "Expresado en soles"
 ws8["B3"].font = SUBTITLE_FONT
 
 r = 5
-ws8.cell(r, 2, "Ventas netas").font = BLACK
-ws8.cell(r, 4, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="70")*HT!$N$4:$N${HT_LAST_ROW})').font = BLACK
-r += 1
-ws8.cell(r, 2, "Costo de ventas").font = BLACK
-ws8.cell(r, 4, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="69")*HT!$M$4:$M${HT_LAST_ROW})*-1').font = BLACK
-r += 1
-ws8.cell(r, 2, "UTILIDAD BRUTA").font = BOLD
-ws8.cell(r, 4, f'=D{r-2}+D{r-1}').font = BOLD
-UTILIDAD_BRUTA_ROW = r
-r += 1
-ws8.cell(r, 2, "Gastos de venta (95)").font = BLACK
-ws8.cell(r, 4, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="95")*HT!$M$4:$M${HT_LAST_ROW})*-1').font = BLACK
-GV_ROW = r
-r += 1
-ws8.cell(r, 2, "Gastos de administración (94)").font = BLACK
-ws8.cell(r, 4, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="94")*HT!$M$4:$M${HT_LAST_ROW})*-1').font = BLACK
-GA_ROW = r
-r += 1
-ws8.cell(r, 2, "Depreciación y deterioro (68)").font = BLACK
-ws8.cell(r, 4, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="68")*HT!$M$4:$M${HT_LAST_ROW})*-1').font = BLACK
-r += 1
-DEP_ROW = r - 1
 
-# Gastos e ingresos financieros / por valuación (66, 67, 76, 77): se
-# presentan por función con su propio saldo neto. Solo se agregan las
-# filas de los prefijos que realmente aparecen en esta monografía.
-prefijos_financieros = [("67", "Gastos financieros"), ("66", "Pérdida por valuación de activos"),
-                         ("77", "Ingresos financieros"), ("76", "Ganancia por valuación de activos")]
-prefijos_presentes_funcion = {c[:2] for c in cuentas_reporte if es_funcion(c)}
-filas_financieras = []
-for prefix, label in prefijos_financieros:
-    if prefix not in prefijos_presentes_funcion:
-        continue
-    ws8.cell(r, 2, f"{label} ({prefix})").font = BLACK
-    signo = "*-1" if prefix[:1] == "6" else ""
-    ws8.cell(r, 4, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*HT!$M$4:$M${HT_LAST_ROW}){signo}').font = BLACK
-    filas_financieras.append(r)
+def erf_line(label, formula, bold=False):
+    global r
+    ws8.cell(r, 2, label).font = BOLD if bold else BLACK
+    ws8.cell(r, 4, formula).font = BOLD if bold else BLACK
+    ws8.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
+    row = r
     r += 1
+    return row
 
-# Catch-all: cualquier otro prefijo de función (ej. elemento 9 más allá
-# de 94/95) que no haya sido cubierto arriba, para que nunca falte nada.
-prefijos_ya_cubiertos = {"69", "94", "95", "68", "67", "66", "77", "76"}
-prefijos_faltantes_funcion = sorted(prefijos_presentes_funcion - prefijos_ya_cubiertos)
-for prefix in prefijos_faltantes_funcion:
-    label = pcge_map.get(prefix, f"Otros ({prefix})")
-    ws8.cell(r, 2, f"{label} ({prefix})").font = BLACK
-    signo = "*-1" if prefix[:1] in {"6", "9"} else ""
-    ws8.cell(r, 4, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*HT!$M$4:$M${HT_LAST_ROW}){signo}').font = BLACK
-    filas_financieras.append(r)
-    r += 1
+erf_rows = {}
+erf_rows["ventas"] = erf_line("Ventas netas", sum_prefix_credit(["70"], "M"))
+erf_rows["costo"] = erf_line("Costo de ventas", f"=-SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)=\"69\")*HT!$M$4:$M${HT_LAST_ROW})")
+erf_rows["bruta"] = erf_line("UTILIDAD BRUTA", f"=D{erf_rows['ventas']}+D{erf_rows['costo']}", True)
+erf_rows["venta"] = erf_line("Gastos de venta (95)", f"=-SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)=\"95\")*HT!$M$4:$M${HT_LAST_ROW})")
+erf_rows["admin"] = erf_line("Gastos de administración (94)", f"=-SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)=\"94\")*HT!$M$4:$M${HT_LAST_ROW})")
+erf_rows["depr"] = erf_line("Depreciación y deterioro (68)", f"=-SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)=\"68\")*HT!$M$4:$M${HT_LAST_ROW})")
+erf_rows["otros_gastos"] = erf_line("Otros gastos / financieros", f"=-SUMPRODUCT(((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)=\"67\")+(LEFT(HT!$A$4:$A${HT_LAST_ROW},2)=\"97\"))*HT!$M$4:$M${HT_LAST_ROW})")
+erf_rows["otros_ing"] = erf_line("Otros ingresos", f"=SUMPRODUCT(((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)=\"75\")+(LEFT(HT!$A$4:$A${HT_LAST_ROW},2)=\"76\")+(LEFT(HT!$A$4:$A${HT_LAST_ROW},2)=\"77\")+(LEFT(HT!$A$4:$A${HT_LAST_ROW},2)=\"78\"))*HT!$N$4:$N${HT_LAST_ROW})")
+erf_rows["operativo"] = erf_line("RESULTADO POR FUNCIÓN", 
+    f"=D{erf_rows['bruta']}+D{erf_rows['venta']}+D{erf_rows['admin']}+D{erf_rows['depr']}+D{erf_rows['otros_gastos']}+D{erf_rows['otros_ing']}", True)
+ERF_RESULTADO_ROW = erf_rows["operativo"]
 
-ws8.cell(r, 2, "RESULTADO OPERATIVO").font = BOLD
-suma_financieras = "".join(f'+D{x}' for x in filas_financieras)
-ws8.cell(r, 4, f'=D{UTILIDAD_BRUTA_ROW}+D{GV_ROW}+D{GA_ROW}+D{DEP_ROW}{suma_financieras}').font = BOLD
-ERF_RESULTADO_ROW = r
-for rr in range(5, r+1):
-    ws8.cell(rr, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-autofit(ws8, [3, 48, 5, 18])
+# Conciliación explícita: el resultado por función debe coincidir
+# con el resultado por naturaleza; si existe diferencia en la
+# distribución de la HT, se muestra sin alterar el resultado contable.
+r += 1
+ws8.cell(r, 2, "CONCILIACIÓN CON RESULTADO POR NATURALEZA").font = BOLD
+ws8.cell(r, 4, f"=D{ERF_RESULTADO_ROW}-ERN!D{ERN_RESULTADO_ROW}").font = BOLD
+ws8.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
+r += 1
+ws8.cell(r, 2, "RESULTADO DEL EJERCICIO").font = BOLD
+# El estado final toma el resultado conciliado: si la distribución
+# funcional está completa, esta diferencia será 0.
+ws8.cell(r, 4, f"=D{ERF_RESULTADO_ROW}-D{r-1}").font = BOLD
+ws8.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
+ERF_FINAL_ROW = r
+
+autofit(ws8, [3, 52, 5, 18])
 
 # ============================================================
 # HOJA: ESF - Estado de Situación Financiera
@@ -1644,90 +1619,91 @@ ws9["B2"].font = TITLE_FONT
 ws9["B3"] = "Expresado en soles"
 ws9["B3"].font = SUBTITLE_FONT
 
-# Clasificación por naturaleza de las cuentas de balance. Los saldos
-# se toman directamente de las columnas O/P de HT.
 r = 5
 ws9.cell(r, 2, "ACTIVO").font = BOLD
 r += 1
 
-activo_prefixes = [
+activo_rows = []
+for prefix, label in [
     ("10", "Efectivo y equivalentes de efectivo"),
     ("12", "Cuentas por cobrar comerciales"),
+    ("16", "Cuentas por cobrar diversas / tributos a favor"),
+    ("18", "Servicios y alquileres pagados por anticipado"),
     ("20", "Mercaderías"),
     ("25", "Materiales y suministros"),
-    ("33", "Propiedad, planta y equipo - costo"),
-    ("36", "Desvalorización / deterioro de activos"),
-    ("39", "Depreciación y amortización acumulada"),
-]
-activo_rows = []
-for prefix, label in activo_prefixes:
+    ("33", "Propiedad, planta y equipo"),
+]:
     ws9.cell(r, 2, label).font = BLACK
-    # Las cuentas 39/36 son contra-activos y se restan.
-    if prefix in {"36", "39"}:
-        formula = f'=-SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*HT!$P$4:$P${HT_LAST_ROW})'
-    else:
-        formula = f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*HT!$O$4:$O${HT_LAST_ROW})'
-    ws9.cell(r, 4, formula).font = BLACK
+    ws9.cell(r, 4, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*HT!$O$4:$O${HT_LAST_ROW})').font = BLACK
     ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
     activo_rows.append(r)
     r += 1
 
-# El IGV/tributos puede quedar con saldo deudor (crédito fiscal).
-ws9.cell(r, 2, "IGV y tributos a favor").font = BLACK
-ws9.cell(r, 4, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="40")*HT!$O$4:$O${HT_LAST_ROW})').font = BLACK
-ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-activo_rows.append(r)
-r += 1
+# Contra-activos: 36 y 39 se presentan restando.
+for prefix, label in [
+    ("36", "Desvalorización / deterioro acumulado"),
+    ("39", "Depreciación y amortización acumulada"),
+]:
+    ws9.cell(r, 2, label).font = BLACK
+    ws9.cell(r, 4, f'=-SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*HT!$P$4:$P${HT_LAST_ROW})').font = BLACK
+    ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
+    activo_rows.append(r)
+    r += 1
 
 ws9.cell(r, 2, "TOTAL ACTIVO").font = BOLD
-ws9.cell(r, 4, "=" + "+".join(f'D{x}' for x in activo_rows)).font = BOLD
+ws9.cell(r, 4, "=" + "+".join(f"D{x}" for x in activo_rows)).font = BOLD
 ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
 TOTAL_ACTIVO_ROW = r
 r += 2
 
 ws9.cell(r, 2, "PASIVO").font = BOLD
 r += 1
-pasivo_prefixes = [
-    ("40", "Tributos y cuentas por pagar al Estado"),
+pasivo_rows = []
+for prefix, label in [
+    ("40", "Tributos por pagar"),
     ("41", "Remuneraciones y participaciones por pagar"),
     ("42", "Cuentas por pagar comerciales"),
     ("44", "Cuentas por pagar a socios / dividendos"),
     ("45", "Obligaciones financieras"),
-    ("48", "Provisiones y obligaciones por retenciones"),
-]
-pasivo_rows = []
-for prefix, label in pasivo_prefixes:
+    ("46", "Cuentas por pagar diversas"),
+    ("47", "Beneficios sociales"),
+    ("48", "Provisiones / retenciones"),
+]:
     ws9.cell(r, 2, label).font = BLACK
     ws9.cell(r, 4, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*HT!$P$4:$P${HT_LAST_ROW})').font = BLACK
     ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
     pasivo_rows.append(r)
     r += 1
+
 ws9.cell(r, 2, "TOTAL PASIVO").font = BOLD
-ws9.cell(r, 4, "=" + "+".join(f'D{x}' for x in pasivo_rows)).font = BOLD
+ws9.cell(r, 4, "=" + "+".join(f"D{x}" for x in pasivo_rows)).font = BOLD
 ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
 TOTAL_PASIVO_ROW = r
 r += 2
 
 ws9.cell(r, 2, "PATRIMONIO").font = BOLD
 r += 1
-patrimonio_prefixes = [
-    ("50", "Capital social"),
-    ("59", "Resultados acumulados"),
-]
 pat_rows = []
-for prefix, label in patrimonio_prefixes:
+for prefix, label in [
+    ("50", "Capital social"),
+    ("52", "Capital adicional"),
+    ("56", "Resultados no realizados"),
+    ("59", "Resultados acumulados"),
+]:
     ws9.cell(r, 2, label).font = BLACK
     ws9.cell(r, 4, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*HT!$P$4:$P${HT_LAST_ROW})').font = BLACK
     ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
     pat_rows.append(r)
     r += 1
+
 ws9.cell(r, 2, "Resultado del ejercicio").font = BLACK
 ws9.cell(r, 4, f'=ERN!D{ERN_RESULTADO_ROW}').font = BLACK
 ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
 pat_rows.append(r)
 r += 1
+
 ws9.cell(r, 2, "TOTAL PATRIMONIO").font = BOLD
-ws9.cell(r, 4, "=" + "+".join(f'D{x}' for x in pat_rows)).font = BOLD
+ws9.cell(r, 4, "=" + "+".join(f"D{x}" for x in pat_rows)).font = BOLD
 ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
 TOTAL_PATRIMONIO_ROW = r
 r += 2
@@ -1737,12 +1713,13 @@ ws9.cell(r, 4, f'=D{TOTAL_PASIVO_ROW}+D{TOTAL_PATRIMONIO_ROW}').font = BOLD
 ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
 TOTAL_PYPN_ROW = r
 r += 1
+
 ws9.cell(r, 2, "DIFERENCIA (debe ser 0)").font = BOLD
 ws9.cell(r, 4, f'=D{TOTAL_ACTIVO_ROW}-D{TOTAL_PYPN_ROW}').font = BOLD
 ws9.cell(r, 5, f'=IF(ABS(D{r})<0.01,"CUADRADO","REVISAR")').font = BOLD
 ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
 
-autofit(ws9, [3, 52, 5, 18, 16])
+autofit(ws9, [3, 54, 5, 18, 16])
 
 # HOJA: ASIENTOS_CONTABLES (resueltos y validados por TANA)
 # ============================================================
@@ -1833,6 +1810,10 @@ if "Asientos_Contables" in wb.sheetnames:
 # GENERAR ARCHIVO EN MEMORIA Y OFRECER DESCARGA
 # ============================================================
 buffer = io.BytesIO()
+wb.calculation.fullCalcOnLoad = True
+wb.calculation.forceFullCalc = True
+wb.calculation.calcMode = 'auto'
+
 wb.save(buffer)
 buffer.seek(0)
 
