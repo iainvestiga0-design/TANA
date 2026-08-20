@@ -1467,11 +1467,12 @@ for code in cuentas_reporte:
     ws6.cell(r, 7, aj_deudor)
     ws6.cell(r, 8, aj_acreedor)
 
-    # Saldos ajustados: si la cuenta tuvo algún ajuste, queda en 0
-    # (el neto ya se refleja directamente en R.Naturaleza/R.Función,
-    # igual que en la plantilla de referencia). Sin ajuste, mantiene
-    # el saldo original.
-    if aj_deudor or aj_acreedor:
+    # Saldos ajustados: SOLO cuentas de balance (elemento 1 al 5).
+    # Las cuentas de resultados (elemento 6-9) no se muestran aquí;
+    # su saldo neto se refleja directamente en R.Naturaleza/R.Función.
+    if clasificar_resultado(code):
+        sa_debe, sa_haber = 0.0, 0.0
+    elif aj_deudor or aj_acreedor:
         sa_debe, sa_haber = 0.0, 0.0
     else:
         sa_debe, sa_haber = deudor, acreedor
