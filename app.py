@@ -379,11 +379,30 @@ if "monografia_json" in st.session_state:
         with st.spinner("Desarrollando y validando los asientos contables..."):
             try:
                 resolved, pcge_map = resolve_asientos_with_gemini()
-                valid, errors, warnings = validate_asientos(resolved, pcge_map)
-                st.session_state["asientos_contables"] = resolved
+
+                # Gemini devuelve {"asientos": [...], "alertas": [...]}
+                # La interfaz necesita trabajar con la lista de asientos.
+                if isinstance(resolved, dict):
+                    asientos_generados = resolved.get("asientos", [])
+                    alertas_gemini = resolved.get("alertas", [])
+                elif isinstance(resolved, list):
+                    asientos_generados = resolved
+                    alertas_gemini = []
+                else:
+                    raise ValueError("La respuesta de Gemini no tiene una estructura de asientos válida.")
+
+                if not isinstance(asientos_generados, list):
+                    raise ValueError("La clave 'asientos' de Gemini no contiene una lista.")
+
+                valid, errors, warnings = validate_asientos(
+                    {"asientos": asientos_generados},
+                    pcge_map,
+                )
+
+                st.session_state["asientos_contables"] = asientos_generados
                 st.session_state["asientos_validos"] = valid
                 st.session_state["errores_asientos"] = errors
-                st.session_state["alertas_asientos"] = warnings
+                st.session_state["alertas_asientos"] = list(alertas_gemini) + list(warnings)
             except json.JSONDecodeError:
                 st.error("Gemini devolvió una respuesta que no es JSON válido. Vuelve a intentarlo.")
             except Exception as exc:
