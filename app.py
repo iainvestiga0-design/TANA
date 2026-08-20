@@ -1,10 +1,18 @@
-import json, openpyxl
+import json, io, openpyxl
+import streamlit as st
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.comments import Comment
 from openpyxl.workbook.defined_name import DefinedName
+
+st.set_page_config(page_title="TANA - Generador Contable", page_icon="📊")
+st.title("TANA - Generador de Libros Contables")
+st.write("Genera el workbook completo (PCGE, Libro Diario, Mayor, Hoja de Trabajo y Estados Financieros) y descárgalo en Excel.")
+
+if not st.button("Generar Excel"):
+    st.stop()
 
 FONT = "Arial"
 wb = Workbook()
@@ -547,3 +555,18 @@ ws9.cell(row=5, column=3).comment = Comment(
     "El motor actual no tiene un tipo de operación 'COMPRA_ACTIVO_FIJO' ni 'APORTE_CAPITAL', así que Equipos Diversos, "
     "Capital Social y Resultados Acumulados anteriores se ingresan manualmente (celdas amarillas) hasta que agreguemos esas reglas.", "Sistema")
 print("Hoja SF lista")
+
+# ============================================================
+# GENERAR ARCHIVO EN MEMORIA Y OFRECER DESCARGA
+# ============================================================
+buffer = io.BytesIO()
+wb.save(buffer)
+buffer.seek(0)
+
+st.success("Workbook generado correctamente.")
+st.download_button(
+    label="Descargar Excel",
+    data=buffer,
+    file_name="TANA_Contabilidad.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+)
