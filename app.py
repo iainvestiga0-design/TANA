@@ -576,7 +576,13 @@ def corregir_retiro_socio(asientos, monografia_json):
 
     IMPORTANTE:
     No se toma el importe de la compraventa privada como utilidad ni se
-    reclasifica la cuenta 50.
+    reclasifica, cancela ni mueve la cuenta 50. Cualquier asiento de
+    cancelación/reclasificación de capital generado por Gemini para esta
+    operación debe eliminarse por completo.
+
+    La distribución DEBE usar las tres cuentas:
+        59111 / 48185 / 44191
+    No se acepta una distribución 59111 / 44191 sin 48185.
     """
     data = monografia_json or {}
     operaciones = data.get("operaciones", []) or []
@@ -722,7 +728,38 @@ def corregir_retiro_socio(asientos, monografia_json):
         )
         return any(palabra in texto for palabra in palabras)
 
-    resultado = [a for a in asientos if not es_retiro_o_utilidad(a)]
+    # Eliminar cualquier asiento generado por Gemini relacionado con la
+    # separación del socio o el reparto/pago. La operación privada no deja
+    # ningún asiento de capital en la sociedad.
+    resultado = []
+    for a in asientos:
+        if es_retiro_o_utilidad(a):
+            continue
+
+        # Protección adicional: Gemini a veces cambia la glosa/número y
+        # genera un asiento de "cancelación/reclasificación" de la cuenta 50.
+        # Si contiene una cuenta 50 de cinco dígitos y el texto habla de
+        # separación/participaciones/socio, se elimina ese asiento.
+        texto_ext = " ".join(
+            str(a.get(k, ""))
+            for k in ("glosa", "observacion", "documento", "concepto")
+        ).lower()
+        lineas = a.get("lineas", []) or []
+        codigos = {
+            str(l.get("codigo", "")).strip()
+            for l in lineas
+            if isinstance(l, dict)
+        }
+        habla_retiro = any(k in texto_ext for k in (
+            "separación", "separacion", "socio separado",
+            "participaciones", "venta de participaciones",
+            "compra de participaciones", "retiro del socio"
+        ))
+        tiene_cuenta_50 = any(c.startswith("50") for c in codigos)
+        if habla_retiro and tiene_cuenta_50:
+            continue
+
+        resultado.append(a)
 
     # Tomamos metadatos de los asientos eliminados solo para conservar
     # fecha/documento; no conservamos sus cuentas.
@@ -829,6 +866,17 @@ def corregir_retiro_socio(asientos, monografia_json):
             },
         ],
     )
+
+    # Post-condición: el asiento de distribución debe contener siempre las
+    # tres cuentas requeridas por esta práctica: 59111, 48185 y 44191.
+    # Si alguna cuenta cambiara por una edición futura, fallamos de forma
+    # explícita en vez de devolver un asiento incompleto.
+    cod_dist = {str(l.get("codigo", "")).strip() for l in dist.get("lineas", [])}
+    cuentas_requeridas = {"59111", "48185", "44191"}
+    if cod_dist != cuentas_requeridas:
+        raise ValueError(
+            "El reparto de utilidades debe usar exactamente 59111, 48185 y 44191."
+        )
 
     resultado.extend([dist, pago])
     return resultado
