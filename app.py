@@ -1291,263 +1291,335 @@ ws5.cell(row=1, column=1).comment = Comment(
 print("Hoja LM (Libro Mayor) lista:", LM_LAST_ROW-1, "cuentas")
 
 # ============================================================
-# HOJA: HT - Hoja de Trabajo / Balance de Comprobación
 # ============================================================
+# HOJA: HT - Hoja de Trabajo / Balance de Comprobación
+# La HT se construye directamente desde los asientos contables
+# validados por TANA. No depende de las reglas auxiliares del Excel.
+# ============================================================
+
+asientos_export = st.session_state.get("asientos_contables", [])
+
+# Consolidar todas las cuentas realmente utilizadas por los asientos.
+movimientos = {}
+for asiento in asientos_export:
+    for line in asiento.get("lineas", []):
+        code = str(line.get("codigo", "")).strip()
+        if not re.fullmatch(r"\d{5}", code):
+            continue
+        rec = movimientos.setdefault(code, {"debe": 0.0, "haber": 0.0})
+        try:
+            rec["debe"] += float(line.get("debe", 0) or 0)
+        except Exception:
+            pass
+        try:
+            rec["haber"] += float(line.get("haber", 0) or 0)
+        except Exception:
+            pass
+
+cuentas_reporte = sorted(movimientos.keys(), key=lambda x: (int(x), x))
+
 ws6 = wb.create_sheet("HT")
-ws6.cell(row=1, column=2, value="BALANCE DE COMPROBACIÓN Y HOJA DE TRABAJO")
-ws6.cell(row=1, column=2).font = TITLE_FONT
-top_headers = [(3, "SUMA"), (5, "SALDOS"), (7, "AJUSTES"), (9, "SALDOS AJUSTADOS")]
-for col, label in top_headers:
-    ws6.merge_cells(start_row=2, start_column=col, end_row=2, end_column=col+1)
-    ws6.cell(row=2, column=col, value=label)
-    style_header(ws6, 2, col, col+1)
-sub_headers = ["Cta", "Denominación", "Debe", "Haber", "Deudor", "Acreedor", "Debe", "Haber", "Debe", "Haber"]
-for i, h in enumerate(sub_headers, start=1):
-    ws6.cell(row=3, column=i, value=h)
-style_header(ws6, 3, 1, 10)
+ws6.merge_cells("A1:R1")
+ws6["A1"] = "HOJA DE TRABAJO / BALANCE DE COMPROBACIÓN"
+ws6["A1"].font = TITLE_FONT
+ws6["A1"].alignment = Alignment(horizontal="center")
+
+# Encabezados agrupados siguiendo la lógica de la plantilla de trabajo:
+# suma, saldos, ajustes/eliminación, saldos ajustados, resultados por
+# naturaleza, resultados por función y situación financiera.
+groups = [
+    (3, 4, "SUMA"),
+    (5, 6, "SALDOS"),
+    (7, 8, "AJUSTES Y ELIMINACIÓN"),
+    (9, 10, "SALDOS AJUSTADOS"),
+    (11, 12, "R. NATURALEZA"),
+    (13, 14, "R. FUNCIÓN"),
+    (15, 16, "E.S.F."),
+    (17, 18, "DIST. Y AJUSTE FINAL"),
+]
+for c1, c2, label in groups:
+    ws6.merge_cells(start_row=2, start_column=c1, end_row=2, end_column=c2)
+    ws6.cell(row=2, column=c1, value=label)
+    style_header(ws6, 2, c1, c2)
+
+headers_ht = [
+    "CTA", "DENOMINACIÓN", "DEBE", "HABER", "DEUDOR", "ACREEDOR",
+    "DEUDOR", "ACREEDOR", "DEBE", "HABER", "DEUDOR", "ACREEDOR",
+    "DEUDOR", "ACREEDOR", "ACTIVO", "PASIVO", "DEBE", "HABER",
+]
+for c, label in enumerate(headers_ht, 1):
+    ws6.cell(row=3, column=c, value=label)
+style_header(ws6, 3, 1, 18)
+
+# Clasificación contable para la HT.
+def clasificar_resultado(code):
+    p2 = code[:2]
+    p1 = code[:1]
+    if p2 in {"60", "61", "62", "63", "64", "65", "66", "67", "68", "69", "70", "71", "72", "73", "74", "75", "76", "77", "78", "80", "81", "82", "83", "84", "85", "87", "88", "89"}:
+        return True
+    return p1 in {"6", "7"}
+
+def es_naturaleza(code):
+    # 79 es cuenta de destino: no representa ingreso/gasto adicional.
+    return code[:2] not in {"79"} and clasificar_resultado(code)
+
+def es_funcion(code):
+    # El resultado por función se presenta por costo de ventas y gastos
+    # de venta/administración; 79 es cuenta de destino y se excluye.
+    return code[:2] in {"69", "94", "95"} or code[:2] in {"68"}
+
+def es_balance(code):
+    return not clasificar_resultado(code) and code[:2] != "79"
 
 r = 4
-for cod in cuentas_usadas:
-    ws6.cell(row=r, column=1, value=cod)
-    ws6.cell(row=r, column=2, value=f'=VLOOKUP($A{r},PCGE,2,0)')
-    ws6.cell(row=r, column=3, value=f'=SUMIFS(LD!$G:$G,LD!$E:$E,$A{r})')
-    ws6.cell(row=r, column=4, value=f'=SUMIFS(LD!$H:$H,LD!$E:$E,$A{r})')
-    ws6.cell(row=r, column=5, value=f'=IF($C{r}>$D{r},$C{r}-$D{r},0)')
-    ws6.cell(row=r, column=6, value=f'=IF($D{r}>$C{r},$D{r}-$C{r},0)')
-    # Ajustes: celdas de entrada manual (amarillo), 0 por defecto
-    ws6.cell(row=r, column=7, value=0)
-    ws6.cell(row=r, column=8, value=0)
-    ws6.cell(row=r, column=7).fill = INPUT_FILL
-    ws6.cell(row=r, column=8).fill = INPUT_FILL
-    ws6.cell(row=r, column=7).font = BLUE
-    ws6.cell(row=r, column=8).font = BLUE
-    # Saldos ajustados = saldo +/- ajustes, neteado a un solo lado
-    f_saldo_neto = f'($E{r}+$G{r})-($F{r}+$H{r})'
-    ws6.cell(row=r, column=9, value=f'=IF({f_saldo_neto}>0,{f_saldo_neto},0)')
-    ws6.cell(row=r, column=10, value=f'=IF({f_saldo_neto}<0,-({f_saldo_neto}),0)')
-    for col in range(1, 11):
-        ws6.cell(row=r, column=col).font = BLACK if col not in (7,8) else BLUE
-    for col in (3,4,5,6,9,10):
-        ws6.cell(row=r, column=col).number_format = '#,##0.00;(#,##0.00);"-"'
-    r += 1
-HT_LAST_ROW = r - 1
+for code in cuentas_reporte:
+    desc = pcge_map.get(code, "")
+    debe = movimientos[code]["debe"]
+    haber = movimientos[code]["haber"]
+    deudor = max(debe - haber, 0.0)
+    acreedor = max(haber - debe, 0.0)
 
-ws6.cell(row=r, column=2, value="TOTALES").font = BOLD
-for col in (3,4,5,6,7,8,9,10):
-    letter = get_column_letter(col)
-    ws6.cell(row=r, column=col, value=f'=SUM({letter}4:{letter}{HT_LAST_ROW})').font = BOLD
-    ws6.cell(row=r, column=col).number_format = '#,##0.00'
+    ws6.cell(r, 1, code)
+    ws6.cell(r, 2, desc)
+    ws6.cell(r, 3, debe)
+    ws6.cell(r, 4, haber)
+    ws6.cell(r, 5, deudor)
+    ws6.cell(r, 6, acreedor)
+
+    # No hay una columna de ajustes independiente en los asientos validados:
+    # los asientos de ajuste (depreciación, desvalorización, etc.) ya forman
+    # parte del diario y por eso llegan incorporados a las sumas.
+    ws6.cell(r, 7, 0.0)
+    ws6.cell(r, 8, 0.0)
+    ws6.cell(r, 9, deudor)
+    ws6.cell(r, 10, acreedor)
+
+    if es_naturaleza(code):
+        ws6.cell(r, 11, deudor)
+        ws6.cell(r, 12, acreedor)
+    if es_funcion(code):
+        ws6.cell(r, 13, deudor)
+        ws6.cell(r, 14, acreedor)
+    if es_balance(code):
+        ws6.cell(r, 15, deudor)
+        ws6.cell(r, 16, acreedor)
+
+    # Distribución y ajuste final: reservado para el cierre/transformación.
+    ws6.cell(r, 17, 0.0)
+    ws6.cell(r, 18, 0.0)
+
+    for c in range(1, 19):
+        ws6.cell(r, c).font = BLACK
+    for c in range(3, 19):
+        ws6.cell(r, c).number_format = '#,##0.00;(#,##0.00);"-"'
+    r += 1
+
+HT_LAST_ROW = r - 1
 HT_TOTAL_ROW = r
+ws6.cell(r, 2, "TOTAL").font = BOLD
+for c in range(3, 19):
+    letter = get_column_letter(c)
+    ws6.cell(r, c, f'=SUM({letter}4:{letter}{HT_LAST_ROW})').font = BOLD
+    ws6.cell(r, c).number_format = '#,##0.00;(#,##0.00);"-"'
 
 ws6.freeze_panes = "A4"
-autofit(ws6, [10, 42, 13, 13, 13, 13, 11, 11, 13, 13])
-ws6.cell(row=2, column=7).comment = Comment(
-    "Ajustes de fin de periodo (estimación de cobranza dudosa, provisiones, etc.) — celdas amarillas, edítalas manualmente. 0 por defecto.", "Sistema")
-print("Hoja HT lista:", HT_LAST_ROW-3, "cuentas, fila de totales en", HT_TOTAL_ROW)
+autofit(ws6, [11, 44, 14, 14, 14, 14, 13, 13, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14])
 
-def sumif_deudor(code):
-    return f'SUMIF(HT!$A$4:$A${HT_LAST_ROW},"{code}",HT!$I$4:$I${HT_LAST_ROW})'
-def sumif_acreedor(code):
-    return f'SUMIF(HT!$A$4:$A${HT_LAST_ROW},"{code}",HT!$J$4:$J${HT_LAST_ROW})'
+
+def ht_sum(code, col):
+    return f'=SUMIF(HT!$A$4:$A${HT_LAST_ROW},"{code}",HT!${col}$4:${col}${HT_LAST_ROW})'
 
 # ============================================================
-# HOJA: RN - Estado de Resultados por Naturaleza
+# HOJA: ERN - Estado de Resultados por Naturaleza
 # ============================================================
-ws7 = wb.create_sheet("RN")
-ws7["C2"] = "Estado de Resultados por Naturaleza"
-ws7["C2"].font = TITLE_FONT
-ws7["C3"] = "(Expresado en soles)"
-ws7["C3"].font = SUBTITLE_FONT
+ws7 = wb.create_sheet("ERN")
+ws7["B2"] = "ESTADO DE RESULTADOS POR NATURALEZA"
+ws7["B2"].font = TITLE_FONT
+ws7["B3"] = "Expresado en soles"
+ws7["B3"].font = SUBTITLE_FONT
 
-rows_rn = [
-    ("Ventas netas (70121)", f'={sumif_acreedor("70121")}', True),
-    ("Compras (60111)", f'=-{sumif_deudor("60111")}', True),
-    ("Variación de existencias (61111)", f'={sumif_acreedor("61111")}', True),
-    ("Margen comercial", "=SUM(D4:D6)", "bold"),
-    ("Sueldos y cargas sociales (62111)", f'=-{sumif_deudor("62111")}', True),
-    ("Depreciación (68415)", f'=-{sumif_deudor("68415")}', True),
-    ("Resultado de explotación", "=D7+SUM(D8:D9)", "bold"),
-    ("Ingresos / gastos financieros", 0, True),
-    ("Resultado antes de impuesto a la renta", "=D10+D11", "bold"),
+# Se construye desde las cuentas del HT. 79 (destino) no se muestra.
+items_ern = [
+    ("Ventas netas", "70", "acreedor"),
+    ("Compras", "60", "deudor"),
+    ("Variación de existencias", "61", "acreedor"),
+    ("Gastos de personal", "62", "deudor"),
+    ("Servicios prestados por terceros y otros gastos", "63", "deudor"),
+    ("Tributos y otros gastos de gestión", "64", "deudor"),
+    ("Otros gastos", "65", "deudor"),
+    ("Gastos financieros", "67", "deudor"),
+    ("Depreciación y deterioro", "68", "deudor"),
 ]
-r = 4
-for label, formula, kind in rows_rn:
-    ws7.cell(row=r, column=3, value=label)
-    c = ws7.cell(row=r, column=4, value=formula)
-    if kind == "bold":
-        ws7.cell(row=r, column=3).font = BOLD
-        c.font = BOLD
-    elif kind is True and isinstance(formula, int):
-        c.font = BLUE
-        c.fill = INPUT_FILL
-        ws7.cell(row=r, column=3).font = BLACK
-    else:
-        ws7.cell(row=r, column=3).font = BLACK
-        c.font = BLACK
-    c.number_format = '#,##0.00;(#,##0.00)'
-    r += 1
 
-r += 1
-ws7.cell(row=r, column=3, value="Tasa Impuesto a la Renta").font = BLACK
-ws7.cell(row=r, column=4, value=0.295).font = BLUE
-ws7.cell(row=r, column=4).fill = INPUT_FILL
-ws7.cell(row=r, column=4).number_format = '0.0%'
-IR_RATE_CELL_RN = f"$D${r}"
-r += 1
-ws7.cell(row=r, column=3, value="Impuesto a la renta").font = BOLD
-ws7.cell(row=r, column=4, value=f'=-MAX(D12,0)*{IR_RATE_CELL_RN}').font = BOLD
-ws7.cell(row=r, column=4).number_format = '#,##0.00;(#,##0.00)'
-r += 1
-ws7.cell(row=r, column=3, value="RESULTADO DEL EJERCICIO").font = BOLD
-ws7.cell(row=r, column=4, value=f'=D12+D{r-1}').font = BOLD
-ws7.cell(row=r, column=4).number_format = '#,##0.00;(#,##0.00)'
-RN_RESULTADO_CELL = f"RN!$D${r}"
-
-autofit(ws7, [3, 45, 5, 16])
-print("Hoja RN lista, resultado del ejercicio en", RN_RESULTADO_CELL)
-
-# ============================================================
-# HOJA: RF - Estado de Resultados por Función
-# ============================================================
-ws8 = wb.create_sheet("RF")
-ws8["C2"] = "Estado de Resultados por Función"
-ws8["C2"].font = TITLE_FONT
-ws8["C3"] = "(Expresado en soles)"
-ws8["C3"].font = SUBTITLE_FONT
-
-ws8["C5"] = "Supuesto: % de Sueldos+Depreciación asignado a Gasto de Venta (resto va a Administración)"
-ws8["C5"].font = Font(name=FONT, italic=True, size=9, color="555555")
-ws8["F5"] = 0.4
-ws8["F5"].font = BLUE
-ws8["F5"].fill = INPUT_FILL
-ws8["F5"].number_format = "0%"
-PCT_VENTA_CELL = "RF!$F$5"
-
-r = 7
-ws8.cell(row=r, column=3, value="Ventas netas (70121)").font = BLACK
-ws8.cell(row=r, column=4, value=f'={sumif_acreedor("70121")}').font = BLACK
-r += 1
-ws8.cell(row=r, column=3, value="Costo de ventas (69121)").font = BLACK
-ws8.cell(row=r, column=4, value=f'=-{sumif_deudor("69121")}').font = BLACK
-r += 1
-ws8.cell(row=r, column=3, value="Utilidad bruta").font = BOLD
-ws8.cell(row=r, column=4, value="=SUM(D7:D8)").font = BOLD
-UB_ROW = r
-r += 1
-gasto_base = f'({sumif_deudor("62111")}+{sumif_deudor("68415")})'
-ws8.cell(row=r, column=3, value="Gasto de venta (62,68 asignado)").font = BLACK
-ws8.cell(row=r, column=4, value=f'=-{gasto_base}*{PCT_VENTA_CELL}').font = BLACK
-GV_ROW = r
-r += 1
-ws8.cell(row=r, column=3, value="Gasto de administración (62,68 resto)").font = BLACK
-ws8.cell(row=r, column=4, value=f'=-{gasto_base}*(1-{PCT_VENTA_CELL})').font = BLACK
-GA_ROW = r
-r += 1
-ws8.cell(row=r, column=3, value="Utilidad operativa").font = BOLD
-ws8.cell(row=r, column=4, value=f'=D{UB_ROW}+D{GV_ROW}+D{GA_ROW}').font = BOLD
-UO_ROW = r
-r += 1
-ws8.cell(row=r, column=3, value="Ingresos / gastos financieros").font = BLACK
-ws8.cell(row=r, column=4, value=0).font = BLUE
-ws8.cell(row=r, column=4).fill = INPUT_FILL
-FIN_ROW = r
-r += 1
-ws8.cell(row=r, column=3, value="Utilidad antes de impuesto a la renta").font = BOLD
-ws8.cell(row=r, column=4, value=f'=D{UO_ROW}+D{FIN_ROW}').font = BOLD
-UAI_ROW = r
-r += 2
-ws8.cell(row=r, column=3, value="Tasa Impuesto a la Renta").font = BLACK
-ws8.cell(row=r, column=4, value=0.295).font = BLUE
-ws8.cell(row=r, column=4).fill = INPUT_FILL
-ws8.cell(row=r, column=4).number_format = "0.0%"
-IR_RATE_CELL_RF = f"$D${r}"
-r += 1
-ws8.cell(row=r, column=3, value="Impuesto a la renta").font = BOLD
-ws8.cell(row=r, column=4, value=f'=-MAX(D{UAI_ROW},0)*{IR_RATE_CELL_RF}').font = BOLD
-IR_ROW = r
-r += 1
-ws8.cell(row=r, column=3, value="UTILIDAD NETA").font = BOLD
-ws8.cell(row=r, column=4, value=f'=D{UAI_ROW}+D{IR_ROW}').font = BOLD
-for rr in range(7, r+1):
-    ws8.cell(row=rr, column=4).number_format = '#,##0.00;(#,##0.00)'
-RF_RESULTADO_CELL = f"RF!$D${r}"
-
-autofit(ws8, [3, 45, 5, 16])
-print("Hoja RF lista, utilidad neta en", RF_RESULTADO_CELL)
-
-# ============================================================
-# HOJA: SF - Estado de Situación Financiera
-# ============================================================
-ws9 = wb.create_sheet("SF")
-ws9["C2"] = "Estado de Situación Financiera"
-ws9["C2"].font = TITLE_FONT
-ws9["C3"] = "(Expresado en soles)"
-ws9["C3"].font = SUBTITLE_FONT
+# Helper que suma todas las cuentas de un grupo de dos dígitos.
+def sum_prefix(prefix, side):
+    col = "L" if side == "acreedor" else "K"
+    return f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*HT!${col}$4:${col}${HT_LAST_ROW})'
 
 r = 5
-ws9.cell(row=r, column=3, value="ACTIVO").font = BOLD; r += 1
-ws9.cell(row=r, column=3, value="Activo corriente").font = BOLD; r += 1
-ws9.cell(row=r, column=3, value="Efectivo y equivalentes de efectivo (10111)").font = BLACK
-ws9.cell(row=r, column=4, value=f'={sumif_deudor("10111")}').font = BLACK; AC1=r; r += 1
-ws9.cell(row=r, column=3, value="Cuentas por cobrar comerciales (12121)").font = BLACK
-ws9.cell(row=r, column=4, value=f'={sumif_deudor("12121")}').font = BLACK; AC2=r; r += 1
-ws9.cell(row=r, column=3, value="Mercaderías (20111)").font = BLACK
-ws9.cell(row=r, column=4, value=f'={sumif_deudor("20111")}').font = BLACK; AC3=r; r += 1
-ws9.cell(row=r, column=3, value="Total activo corriente").font = BOLD
-ws9.cell(row=r, column=4, value=f'=SUM(D{AC1}:D{AC3})').font = BOLD; TAC_ROW=r; r += 2
+rows_ern = {}
+for label, prefix, side in items_ern:
+    ws7.cell(r, 2, label).font = BLACK
+    ws7.cell(r, 4, sum_prefix(prefix, side)).font = BLACK
+    ws7.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
+    rows_ern[prefix] = r
+    r += 1
 
-ws9.cell(row=r, column=3, value="Activo no corriente").font = BOLD; r += 1
-ws9.cell(row=r, column=3, value="Equipos diversos - costo (entrada manual, no cubierto por el motor aún)").font = BLACK
-ws9.cell(row=r, column=4, value=0).font = BLUE; ws9.cell(row=r, column=4).fill = INPUT_FILL; ANC1=r; r += 1
-ws9.cell(row=r, column=3, value="Depreciación acumulada (39527)").font = BLACK
-ws9.cell(row=r, column=4, value=f'=-{sumif_acreedor("39527")}').font = BLACK; ANC2=r; r += 1
-ws9.cell(row=r, column=3, value="Total activo no corriente").font = BOLD
-ws9.cell(row=r, column=4, value=f'=SUM(D{ANC1}:D{ANC2})').font = BOLD; TANC_ROW=r; r += 2
+ws7.cell(r, 2, "RESULTADO ANTES DE IMPUESTOS").font = BOLD
+# Ingresos menos gastos: ventas + variación de existencias - compras - gastos.
+ws7.cell(r, 4, f'=D{rows_ern["70"]}-D{rows_ern["60"]}+D{rows_ern["61"]}-SUM(D{rows_ern["62"]}:D{rows_ern["68"]})').font = BOLD
+ws7.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
+ERN_RESULTADO_ROW = r
 
-ws9.cell(row=r, column=3, value="TOTAL ACTIVO").font = BOLD
-ws9.cell(row=r, column=4, value=f'=D{TAC_ROW}+D{TANC_ROW}').font = BOLD; TA_ROW=r; r += 2
-
-ws9.cell(row=r, column=3, value="PASIVO").font = BOLD; r += 1
-ws9.cell(row=r, column=3, value="Pasivo corriente").font = BOLD; r += 1
-ws9.cell(row=r, column=3, value="Remuneraciones por pagar (41111)").font = BLACK
-ws9.cell(row=r, column=4, value=f'={sumif_acreedor("41111")}').font = BLACK; PC1=r; r += 1
-ws9.cell(row=r, column=3, value="Tributos por pagar - IGV (40111)").font = BLACK
-ws9.cell(row=r, column=4, value=f'={sumif_acreedor("40111")}-{sumif_deudor("40111")}').font = BLACK; PC2=r; r += 1
-ws9.cell(row=r, column=3, value="Cuentas por pagar comerciales (42121)").font = BLACK
-ws9.cell(row=r, column=4, value=f'={sumif_acreedor("42121")}').font = BLACK; PC3=r; r += 1
-ws9.cell(row=r, column=3, value="Total pasivo corriente").font = BOLD
-ws9.cell(row=r, column=4, value=f'=SUM(D{PC1}:D{PC3})').font = BOLD; TPC_ROW=r; r += 2
-
-ws9.cell(row=r, column=3, value="TOTAL PASIVO").font = BOLD
-ws9.cell(row=r, column=4, value=f'=D{TPC_ROW}').font = BOLD; TP_ROW=r; r += 2
-
-ws9.cell(row=r, column=3, value="PATRIMONIO").font = BOLD; r += 1
-ws9.cell(row=r, column=3, value="Capital social (50111, entrada manual)").font = BLACK
-ws9.cell(row=r, column=4, value=0).font = BLUE; ws9.cell(row=r, column=4).fill = INPUT_FILL; PAT1=r; r += 1
-ws9.cell(row=r, column=3, value="Resultados acumulados (59111) - ejercicios anteriores").font = BLACK
-ws9.cell(row=r, column=4, value=0).font = BLUE; ws9.cell(row=r, column=4).fill = INPUT_FILL; PAT2=r; r += 1
-ws9.cell(row=r, column=3, value="Resultado del ejercicio (de RN)").font = BLACK
-ws9.cell(row=r, column=4, value=f'={RN_RESULTADO_CELL}').font = BLACK; PAT3=r; r += 1
-ws9.cell(row=r, column=3, value="Total patrimonio").font = BOLD
-ws9.cell(row=r, column=4, value=f'=SUM(D{PAT1}:D{PAT3})').font = BOLD; TPAT_ROW=r; r += 2
-
-ws9.cell(row=r, column=3, value="TOTAL PASIVO Y PATRIMONIO").font = BOLD
-ws9.cell(row=r, column=4, value=f'=D{TP_ROW}+D{TPAT_ROW}').font = BOLD; TPP_ROW=r; r += 2
-
-ws9.cell(row=r, column=3, value="Diferencia (debe ser 0)").font = BLACK
-ws9.cell(row=r, column=4, value=f'=D{TA_ROW}-D{TPP_ROW}').font = BLACK
-ws9.cell(row=r, column=5, value=f'=IF(ABS(D{r})<0.01,"CUADRADO","REVISAR: falta Capital o Activo Fijo")').font = BOLD
-
-for rr in range(7, r+1):
-    ws9.cell(row=rr, column=4).number_format = '#,##0.00;(#,##0.00)'
-
-autofit(ws9, [3, 48, 6, 16, 26])
-ws9.cell(row=5, column=3).comment = Comment(
-    "El motor actual no tiene un tipo de operación 'COMPRA_ACTIVO_FIJO' ni 'APORTE_CAPITAL', así que Equipos Diversos, "
-    "Capital Social y Resultados Acumulados anteriores se ingresan manualmente (celdas amarillas) hasta que agreguemos esas reglas.", "Sistema")
-print("Hoja SF lista")
+autofit(ws7, [3, 48, 5, 18])
 
 # ============================================================
+# HOJA: ERF - Estado de Resultados por Función
+# ============================================================
+ws8 = wb.create_sheet("ERF")
+ws8["B2"] = "ESTADO DE RESULTADOS POR FUNCIÓN"
+ws8["B2"].font = TITLE_FONT
+ws8["B3"] = "Expresado en soles"
+ws8["B3"].font = SUBTITLE_FONT
+
+r = 5
+ws8.cell(r, 2, "Ventas netas").font = BLACK
+ws8.cell(r, 4, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="70")*HT!$N$4:$N${HT_LAST_ROW})').font = BLACK
+r += 1
+ws8.cell(r, 2, "Costo de ventas").font = BLACK
+ws8.cell(r, 4, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="69")*HT!$M$4:$M${HT_LAST_ROW})*-1').font = BLACK
+r += 1
+ws8.cell(r, 2, "UTILIDAD BRUTA").font = BOLD
+ws8.cell(r, 4, f'=D{r-2}+D{r-1}').font = BOLD
+UTILIDAD_BRUTA_ROW = r
+r += 1
+ws8.cell(r, 2, "Gastos de venta (95)").font = BLACK
+ws8.cell(r, 4, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="95")*HT!$M$4:$M${HT_LAST_ROW})*-1').font = BLACK
+GV_ROW = r
+r += 1
+ws8.cell(r, 2, "Gastos de administración (94)").font = BLACK
+ws8.cell(r, 4, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="94")*HT!$M$4:$M${HT_LAST_ROW})*-1').font = BLACK
+GA_ROW = r
+r += 1
+ws8.cell(r, 2, "Depreciación y deterioro (68)").font = BLACK
+ws8.cell(r, 4, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="68")*HT!$M$4:$M${HT_LAST_ROW})*-1').font = BLACK
+r += 1
+ws8.cell(r, 2, "RESULTADO OPERATIVO").font = BOLD
+ws8.cell(r, 4, f'=D{UTILIDAD_BRUTA_ROW}+D{GV_ROW}+D{GA_ROW}+D{r-1}').font = BOLD
+ERF_RESULTADO_ROW = r
+for rr in range(5, r+1):
+    ws8.cell(rr, 4).number_format = '#,##0.00;(#,##0.00);"-"'
+autofit(ws8, [3, 48, 5, 18])
+
+# ============================================================
+# HOJA: ESF - Estado de Situación Financiera
+# ============================================================
+ws9 = wb.create_sheet("ESF")
+ws9["B2"] = "ESTADO DE SITUACIÓN FINANCIERA"
+ws9["B2"].font = TITLE_FONT
+ws9["B3"] = "Expresado en soles"
+ws9["B3"].font = SUBTITLE_FONT
+
+# Clasificación por naturaleza de las cuentas de balance. Los saldos
+# se toman directamente de las columnas O/P de HT.
+r = 5
+ws9.cell(r, 2, "ACTIVO").font = BOLD
+r += 1
+
+activo_prefixes = [
+    ("10", "Efectivo y equivalentes de efectivo"),
+    ("12", "Cuentas por cobrar comerciales"),
+    ("20", "Mercaderías"),
+    ("25", "Materiales y suministros"),
+    ("33", "Propiedad, planta y equipo - costo"),
+    ("36", "Desvalorización / deterioro de activos"),
+    ("39", "Depreciación y amortización acumulada"),
+]
+activo_rows = []
+for prefix, label in activo_prefixes:
+    ws9.cell(r, 2, label).font = BLACK
+    # Las cuentas 39/36 son contra-activos y se restan.
+    if prefix in {"36", "39"}:
+        formula = f'=-SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*HT!$P$4:$P${HT_LAST_ROW})'
+    else:
+        formula = f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*HT!$O$4:$O${HT_LAST_ROW})'
+    ws9.cell(r, 4, formula).font = BLACK
+    ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
+    activo_rows.append(r)
+    r += 1
+
+# El IGV/tributos puede quedar con saldo deudor (crédito fiscal).
+ws9.cell(r, 2, "IGV y tributos a favor").font = BLACK
+ws9.cell(r, 4, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="40")*HT!$O$4:$O${HT_LAST_ROW})').font = BLACK
+ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
+activo_rows.append(r)
+r += 1
+
+ws9.cell(r, 2, "TOTAL ACTIVO").font = BOLD
+ws9.cell(r, 4, "=" + "+".join(f'D{x}' for x in activo_rows)).font = BOLD
+ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
+TOTAL_ACTIVO_ROW = r
+r += 2
+
+ws9.cell(r, 2, "PASIVO").font = BOLD
+r += 1
+pasivo_prefixes = [
+    ("40", "Tributos y cuentas por pagar al Estado"),
+    ("41", "Remuneraciones y participaciones por pagar"),
+    ("42", "Cuentas por pagar comerciales"),
+    ("44", "Cuentas por pagar a socios / dividendos"),
+    ("45", "Obligaciones financieras"),
+    ("48", "Provisiones y obligaciones por retenciones"),
+]
+pasivo_rows = []
+for prefix, label in pasivo_prefixes:
+    ws9.cell(r, 2, label).font = BLACK
+    ws9.cell(r, 4, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*HT!$P$4:$P${HT_LAST_ROW})').font = BLACK
+    ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
+    pasivo_rows.append(r)
+    r += 1
+ws9.cell(r, 2, "TOTAL PASIVO").font = BOLD
+ws9.cell(r, 4, "=" + "+".join(f'D{x}' for x in pasivo_rows)).font = BOLD
+ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
+TOTAL_PASIVO_ROW = r
+r += 2
+
+ws9.cell(r, 2, "PATRIMONIO").font = BOLD
+r += 1
+patrimonio_prefixes = [
+    ("50", "Capital social"),
+    ("59", "Resultados acumulados"),
+]
+pat_rows = []
+for prefix, label in patrimonio_prefixes:
+    ws9.cell(r, 2, label).font = BLACK
+    ws9.cell(r, 4, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*HT!$P$4:$P${HT_LAST_ROW})').font = BLACK
+    ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
+    pat_rows.append(r)
+    r += 1
+ws9.cell(r, 2, "Resultado del ejercicio").font = BLACK
+ws9.cell(r, 4, f'=ERN!D{ERN_RESULTADO_ROW}').font = BLACK
+ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
+pat_rows.append(r)
+r += 1
+ws9.cell(r, 2, "TOTAL PATRIMONIO").font = BOLD
+ws9.cell(r, 4, "=" + "+".join(f'D{x}' for x in pat_rows)).font = BOLD
+ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
+TOTAL_PATRIMONIO_ROW = r
+r += 2
+
+ws9.cell(r, 2, "TOTAL PASIVO Y PATRIMONIO").font = BOLD
+ws9.cell(r, 4, f'=D{TOTAL_PASIVO_ROW}+D{TOTAL_PATRIMONIO_ROW}').font = BOLD
+ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
+TOTAL_PYPN_ROW = r
+r += 1
+ws9.cell(r, 2, "DIFERENCIA (debe ser 0)").font = BOLD
+ws9.cell(r, 4, f'=D{TOTAL_ACTIVO_ROW}-D{TOTAL_PYPN_ROW}').font = BOLD
+ws9.cell(r, 5, f'=IF(ABS(D{r})<0.01,"CUADRADO","REVISAR")').font = BOLD
+ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
+
+autofit(ws9, [3, 52, 5, 18, 16])
+
 # HOJA: ASIENTOS_CONTABLES (resueltos y validados por TANA)
 # ============================================================
 if "asientos_contables" in st.session_state:
@@ -1616,9 +1688,9 @@ HOJAS_PUBLICAS = [
     "Asientos_Contables",
     "LM",
     "HT",
-    "SF",
-    "RF",
-    "RN",
+    "ESF",
+    "ERF",
+    "ERN",
 ]
 
 for ws in wb.worksheets:
