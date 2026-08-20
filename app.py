@@ -19,19 +19,137 @@ from pypdf import PdfReader
 from docx import Document
 from PIL import Image
 
-st.set_page_config(
-    page_title="TANA - Sistema Contable",
-    page_icon="📊",
-    layout="wide",
-)
+# Gemini
+from google import genai
+from google.genai import types
 
-st.title("TANA - Sistema Contable")
-st.write(
-    "Sube una monografía en PDF, Word, Excel o imagen. "
-    "TANA extrae el contenido y luego genera los libros contables y estados financieros."
-)
+# ============================================================
+# GEMINI: lectura multimodal de monografías
+# ============================================================
 
 SUPPORTED_TYPES = ["pdf", "doc", "docx", "xls", "xlsx", "jpg", "jpeg", "png"]
+
+GEMINI_MODEL = "gemini-3.5-flash"
+
+def get_gemini_client():
+    api_key = st.secrets.get("GEMINI_API_KEY", "")
+    if not api_key:
+        return None
+    return genai.Client(api_key=api_key)
+
+EXTRACTION_PROMPT = """
+Eres el módulo de extracción documental de TANA, un sistema contable peruano.
+
+Analiza la monografía completa que se te proporciona. NO resuelvas todavía
+los asientos contables. Tu trabajo es EXTRAER fielmente la información.
+
+Devuelve únicamente JSON válido con esta estructura:
+
+{
+  "empresa": "",
+  "tipo_documento": "",
+  "periodo": "",
+  "estado_inicial": [],
+  "operaciones": [
+    {
+      "numero": 1,
+      "fecha": "",
+      "descripcion": "",
+      "importe": null,
+      "moneda": "PEN",
+      "cantidad": null,
+      "precio_unitario": null,
+      "porcentaje": null,
+      "documento": "",
+      "forma_pago": "",
+      "medio_pago": "",
+      "tercero": "",
+      "cuenta_bancaria": "",
+      "datos_adicionales": ""
+    }
+  ],
+  "solicitudes": [],
+  "datos_importantes": []
+}
+
+REGLAS:
+- No inventes datos que no estén en la monografía.
+- Conserva exactamente fechas, importes, cantidades, porcentajes,
+  documentos, nombres y condiciones.
+- Si un dato no aparece, usa null o "".
+- Separa cada operación en un elemento.
+- Incluye el estado financiero inicial si existe.
+- Incluye todo lo que el ejercicio pide realizar en "solicitudes".
+- La información extraída servirá después para el motor contable de TANA.
+"""
+
+def extract_with_gemini(uploaded):
+    client = get_gemini_client()
+    if client is None:
+        raise RuntimeError(
+            "TANA no tiene configurada GEMINI_API_KEY. "
+            "En Streamlit abre App settings → Secrets y agrega "
+            'GEMINI_API_KEY = "TU_CLAVE".'
+        )
+
+    suffix = "." + uploaded.name.rsplit(".", 1)[-1].lower()
+    temp_path = None
+
+    try:
+        # Gemini File API admite documentos, hojas de cálculo e imágenes.
+        # Usamos un archivo temporal porque Streamlit UploadedFile vive en memoria.
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(uploaded.getvalue())
+            temp_path = tmp.name
+
+        gemini_file = client.files.upload(file=temp_path)
+
+        response = client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=[gemini_file, EXTRACTION_PROMPT],
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+            ),
+        )
+
+        raw = response.text or ""
+        data = json.loads(raw)
+
+        return data
+
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
+
+def extraction_to_text(data):
+    parts = []
+
+    if data.get("empresa"):
+        parts.append(f"EMPRESA: {data['empresa']}")
+    if data.get("tipo_documento"):
+        parts.append(f"TIPO: {data['tipo_documento']}")
+    if data.get("periodo"):
+        parts.append(f"PERIODO: {data['periodo']}")
+
+    if data.get("estado_inicial"):
+        parts.append("\n--- ESTADO INICIAL ---")
+        for item in data["estado_inicial"]:
+            parts.append(json.dumps(item, ensure_ascii=False))
+
+    if data.get("operaciones"):
+        parts.append("\n--- OPERACIONES ---")
+        for op in data["operaciones"]:
+            parts.append(
+                f"{op.get('numero', '')}. "
+                f"{op.get('fecha', '')} - {op.get('descripcion', '')}"
+            )
+
+    if data.get("solicitudes"):
+        parts.append("\n--- SE SOLICITA ---")
+        for item in data["solicitudes"]:
+            parts.append(f"- {item}")
+
+    return "\n".join(parts)
 
 with st.expander("📥 1. Subir monografía", expanded=True):
     uploaded_file = st.file_uploader(
@@ -40,131 +158,61 @@ with st.expander("📥 1. Subir monografía", expanded=True):
         help="PDF, DOC, DOCX, XLS, XLSX, JPG, JPEG y PNG.",
     )
 
-def extract_pdf(file_bytes):
-    reader = PdfReader(io.BytesIO(file_bytes))
-    pages = []
-    for i, page in enumerate(reader.pages, start=1):
-        pages.append(f"--- PÁGINA {i} ---\n{page.extract_text() or ''}")
-    return "\n\n".join(pages)
-
-def extract_docx(file_bytes):
-    doc = Document(io.BytesIO(file_bytes))
-    parts = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
-    for n, table in enumerate(doc.tables, start=1):
-        parts.append(f"\n--- TABLA {n} ---")
-        for row in table.rows:
-            parts.append(" | ".join(cell.text.strip() for cell in row.cells))
-    return "\n".join(parts)
-
-def extract_excel(file_bytes):
-    book = openpyxl.load_workbook(
-        io.BytesIO(file_bytes), data_only=True, read_only=True
-    )
-    parts = []
-    for ws in book.worksheets:
-        parts.append(f"--- HOJA: {ws.title} ---")
-        for row in ws.iter_rows(values_only=True):
-            values = ["" if v is None else str(v) for v in row]
-            if any(v.strip() for v in values):
-                parts.append(" | ".join(values))
-    return "\n".join(parts)
-
-def extract_image_ocr(file_bytes):
-    try:
-        from rapidocr_onnxruntime import RapidOCR
-    except ImportError as exc:
-        raise RuntimeError(
-            "No está instalado el motor OCR. Revisa requirements.txt."
-        ) from exc
-
-    image = Image.open(io.BytesIO(file_bytes)).convert("RGB")
-    ocr = RapidOCR()
-    result, _ = ocr(image)
-
-    if not result:
-        return ""
-
-    lines = []
-    for item in result:
-        if len(item) >= 2 and str(item[1]).strip():
-            lines.append(str(item[1]).strip())
-    return "\n".join(lines)
-
-def extract_legacy_doc(file_bytes):
-    soffice = shutil.which("soffice") or shutil.which("libreoffice")
-    if not soffice:
-        raise RuntimeError(
-            "TANA recibió el archivo .DOC, pero este servidor no tiene "
-            "LibreOffice disponible para convertirlo. Guarda el documento "
-            "como .DOCX y vuelve a subirlo. Los formatos PDF, DOCX, XLS/XLSX "
-            "y JPG/PNG se procesan directamente."
-        )
-
-    with tempfile.TemporaryDirectory() as tmp:
-        source = os.path.join(tmp, "monografia.doc")
-        with open(source, "wb") as f:
-            f.write(file_bytes)
-
-        subprocess.run(
-            [soffice, "--headless", "--convert-to", "docx", "--outdir", tmp, source],
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-        )
-
-        converted = os.path.join(tmp, "monografia.docx")
-        if not os.path.exists(converted):
-            raise RuntimeError("No se pudo convertir el archivo DOC a DOCX.")
-
-        with open(converted, "rb") as f:
-            return extract_docx(f.read())
-
-def extract_uploaded_file(uploaded):
-    data = uploaded.getvalue()
-    ext = uploaded.name.lower().rsplit(".", 1)[-1]
-
-    if ext == "pdf":
-        return extract_pdf(data), "PDF"
-    if ext == "doc":
-        return extract_legacy_doc(data), "DOC"
-    if ext == "docx":
-        return extract_docx(data), "DOCX"
-    if ext in ("xls", "xlsx"):
-        return extract_excel(data), ext.upper()
-    if ext in ("jpg", "jpeg", "png"):
-        return extract_image_ocr(data), ext.upper()
-
-    raise ValueError(f"Formato no soportado: {ext}")
-
 if uploaded_file:
-    if st.button("🔎 Analizar monografía", type="primary"):
-        with st.spinner("Leyendo la monografía..."):
+    if st.button("🤖 Analizar monografía con Gemini", type="primary"):
+        with st.spinner(
+            "Gemini está leyendo la monografía y estructurando sus operaciones..."
+        ):
             try:
-                text, fmt = extract_uploaded_file(uploaded_file)
-                st.session_state["monografia_texto"] = text
-                st.session_state["monografia_nombre"] = uploaded_file.name
-                st.session_state["monografia_formato"] = fmt
-            except Exception as exc:
-                st.error(f"No se pudo procesar el archivo: {exc}")
+                extracted = extract_with_gemini(uploaded_file)
 
-if "monografia_texto" in st.session_state:
+                st.session_state["monografia_json"] = extracted
+                st.session_state["monografia_texto"] = extraction_to_text(extracted)
+                st.session_state["monografia_nombre"] = uploaded_file.name
+
+            except json.JSONDecodeError:
+                st.error(
+                    "Gemini respondió con un formato que no pudo convertirse "
+                    "a JSON. Vuelve a intentarlo."
+                )
+            except Exception as exc:
+                st.error(f"No se pudo procesar el archivo con Gemini: {exc}")
+
+if "monografia_json" in st.session_state:
+    data = st.session_state["monografia_json"]
+
     st.success(
-        f"Documento leído: {st.session_state['monografia_nombre']} "
-        f"({st.session_state['monografia_formato']})."
+        f"Monografía analizada: {st.session_state['monografia_nombre']}"
     )
-    with st.expander("📄 Texto extraído", expanded=False):
-        st.text_area(
-            "Contenido detectado",
-            st.session_state["monografia_texto"],
-            height=350,
-            label_visibility="collapsed",
-        )
+
+    operaciones = data.get("operaciones", [])
+    st.metric("Operaciones detectadas", len(operaciones))
+
+    with st.expander("📋 Operaciones detectadas", expanded=True):
+        if operaciones:
+            rows = []
+            for op in operaciones:
+                rows.append(
+                    {
+                        "N.º": op.get("numero"),
+                        "Fecha": op.get("fecha"),
+                        "Descripción": op.get("descripcion"),
+                        "Importe": op.get("importe"),
+                        "Documento": op.get("documento"),
+                        "Forma de pago": op.get("forma_pago"),
+                    }
+                )
+            st.dataframe(rows, use_container_width=True, hide_index=True)
+        else:
+            st.warning("No se detectaron operaciones.")
+
+    with st.expander("📄 Datos extraídos completos", expanded=False):
+        st.json(data)
+
     st.info(
-        "La lectura de la monografía está integrada. El siguiente paso es "
-        "automatizar la interpretación de operaciones y su conversión a asientos."
+        "Esta primera etapa usa Gemini para leer y estructurar la monografía. "
+        "Los asientos contables todavía deben pasar por el motor contable de TANA."
     )
-else:
-    st.info("Puedes subir una monografía o continuar con la generación manual.")
 
 st.divider()
 
