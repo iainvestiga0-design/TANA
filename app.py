@@ -1,5 +1,13 @@
-import json, io, openpyxl
+import json
+import io
+import os
+import re
+import shutil
+import subprocess
+import tempfile
+
 import streamlit as st
+import openpyxl
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
@@ -7,12 +15,162 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from openpyxl.comments import Comment
 from openpyxl.workbook.defined_name import DefinedName
 
-st.set_page_config(page_title="TANA - Generador Contable", page_icon="📊")
-st.title("TANA - Generador de Libros Contables")
-st.write("Genera el workbook completo (PCGE, Libro Diario, Mayor, Hoja de Trabajo y Estados Financieros) y descárgalo en Excel.")
+from pypdf import PdfReader
+from docx import Document
+from PIL import Image
 
-if not st.button("Generar Excel"):
+st.set_page_config(
+    page_title="TANA - Sistema Contable",
+    page_icon="📊",
+    layout="wide",
+)
+
+st.title("TANA - Sistema Contable")
+st.write(
+    "Sube una monografía en PDF, Word, Excel o imagen. "
+    "TANA extrae el contenido y luego genera los libros contables y estados financieros."
+)
+
+SUPPORTED_TYPES = ["pdf", "doc", "docx", "xls", "xlsx", "jpg", "jpeg", "png"]
+
+with st.expander("📥 1. Subir monografía", expanded=True):
+    uploaded_file = st.file_uploader(
+        "Arrastra aquí tu monografía o selecciónala desde tu equipo",
+        type=SUPPORTED_TYPES,
+        help="PDF, DOC, DOCX, XLS, XLSX, JPG, JPEG y PNG.",
+    )
+
+def extract_pdf(file_bytes):
+    reader = PdfReader(io.BytesIO(file_bytes))
+    pages = []
+    for i, page in enumerate(reader.pages, start=1):
+        pages.append(f"--- PÁGINA {i} ---\n{page.extract_text() or ''}")
+    return "\n\n".join(pages)
+
+def extract_docx(file_bytes):
+    doc = Document(io.BytesIO(file_bytes))
+    parts = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+    for n, table in enumerate(doc.tables, start=1):
+        parts.append(f"\n--- TABLA {n} ---")
+        for row in table.rows:
+            parts.append(" | ".join(cell.text.strip() for cell in row.cells))
+    return "\n".join(parts)
+
+def extract_excel(file_bytes):
+    book = openpyxl.load_workbook(
+        io.BytesIO(file_bytes), data_only=True, read_only=True
+    )
+    parts = []
+    for ws in book.worksheets:
+        parts.append(f"--- HOJA: {ws.title} ---")
+        for row in ws.iter_rows(values_only=True):
+            values = ["" if v is None else str(v) for v in row]
+            if any(v.strip() for v in values):
+                parts.append(" | ".join(values))
+    return "\n".join(parts)
+
+def extract_image_ocr(file_bytes):
+    try:
+        from rapidocr_onnxruntime import RapidOCR
+    except ImportError as exc:
+        raise RuntimeError(
+            "No está instalado el motor OCR. Revisa requirements.txt."
+        ) from exc
+
+    image = Image.open(io.BytesIO(file_bytes)).convert("RGB")
+    ocr = RapidOCR()
+    result, _ = ocr(image)
+
+    if not result:
+        return ""
+
+    lines = []
+    for item in result:
+        if len(item) >= 2 and str(item[1]).strip():
+            lines.append(str(item[1]).strip())
+    return "\n".join(lines)
+
+def extract_legacy_doc(file_bytes):
+    soffice = shutil.which("soffice") or shutil.which("libreoffice")
+    if not soffice:
+        raise RuntimeError(
+            "TANA recibió el archivo .DOC, pero este servidor no tiene "
+            "LibreOffice disponible para convertirlo. Guarda el documento "
+            "como .DOCX y vuelve a subirlo. Los formatos PDF, DOCX, XLS/XLSX "
+            "y JPG/PNG se procesan directamente."
+        )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        source = os.path.join(tmp, "monografia.doc")
+        with open(source, "wb") as f:
+            f.write(file_bytes)
+
+        subprocess.run(
+            [soffice, "--headless", "--convert-to", "docx", "--outdir", tmp, source],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+        converted = os.path.join(tmp, "monografia.docx")
+        if not os.path.exists(converted):
+            raise RuntimeError("No se pudo convertir el archivo DOC a DOCX.")
+
+        with open(converted, "rb") as f:
+            return extract_docx(f.read())
+
+def extract_uploaded_file(uploaded):
+    data = uploaded.getvalue()
+    ext = uploaded.name.lower().rsplit(".", 1)[-1]
+
+    if ext == "pdf":
+        return extract_pdf(data), "PDF"
+    if ext == "doc":
+        return extract_legacy_doc(data), "DOC"
+    if ext == "docx":
+        return extract_docx(data), "DOCX"
+    if ext in ("xls", "xlsx"):
+        return extract_excel(data), ext.upper()
+    if ext in ("jpg", "jpeg", "png"):
+        return extract_image_ocr(data), ext.upper()
+
+    raise ValueError(f"Formato no soportado: {ext}")
+
+if uploaded_file:
+    if st.button("🔎 Analizar monografía", type="primary"):
+        with st.spinner("Leyendo la monografía..."):
+            try:
+                text, fmt = extract_uploaded_file(uploaded_file)
+                st.session_state["monografia_texto"] = text
+                st.session_state["monografia_nombre"] = uploaded_file.name
+                st.session_state["monografia_formato"] = fmt
+            except Exception as exc:
+                st.error(f"No se pudo procesar el archivo: {exc}")
+
+if "monografia_texto" in st.session_state:
+    st.success(
+        f"Documento leído: {st.session_state['monografia_nombre']} "
+        f"({st.session_state['monografia_formato']})."
+    )
+    with st.expander("📄 Texto extraído", expanded=False):
+        st.text_area(
+            "Contenido detectado",
+            st.session_state["monografia_texto"],
+            height=350,
+            label_visibility="collapsed",
+        )
+    st.info(
+        "La lectura de la monografía está integrada. El siguiente paso es "
+        "automatizar la interpretación de operaciones y su conversión a asientos."
+    )
+else:
+    st.info("Puedes subir una monografía o continuar con la generación manual.")
+
+st.divider()
+
+if not st.button("📊 Generar Excel contable", type="primary"):
     st.stop()
+
 
 FONT = "Arial"
 wb = Workbook()
@@ -557,6 +715,20 @@ ws9.cell(row=5, column=3).comment = Comment(
 print("Hoja SF lista")
 
 # ============================================================
+# HOJA: MONOGRAFIA (fuente leída por TANA)
+# ============================================================
+if "monografia_texto" in st.session_state:
+    ws_mono = wb.create_sheet("Monografia")
+    ws_mono["A1"] = "MONOGRAFÍA / DOCUMENTO FUENTE"
+    ws_mono["A1"].font = TITLE_FONT
+    ws_mono["A2"] = st.session_state.get("monografia_nombre", "")
+    ws_mono["A2"].font = SUBTITLE_FONT
+    ws_mono["A4"] = st.session_state["monografia_texto"]
+    ws_mono["A4"].alignment = Alignment(vertical="top", wrap_text=True)
+    ws_mono.column_dimensions["A"].width = 120
+    ws_mono.freeze_panes = "A4"
+
+# ============================================================
 # GENERAR ARCHIVO EN MEMORIA Y OFRECER DESCARGA
 # ============================================================
 buffer = io.BytesIO()
@@ -564,6 +736,8 @@ wb.save(buffer)
 buffer.seek(0)
 
 st.success("Workbook generado correctamente.")
+if "monografia_nombre" in st.session_state:
+    st.caption("La hoja Monografia conserva el texto extraído para revisión.")
 st.download_button(
     label="Descargar Excel",
     data=buffer,
