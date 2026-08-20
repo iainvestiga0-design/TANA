@@ -1404,9 +1404,27 @@ for code in cuentas_reporte:
         ws6.cell(r, 15, deudor)
         ws6.cell(r, 16, acreedor)
 
-    # Distribución y ajuste final: reservado para el cierre/transformación.
-    ws6.cell(r, 17, 0.0)
-    ws6.cell(r, 18, 0.0)
+    # Distribución y ajustes: se realiza de forma invertida sobre las cuentas
+    # de función y las cuentas 69/61, siguiendo la lógica de la plantilla.
+    # 94/95 y cualquier cuenta de destino del elemento 9 que participe en
+    # función: DEBE en R. FUNCIÓN -> HABER en DIST./AJUSTE FINAL.
+    # 79: HABER -> DEBE. 69: DEBE -> HABER. 61: HABER -> DEBE, para cancelar
+    # el efecto de la variación de existencias con el costo de ventas.
+    if code[:2] in {"94", "95"} or (code[:1] == "9" and code[:2] != "79"):
+        ws6.cell(r, 17, deudor)
+        ws6.cell(r, 18, 0.0)
+    elif code[:2] == "79":
+        ws6.cell(r, 17, acreedor)
+        ws6.cell(r, 18, 0.0)
+    elif code[:2] == "69":
+        ws6.cell(r, 17, 0.0)
+        ws6.cell(r, 18, deudor)
+    elif code[:2] == "61":
+        ws6.cell(r, 17, acreedor)
+        ws6.cell(r, 18, 0.0)
+    else:
+        ws6.cell(r, 17, 0.0)
+        ws6.cell(r, 18, 0.0)
 
     for c in range(1, 19):
         ws6.cell(r, c).font = BLACK
