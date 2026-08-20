@@ -1,0 +1,7174 @@
+[
+  [
+    "10",
+    "EFECTIVO Y EQUIVALENTES DE EFECTIVO"
+  ],
+  [
+    "101",
+    "Caja"
+  ],
+  [
+    "102",
+    "Fondos fijos"
+  ],
+  [
+    "103",
+    "Efectivo en tránsito"
+  ],
+  [
+    "104",
+    "Cuentas corrientes en instituciones financieras"
+  ],
+  [
+    "1041",
+    "Cuentas corrientes operativas"
+  ],
+  [
+    "1042",
+    "Cuentas corrientes para fines específicos"
+  ],
+  [
+    "105",
+    "Otros equivalentes de efectivo"
+  ],
+  [
+    "1051",
+    "Otros equivalentes de efectivo"
+  ],
+  [
+    "106",
+    "Depósitos en instituciones financieras"
+  ],
+  [
+    "1061",
+    "Depósitos de ahorro"
+  ],
+  [
+    "1062",
+    "Depósitos a plazo"
+  ],
+  [
+    "107",
+    "Fondos sujetos a restricción"
+  ],
+  [
+    "1071",
+    "Fondos Sujetos a Restricción"
+  ],
+  [
+    "11",
+    "INVERSIONES FINANCIERAS"
+  ],
+  [
+    "111",
+    "Inversiones mantenidas para negociación"
+  ],
+  [
+    "1111",
+    "Valores emitidos o garantizados por el Estado"
+  ],
+  [
+    "11111",
+    "Costo"
+  ],
+  [
+    "11112",
+    "Valor Razonable"
+  ],
+  [
+    "1112",
+    "Valores emitidos por el sistema financiero"
+  ],
+  [
+    "11121",
+    "Costo"
+  ],
+  [
+    "11122",
+    "Valor Razonable"
+  ],
+  [
+    "1113",
+    "Valores emitidos por empresa"
+  ],
+  [
+    "11131",
+    "Costo"
+  ],
+  [
+    "11132",
+    "Valor Razonable"
+  ],
+  [
+    "1114",
+    "Otros títulos representativos de deuda"
+  ],
+  [
+    "11141",
+    "Costo"
+  ],
+  [
+    "11142",
+    "Valor Razonable"
+  ],
+  [
+    "1115",
+    "Participaciones en entidades"
+  ],
+  [
+    "11151",
+    "Costo"
+  ],
+  [
+    "11152",
+    "Valor Razonable"
+  ],
+  [
+    "112",
+    "Inversiones disponibles para la venta"
+  ],
+  [
+    "1121",
+    "Valores emitidos o garantizados por el Estado"
+  ],
+  [
+    "11211",
+    "Costo"
+  ],
+  [
+    "11212",
+    "Valor Razonable"
+  ],
+  [
+    "1122",
+    "Valores emitidos por el sistema financiero"
+  ],
+  [
+    "11221",
+    "Costo"
+  ],
+  [
+    "11222",
+    "Valor Razonable"
+  ],
+  [
+    "1123",
+    "Valores emitidos por empresas"
+  ],
+  [
+    "11231",
+    "Costo"
+  ],
+  [
+    "11232",
+    "Valor Razonable"
+  ],
+  [
+    "1124",
+    "Otros títulos representativos de deuda"
+  ],
+  [
+    "11241",
+    "Costo"
+  ],
+  [
+    "11242",
+    "Valor Razonable"
+  ],
+  [
+    "113",
+    "Activos financieros – Acuerdo de compra"
+  ],
+  [
+    "1131",
+    "Inversiones mantenidas para negociación – Acuerdo de compra"
+  ],
+  [
+    "11311",
+    "Costo"
+  ],
+  [
+    "11312",
+    "Valor Razonable"
+  ],
+  [
+    "1132",
+    "Inversiones disponibles para la venta – Acuerdo de compra"
+  ],
+  [
+    "11321",
+    "Costo"
+  ],
+  [
+    "11322",
+    "Valor Razonable"
+  ],
+  [
+    "12",
+    "CUENTAS POR COBRAR COMERCIALES – TERCEROS"
+  ],
+  [
+    "121",
+    "Facturas, boletas y otros comprobantes por cobrar"
+  ],
+  [
+    "1211",
+    "No emitidas"
+  ],
+  [
+    "1212",
+    "Emitidas en cartera"
+  ],
+  [
+    "1213",
+    "En cobranza"
+  ],
+  [
+    "1214",
+    "En descuento"
+  ],
+  [
+    "122",
+    "Anticipos de clientes"
+  ],
+  [
+    "123",
+    "Letras por cobrar"
+  ],
+  [
+    "1231",
+    "En cartera"
+  ],
+  [
+    "1232",
+    "En cobranza"
+  ],
+  [
+    "1233",
+    "En descuento"
+  ],
+  [
+    "13",
+    "CUENTAS POR COBRAR COMERCIALES – RELACIONADAS"
+  ],
+  [
+    "131",
+    "Facturas, boletas y otros comprobantes por cobrar"
+  ],
+  [
+    "1311",
+    "No emitidas"
+  ],
+  [
+    "13111",
+    "Matriz"
+  ],
+  [
+    "13112",
+    "Subsidiarias"
+  ],
+  [
+    "13113",
+    "Asociadas"
+  ],
+  [
+    "13114",
+    "Sucursales"
+  ],
+  [
+    "13115",
+    "Otros"
+  ],
+  [
+    "1312",
+    "Emitidas en cartera"
+  ],
+  [
+    "13121",
+    "Matriz"
+  ],
+  [
+    "13122",
+    "Subsidiarias"
+  ],
+  [
+    "13123",
+    "Asociadas"
+  ],
+  [
+    "13124",
+    "Sucursales"
+  ],
+  [
+    "13125",
+    "Otros"
+  ],
+  [
+    "1313",
+    "En cobranza"
+  ],
+  [
+    "13131",
+    "Matriz"
+  ],
+  [
+    "13132",
+    "Subsidiarias"
+  ],
+  [
+    "13133",
+    "Asociadas"
+  ],
+  [
+    "13134",
+    "Sucursales"
+  ],
+  [
+    "13135",
+    "Otros"
+  ],
+  [
+    "1314",
+    "En descuento"
+  ],
+  [
+    "13141",
+    "Matriz"
+  ],
+  [
+    "13142",
+    "Subsidiarias"
+  ],
+  [
+    "13143",
+    "Asociadas"
+  ],
+  [
+    "13144",
+    "Sucursales"
+  ],
+  [
+    "13145",
+    "Otros"
+  ],
+  [
+    "132",
+    "Anticipos recibidos"
+  ],
+  [
+    "1321",
+    "Anticipos recibidos"
+  ],
+  [
+    "13211",
+    "Matriz"
+  ],
+  [
+    "13212",
+    "Subsidiarias"
+  ],
+  [
+    "13213",
+    "Asociadas"
+  ],
+  [
+    "13214",
+    "Sucursales"
+  ],
+  [
+    "13215",
+    "Otros"
+  ],
+  [
+    "133",
+    "Letras por cobrar"
+  ],
+  [
+    "1331",
+    "En cartera"
+  ],
+  [
+    "13311",
+    "Matriz"
+  ],
+  [
+    "13312",
+    "Subsidiarias"
+  ],
+  [
+    "13313",
+    "Asociadas"
+  ],
+  [
+    "13314",
+    "Sucursales"
+  ],
+  [
+    "13315",
+    "Otros"
+  ],
+  [
+    "1332",
+    "En cobranza"
+  ],
+  [
+    "13321",
+    "Matriz"
+  ],
+  [
+    "13322",
+    "Subsidiarias"
+  ],
+  [
+    "13323",
+    "Asociadas"
+  ],
+  [
+    "13324",
+    "Sucursales"
+  ],
+  [
+    "13325",
+    "Otros"
+  ],
+  [
+    "1333",
+    "En descuento"
+  ],
+  [
+    "13331",
+    "Matriz"
+  ],
+  [
+    "13332",
+    "Subsidiarias"
+  ],
+  [
+    "13333",
+    "Asociadas"
+  ],
+  [
+    "13334",
+    "Sucursales"
+  ],
+  [
+    "13335",
+    "Otros"
+  ],
+  [
+    "14",
+    "CUENTAS POR COBRAR AL PERSONAL, A LOS ACCIONISTAS (SOCIOS), DIRECTORES Y GERENTES"
+  ],
+  [
+    "141",
+    "Personal"
+  ],
+  [
+    "1411",
+    "Préstamos"
+  ],
+  [
+    "1412",
+    "Adelanto de remuneraciones"
+  ],
+  [
+    "1413",
+    "Entregas a rendir cuenta"
+  ],
+  [
+    "1419",
+    "Otras cuentas por cobrar al personal"
+  ],
+  [
+    "142",
+    "Accionistas (o socios)"
+  ],
+  [
+    "1421",
+    "Suscripciones por cobrar a socios o accionistas"
+  ],
+  [
+    "1422",
+    "Préstamos"
+  ],
+  [
+    "143",
+    "Directores"
+  ],
+  [
+    "1431",
+    "Préstamos"
+  ],
+  [
+    "1432",
+    "Adelanto de dietas"
+  ],
+  [
+    "1433",
+    "Entregas a rendir cuenta"
+  ],
+  [
+    "144",
+    "Gerentes"
+  ],
+  [
+    "1441",
+    "Préstamos"
+  ],
+  [
+    "1442",
+    "Adelanto de remuneraciones"
+  ],
+  [
+    "1443",
+    "Entregas a rendir cuenta"
+  ],
+  [
+    "148",
+    "Diversas"
+  ],
+  [
+    "16",
+    "CUENTAS POR COBRAR DIVERSAS – TERCEROS"
+  ],
+  [
+    "161",
+    "Préstamos"
+  ],
+  [
+    "1611",
+    "Con garantía"
+  ],
+  [
+    "1612",
+    "Sin garantía"
+  ],
+  [
+    "162",
+    "Reclamaciones a terceros"
+  ],
+  [
+    "1621",
+    "Compañías aseguradoras"
+  ],
+  [
+    "1622",
+    "Transportadoras"
+  ],
+  [
+    "1623",
+    "Servicios públicos"
+  ],
+  [
+    "1624",
+    "Tributos"
+  ],
+  [
+    "1629",
+    "Otras"
+  ],
+  [
+    "163",
+    "Intereses, regalías y dividendos"
+  ],
+  [
+    "1631",
+    "Intereses"
+  ],
+  [
+    "1632",
+    "Regalías"
+  ],
+  [
+    "1633",
+    "Dividendos"
+  ],
+  [
+    "164",
+    "Depósitos otorgados en garantía"
+  ],
+  [
+    "1641",
+    "Préstamos de instituciones financieras"
+  ],
+  [
+    "1642",
+    "Préstamos de instituciones no financieras"
+  ],
+  [
+    "1644",
+    "Depósitos en garantía por alquileres"
+  ],
+  [
+    "1649",
+    "Otros depósitos en garantía"
+  ],
+  [
+    "165",
+    "Venta de activo inmovilizado"
+  ],
+  [
+    "1651",
+    "Inversión mobiliaria"
+  ],
+  [
+    "1652",
+    "Inversión inmobiliaria"
+  ],
+  [
+    "1653",
+    "Inmuebles, maquinaria y equipo"
+  ],
+  [
+    "1654",
+    "Intangibles"
+  ],
+  [
+    "1655",
+    "Activos biológicos"
+  ],
+  [
+    "166",
+    "Activos por instrumentos financieros"
+  ],
+  [
+    "1661",
+    "Instrumentos financieros primarios"
+  ],
+  [
+    "1662",
+    "Instrumentos financieros derivados"
+  ],
+  [
+    "16621",
+    "Cartera de negociación"
+  ],
+  [
+    "16622",
+    "Instrumentos de cobertura"
+  ],
+  [
+    "168",
+    "Otras cuentas por cobrar diversas"
+  ],
+  [
+    "1681",
+    "Entregas a rendir cuenta a terceros"
+  ],
+  [
+    "1682",
+    "Otras cuentas por cobrar diversas"
+  ],
+  [
+    "17",
+    "CUENTAS POR COBRAR DIVERSAS – RELACIONADAS"
+  ],
+  [
+    "171",
+    "Préstamos"
+  ],
+  [
+    "1711",
+    "Con garantía"
+  ],
+  [
+    "17111",
+    "Matriz"
+  ],
+  [
+    "17112",
+    "Subsidiarias"
+  ],
+  [
+    "17113",
+    "Asociadas"
+  ],
+  [
+    "17114",
+    "Sucursales"
+  ],
+  [
+    "17115",
+    "Otros"
+  ],
+  [
+    "1712",
+    "Sin garantía"
+  ],
+  [
+    "17121",
+    "Matriz"
+  ],
+  [
+    "17122",
+    "Subsidiarias"
+  ],
+  [
+    "17123",
+    "Asociadas"
+  ],
+  [
+    "17124",
+    "Sucursales"
+  ],
+  [
+    "17125",
+    "Otros"
+  ],
+  [
+    "173",
+    "Intereses, regalías y dividendos"
+  ],
+  [
+    "1731",
+    "Intereses"
+  ],
+  [
+    "17311",
+    "Matriz"
+  ],
+  [
+    "17312",
+    "Subsidiarias"
+  ],
+  [
+    "17313",
+    "Asociadas"
+  ],
+  [
+    "17314",
+    "Sucursales"
+  ],
+  [
+    "17315",
+    "Otros"
+  ],
+  [
+    "1732",
+    "Regalías"
+  ],
+  [
+    "17321",
+    "Matriz"
+  ],
+  [
+    "17322",
+    "Subsidiarias"
+  ],
+  [
+    "17323",
+    "Asociadas"
+  ],
+  [
+    "17324",
+    "Sucursales"
+  ],
+  [
+    "17325",
+    "Otros"
+  ],
+  [
+    "1733",
+    "Dividendos"
+  ],
+  [
+    "17331",
+    "Matriz"
+  ],
+  [
+    "17332",
+    "Subsidiarias"
+  ],
+  [
+    "17333",
+    "Asociadas"
+  ],
+  [
+    "17334",
+    "Otros"
+  ],
+  [
+    "174",
+    "Depósitos otorgados en garantía"
+  ],
+  [
+    "175",
+    "Venta de activo inmovilizado"
+  ],
+  [
+    "1751",
+    "Inversión mobiliaria"
+  ],
+  [
+    "1752",
+    "Inversión inmobiliaria"
+  ],
+  [
+    "1753",
+    "Inmuebles, maquinaria y equipo"
+  ],
+  [
+    "1754",
+    "Intangibles"
+  ],
+  [
+    "1755",
+    "Activos biológicos"
+  ],
+  [
+    "176",
+    "Activos por instrumentos financieros"
+  ],
+  [
+    "178",
+    "Otras cuentas por cobrar diversas"
+  ],
+  [
+    "18",
+    "SERVICIOS Y OTROS CONTRATADOS POR ANTICIPADO"
+  ],
+  [
+    "181",
+    "Costos financieros"
+  ],
+  [
+    "182",
+    "Seguros"
+  ],
+  [
+    "183",
+    "Alquileres"
+  ],
+  [
+    "184",
+    "Primas pagadas por opciones"
+  ],
+  [
+    "185",
+    "Mantenimiento de activos inmovilizados"
+  ],
+  [
+    "189",
+    "Otros gastos contratados por anticipado"
+  ],
+  [
+    "19",
+    "ESTIMACIÓN DE CUENTAS DE COBRANZA DUDOSA"
+  ],
+  [
+    "191",
+    "Cuentas por cobrar comerciales – Terceros"
+  ],
+  [
+    "1911",
+    "Facturas, boletas y otros comprobantes por cobrar"
+  ],
+  [
+    "1913",
+    "Letras por cobrar"
+  ],
+  [
+    "192",
+    "Cuentas por cobrar comerciales – Relacionadas"
+  ],
+  [
+    "1921",
+    "Facturas, boletas y otros comprobantes por cobrar"
+  ],
+  [
+    "1922",
+    "Letras por cobrar"
+  ],
+  [
+    "193",
+    "Cuentas por cobrar al personal, a los accionistas (socios), directores y gerentes"
+  ],
+  [
+    "1931",
+    "Personal"
+  ],
+  [
+    "1932",
+    "Accionistas (o socios)"
+  ],
+  [
+    "1933",
+    "Directores"
+  ],
+  [
+    "1934",
+    "Gerentes"
+  ],
+  [
+    "1938",
+    "Diversas"
+  ],
+  [
+    "194",
+    "Cuentas por cobrar diversas – Terceros"
+  ],
+  [
+    "1941",
+    "Préstamos"
+  ],
+  [
+    "1942",
+    "Reclamaciones a terceros"
+  ],
+  [
+    "1943",
+    "Intereses, regalías y dividendos"
+  ],
+  [
+    "1944",
+    "Depósitos otorgados en garantía"
+  ],
+  [
+    "1945",
+    "Venta de activo inmovilizado"
+  ],
+  [
+    "1946",
+    "Activos por instrumentos financieros"
+  ],
+  [
+    "1949",
+    "Otras cuentas por cobrar diversas"
+  ],
+  [
+    "195",
+    "Cuentas por cobrar diversas – Relacionadas"
+  ],
+  [
+    "1951",
+    "Préstamos"
+  ],
+  [
+    "1953",
+    "Intereses, regalías y dividendos"
+  ],
+  [
+    "1954",
+    "Depósitos otorgados en garantía"
+  ],
+  [
+    "1955",
+    "Venta de activo inmovilizado"
+  ],
+  [
+    "1956",
+    "Activos por instrumentos financieros"
+  ],
+  [
+    "1958",
+    "Otras cuentas por cobrar diversas"
+  ],
+  [
+    "20",
+    "MERCADERÍAS"
+  ],
+  [
+    "201",
+    "Mercaderías manufacturadas"
+  ],
+  [
+    "2011",
+    "Mercaderías manufacturadas"
+  ],
+  [
+    "20111",
+    "Costo"
+  ],
+  [
+    "20112",
+    "Valor razonable"
+  ],
+  [
+    "202",
+    "Mercaderías de extracción"
+  ],
+  [
+    "203",
+    "Mercaderías agropecuarias y piscícolas"
+  ],
+  [
+    "2031",
+    "De origen animal"
+  ],
+  [
+    "2032",
+    "De origen vegetal"
+  ],
+  [
+    "204",
+    "Mercaderías inmuebles"
+  ],
+  [
+    "208",
+    "Otras mercaderías"
+  ],
+  [
+    "21",
+    "PRODUCTOS TERMINADOS"
+  ],
+  [
+    "211",
+    "Productos manufacturados"
+  ],
+  [
+    "212",
+    "Productos de extracción terminados"
+  ],
+  [
+    "213",
+    "Productos agropecuarios y piscícolas terminados"
+  ],
+  [
+    "2131",
+    "De origen animal"
+  ],
+  [
+    "21311",
+    "Costo"
+  ],
+  [
+    "21312",
+    "Valor razonable"
+  ],
+  [
+    "2132",
+    "De origen vegetal"
+  ],
+  [
+    "21321",
+    "Costo"
+  ],
+  [
+    "21322",
+    "Valor razonable"
+  ],
+  [
+    "214",
+    "Productos inmuebles"
+  ],
+  [
+    "215",
+    "Existencias de servicios terminados"
+  ],
+  [
+    "217",
+    "Otros productos terminados"
+  ],
+  [
+    "218",
+    "Costos de financiación – Productos terminados"
+  ],
+  [
+    "22",
+    "SUBPRODUCTOS, DESECHOS Y DESPERDICIOS"
+  ],
+  [
+    "221",
+    "Subproductos"
+  ],
+  [
+    "222",
+    "Desechos y desperdicios"
+  ],
+  [
+    "23",
+    "PRODUCTOS EN PROCESO"
+  ],
+  [
+    "231",
+    "Productos en proceso de manufactura"
+  ],
+  [
+    "232",
+    "Productos extraídos en proceso de transformación"
+  ],
+  [
+    "233",
+    "Productos agropecuarios y piscícolas en proceso"
+  ],
+  [
+    "2331",
+    "De origen animal"
+  ],
+  [
+    "23311",
+    "Costo"
+  ],
+  [
+    "23312",
+    "Valor razonable"
+  ],
+  [
+    "2332",
+    "De origen vegetal"
+  ],
+  [
+    "23321",
+    "Costo"
+  ],
+  [
+    "23322",
+    "Valor razonable"
+  ],
+  [
+    "234",
+    "Productos inmuebles en proceso"
+  ],
+  [
+    "235",
+    "Existencias de servicios en proceso"
+  ],
+  [
+    "237",
+    "Otros productos en proceso"
+  ],
+  [
+    "238",
+    "Costos de financiación – Productos en proceso"
+  ],
+  [
+    "24",
+    "MATERIAS PRIMAS"
+  ],
+  [
+    "241",
+    "Materias primas para productos manufacturados"
+  ],
+  [
+    "242",
+    "Materias primas para productos de extracción"
+  ],
+  [
+    "243",
+    "Materias primas para productos agropecuarios y piscícolas"
+  ],
+  [
+    "244",
+    "Materias primas para productos inmuebles"
+  ],
+  [
+    "25",
+    "MATERIALES AUXILIARES, SUMINISTROS Y REPUESTOS"
+  ],
+  [
+    "251",
+    "Materiales auxiliares"
+  ],
+  [
+    "252",
+    "Suministros"
+  ],
+  [
+    "2521",
+    "Combustibles"
+  ],
+  [
+    "2522",
+    "Lubricantes"
+  ],
+  [
+    "2523",
+    "Energía"
+  ],
+  [
+    "2524",
+    "Otros suministros"
+  ],
+  [
+    "253",
+    "Repuestos"
+  ],
+  [
+    "26",
+    "ENVASES Y EMBALAJES"
+  ],
+  [
+    "261",
+    "Envases"
+  ],
+  [
+    "262",
+    "Embalajes"
+  ],
+  [
+    "27",
+    "ACTIVOS NO CORRIENTES MANTENIDOS PARA LA VENTA"
+  ],
+  [
+    "271",
+    "Inversiones inmobiliarias"
+  ],
+  [
+    "2711",
+    "Terrenos"
+  ],
+  [
+    "27111",
+    "Valor razonable"
+  ],
+  [
+    "27112",
+    "Costo"
+  ],
+  [
+    "27113",
+    "Revaluación"
+  ],
+  [
+    "2712",
+    "Edificaciones"
+  ],
+  [
+    "27121",
+    "Valor razonable"
+  ],
+  [
+    "27122",
+    "Costo"
+  ],
+  [
+    "27123",
+    "Revaluación"
+  ],
+  [
+    "27124",
+    "Costos de financiación"
+  ],
+  [
+    "272",
+    "Inmuebles, maquinaria y equipo"
+  ],
+  [
+    "2721",
+    "Terrenos"
+  ],
+  [
+    "27211",
+    "Valor razonable"
+  ],
+  [
+    "27212",
+    "Costo"
+  ],
+  [
+    "27213",
+    "Revaluación"
+  ],
+  [
+    "2722",
+    "Edificaciones"
+  ],
+  [
+    "27221",
+    "Costo de adquisición o construcción"
+  ],
+  [
+    "27222",
+    "Revaluación"
+  ],
+  [
+    "27223",
+    "Costo de financiación"
+  ],
+  [
+    "2723",
+    "Maquinarias y equipos de explotación"
+  ],
+  [
+    "27231",
+    "Costo de adquisición o construcción"
+  ],
+  [
+    "27232",
+    "Revaluación"
+  ],
+  [
+    "27233",
+    "Costo de financiación"
+  ],
+  [
+    "2724",
+    "Equipo de transporte"
+  ],
+  [
+    "27241",
+    "Costo"
+  ],
+  [
+    "27242",
+    "Revaluación"
+  ],
+  [
+    "2725",
+    "Muebles y enseres"
+  ],
+  [
+    "27251",
+    "Costo"
+  ],
+  [
+    "27252",
+    "Revaluación"
+  ],
+  [
+    "2726",
+    "Equipos diversos"
+  ],
+  [
+    "27261",
+    "Costo"
+  ],
+  [
+    "27262",
+    "Revaluación"
+  ],
+  [
+    "2727",
+    "Herramientas y unidades de reemplazo"
+  ],
+  [
+    "27271",
+    "Costo"
+  ],
+  [
+    "27272",
+    "Revaluación"
+  ],
+  [
+    "273",
+    "Intangibles"
+  ],
+  [
+    "2731",
+    "Concesiones, licencias y derechos"
+  ],
+  [
+    "27311",
+    "Costo"
+  ],
+  [
+    "27312",
+    "Revaluación"
+  ],
+  [
+    "2732",
+    "Patentes y propiedad industrial"
+  ],
+  [
+    "27321",
+    "Costo"
+  ],
+  [
+    "27322",
+    "Revaluación"
+  ],
+  [
+    "2733",
+    "Programas de computadora (software)"
+  ],
+  [
+    "27331",
+    "Costo"
+  ],
+  [
+    "27332",
+    "Revaluación"
+  ],
+  [
+    "2734",
+    "Costos de exploración y desarrollo"
+  ],
+  [
+    "27341",
+    "Costo"
+  ],
+  [
+    "27342",
+    "Revaluación"
+  ],
+  [
+    "2735",
+    "Fórmulas, diseños y prototipos"
+  ],
+  [
+    "27351",
+    "Costo"
+  ],
+  [
+    "27352",
+    "Revaluación"
+  ],
+  [
+    "2736",
+    "Reservas de recursos extraíbles"
+  ],
+  [
+    "27361",
+    "Costo"
+  ],
+  [
+    "27362",
+    "Revaluación"
+  ],
+  [
+    "2739",
+    "Otros activos intangibles"
+  ],
+  [
+    "27391",
+    "Costo"
+  ],
+  [
+    "27392",
+    "Revaluación"
+  ],
+  [
+    "274",
+    "Activos biológicos"
+  ],
+  [
+    "2741",
+    "Activos biológicos en producción"
+  ],
+  [
+    "27411",
+    "Valor razonable"
+  ],
+  [
+    "27412",
+    "Costo"
+  ],
+  [
+    "27413",
+    "Costos de financiación"
+  ],
+  [
+    "2742",
+    "Activos biológicos en desarrollo"
+  ],
+  [
+    "27421",
+    "Valor razonable"
+  ],
+  [
+    "27422",
+    "Costo"
+  ],
+  [
+    "27423",
+    "Costos de financiación"
+  ],
+  [
+    "275",
+    "Depreciación acumulada – Inversión inmobiliaria"
+  ],
+  [
+    "2752",
+    "Edificaciones"
+  ],
+  [
+    "27521",
+    "Valor razonable"
+  ],
+  [
+    "27522",
+    "Costo"
+  ],
+  [
+    "27523",
+    "Revaluación"
+  ],
+  [
+    "276",
+    "Depreciación acumulada – Inmuebles, maquinaria y equipo"
+  ],
+  [
+    "2762",
+    "Edificaciones"
+  ],
+  [
+    "27621",
+    "Costo de adquisición o construcción"
+  ],
+  [
+    "27622",
+    "Revaluación"
+  ],
+  [
+    "27623",
+    "Costo de financiación"
+  ],
+  [
+    "2763",
+    "Maquinarias y equipos de explotación"
+  ],
+  [
+    "27631",
+    "Costo de adquisición o construcción"
+  ],
+  [
+    "27632",
+    "Revaluación"
+  ],
+  [
+    "27633",
+    "Costo de financiación"
+  ],
+  [
+    "2764",
+    "Equipo de transporte"
+  ],
+  [
+    "27641",
+    "Costo"
+  ],
+  [
+    "27642",
+    "Revaluación"
+  ],
+  [
+    "2765",
+    "Muebles y enseres"
+  ],
+  [
+    "27651",
+    "Costo"
+  ],
+  [
+    "27652",
+    "Revaluación"
+  ],
+  [
+    "2766",
+    "Equipos diversos"
+  ],
+  [
+    "27661",
+    "Costo"
+  ],
+  [
+    "27662",
+    "Revaluación"
+  ],
+  [
+    "2767",
+    "Herramientas y unidades de reemplazo"
+  ],
+  [
+    "27671",
+    "Costo"
+  ],
+  [
+    "27672",
+    "Revaluación"
+  ],
+  [
+    "277",
+    "Amortización acumulada – Intangibles"
+  ],
+  [
+    "2771",
+    "Concesiones, licencias y derechos"
+  ],
+  [
+    "27711",
+    "Costo"
+  ],
+  [
+    "27712",
+    "Revaluación"
+  ],
+  [
+    "2772",
+    "Patentes y propiedad industrial"
+  ],
+  [
+    "27721",
+    "Costo"
+  ],
+  [
+    "27722",
+    "Revaluación"
+  ],
+  [
+    "2773",
+    "Programas de computadora (software)"
+  ],
+  [
+    "27731",
+    "Costo"
+  ],
+  [
+    "27732",
+    "Revaluación"
+  ],
+  [
+    "2774",
+    "Costos de exploración y desarrollo"
+  ],
+  [
+    "27741",
+    "Costo"
+  ],
+  [
+    "27742",
+    "Revaluación"
+  ],
+  [
+    "2775",
+    "Fórmulas, diseños y prototipos"
+  ],
+  [
+    "27751",
+    "Costo"
+  ],
+  [
+    "27752",
+    "Revaluación"
+  ],
+  [
+    "2776",
+    "Reservas de recursos extraíbles"
+  ],
+  [
+    "27761",
+    "Costo"
+  ],
+  [
+    "27762",
+    "Revaluación"
+  ],
+  [
+    "2779",
+    "Otros activos intangibles"
+  ],
+  [
+    "27791",
+    "Costo"
+  ],
+  [
+    "27792",
+    "Revaluación"
+  ],
+  [
+    "278",
+    "Depreciación acumulada – Activos biológicos"
+  ],
+  [
+    "2781",
+    "Activos biológicos en producción"
+  ],
+  [
+    "27812",
+    "Costo"
+  ],
+  [
+    "2782",
+    "Activos biológicos en desarrollo"
+  ],
+  [
+    "27822",
+    "Costo"
+  ],
+  [
+    "279",
+    "Desvalorización acumulada"
+  ],
+  [
+    "2791",
+    "Inversión inmobiliaria"
+  ],
+  [
+    "27911",
+    "Terrenos"
+  ],
+  [
+    "27912",
+    "Edificaciones"
+  ],
+  [
+    "2793",
+    "Inmuebles, maquinaria y equipo"
+  ],
+  [
+    "27931",
+    "Terrenos"
+  ],
+  [
+    "27932",
+    "Edificaciones"
+  ],
+  [
+    "27933",
+    "Maquinarias y equipos de explotación"
+  ],
+  [
+    "27934",
+    "Equipo de transporte"
+  ],
+  [
+    "27935",
+    "Muebles y enseres"
+  ],
+  [
+    "27936",
+    "Equipos diversos"
+  ],
+  [
+    "27937",
+    "Herramientas y unidades de reemplazo"
+  ],
+  [
+    "2794",
+    "Intangibles"
+  ],
+  [
+    "27941",
+    "Concesiones, licencias y otros derechos"
+  ],
+  [
+    "27942",
+    "Patentes y propiedad industrial"
+  ],
+  [
+    "27943",
+    "Programas de computadora (software)"
+  ],
+  [
+    "27944",
+    "Costos de exploración y desarrollo"
+  ],
+  [
+    "27945",
+    "Fórmulas, diseños y prototipos"
+  ],
+  [
+    "27946",
+    "Reservas de recursos extraíbles"
+  ],
+  [
+    "2795",
+    "Activos biológicos"
+  ],
+  [
+    "27951",
+    "Activos biológicos en producción"
+  ],
+  [
+    "27952",
+    "Activos biológicos en desarrollo"
+  ],
+  [
+    "28",
+    "EXISTENCIAS POR RECIBIR"
+  ],
+  [
+    "281",
+    "Mercaderías"
+  ],
+  [
+    "284",
+    "Materias primas"
+  ],
+  [
+    "285",
+    "Materiales auxiliares, suministros y repuestos"
+  ],
+  [
+    "286",
+    "Envases y embalajes"
+  ],
+  [
+    "29",
+    "DESVALORIZACIÓN DE EXISTENCIAS"
+  ],
+  [
+    "291",
+    "Mercaderías"
+  ],
+  [
+    "2911",
+    "Mercaderías manufacturadas"
+  ],
+  [
+    "2912",
+    "Mercaderías de extracción"
+  ],
+  [
+    "2913",
+    "Mercaderías agropecuarias y piscícolas"
+  ],
+  [
+    "2914",
+    "Mercaderías inmuebles"
+  ],
+  [
+    "2918",
+    "Otras mercaderías"
+  ],
+  [
+    "292",
+    "Productos terminados"
+  ],
+  [
+    "2921",
+    "Productos manufacturados"
+  ],
+  [
+    "2922",
+    "Productos de extracción terminados"
+  ],
+  [
+    "2923",
+    "Productos agropecuarios y piscícolas terminados"
+  ],
+  [
+    "2924",
+    "Productos inmuebles"
+  ],
+  [
+    "2925",
+    "Existencias de servicios terminados"
+  ],
+  [
+    "2927",
+    "Otros productos terminados"
+  ],
+  [
+    "2928",
+    "Costos de financiación – Productos terminados"
+  ],
+  [
+    "293",
+    "Subproductos, desechos y desperdicios"
+  ],
+  [
+    "2931",
+    "Subproductos"
+  ],
+  [
+    "2932",
+    "Desechos y desperdicios"
+  ],
+  [
+    "294",
+    "Productos en proceso"
+  ],
+  [
+    "2941",
+    "Productos en proceso de manufactura"
+  ],
+  [
+    "2942",
+    "Productos extraídos en proceso de transformación"
+  ],
+  [
+    "2943",
+    "Productos agropecuarios y piscícolas en proceso"
+  ],
+  [
+    "2944",
+    "Productos inmuebles en proceso"
+  ],
+  [
+    "2945",
+    "Existencias de servicios en proceso"
+  ],
+  [
+    "2947",
+    "Otros productos en proceso"
+  ],
+  [
+    "2948",
+    "Costos de financiación – Productos en proceso"
+  ],
+  [
+    "295",
+    "Materias primas"
+  ],
+  [
+    "2951",
+    "Materias primas para productos manufacturados"
+  ],
+  [
+    "2952",
+    "Materias primas para productos de extracción"
+  ],
+  [
+    "2953",
+    "Materias primas para productos agropecuarios y piscícolas"
+  ],
+  [
+    "2954",
+    "Materias primas para productos inmuebles"
+  ],
+  [
+    "296",
+    "Materiales auxiliares, suministros y repuestos"
+  ],
+  [
+    "2961",
+    "Materiales auxiliares"
+  ],
+  [
+    "2962",
+    "Suministros"
+  ],
+  [
+    "2963",
+    "Repuestos"
+  ],
+  [
+    "297",
+    "Envases y embalajes"
+  ],
+  [
+    "2971",
+    "Envases"
+  ],
+  [
+    "2972",
+    "Embalajes"
+  ],
+  [
+    "298",
+    "Existencias por recibir"
+  ],
+  [
+    "2981",
+    "Mercaderías"
+  ],
+  [
+    "2982",
+    "Materias primas"
+  ],
+  [
+    "2983",
+    "Materiales auxiliares, suministros y repuestos"
+  ],
+  [
+    "2984",
+    "Envases y embalajes"
+  ],
+  [
+    "30",
+    "INVERSIONES MOBILIARIAS"
+  ],
+  [
+    "301",
+    "Inversiones a ser mantenidas hasta el vencimiento"
+  ],
+  [
+    "3011",
+    "Instrumentos financieros representativos de deuda"
+  ],
+  [
+    "30111",
+    "Valores emitidos o garantizados por el Estado"
+  ],
+  [
+    "30112",
+    "Valores emitidos por el sistema financiero"
+  ],
+  [
+    "30113",
+    "Valores emitidos por las empresas"
+  ],
+  [
+    "30114",
+    "Valores emitidos por otras entidades"
+  ],
+  [
+    "302",
+    "Instrumentos financieros representativos de derecho patrimonial"
+  ],
+  [
+    "3021",
+    "Certificados de suscripción preferente"
+  ],
+  [
+    "3022",
+    "Acciones representativas de capital social – Comunes"
+  ],
+  [
+    "30221",
+    "Costo"
+  ],
+  [
+    "30222",
+    "Valor razonable"
+  ],
+  [
+    "30223",
+    "Participación patrimonial"
+  ],
+  [
+    "3023",
+    "Acciones representativas de capital social – Preferentes"
+  ],
+  [
+    "30231",
+    "Costo"
+  ],
+  [
+    "30232",
+    "Valor razonable"
+  ],
+  [
+    "30233",
+    "Participación patrimonial"
+  ],
+  [
+    "3024",
+    "Acciones de inversión"
+  ],
+  [
+    "30241",
+    "Costo"
+  ],
+  [
+    "30242",
+    "Valor razonable"
+  ],
+  [
+    "30243",
+    "Participación patrimonial"
+  ],
+  [
+    "3025",
+    "Certificados de participación de fondos de inversión"
+  ],
+  [
+    "30251",
+    "Costo"
+  ],
+  [
+    "30252",
+    "Valor razonable"
+  ],
+  [
+    "3026",
+    "Certificados de participación de fondos mutuos"
+  ],
+  [
+    "30261",
+    "Costo"
+  ],
+  [
+    "30262",
+    "Valor razonable"
+  ],
+  [
+    "3027",
+    "Participaciones en asociaciones en participación y consorcios"
+  ],
+  [
+    "30271",
+    "Costo"
+  ],
+  [
+    "30272",
+    "Valor razonable"
+  ],
+  [
+    "30273",
+    "Participación patrimonial"
+  ],
+  [
+    "3028",
+    "Otros títulos representativos de patrimonio"
+  ],
+  [
+    "30281",
+    "Costo"
+  ],
+  [
+    "30282",
+    "Valor razonable"
+  ],
+  [
+    "308",
+    "Inversiones mobiliarias – Acuerdos de compra"
+  ],
+  [
+    "3081",
+    "Inversiones a ser mantenidas hasta el vencimiento – Acuerdo de compra"
+  ],
+  [
+    "3082",
+    "Instrumentos financieros representativos de derecho patrimonial – Acuerdo de compra"
+  ],
+  [
+    "31",
+    "INVERSIONES INMOBILIARIAS"
+  ],
+  [
+    "311",
+    "Terrenos"
+  ],
+  [
+    "3111",
+    "Urbanos"
+  ],
+  [
+    "31111",
+    "Valor razonable"
+  ],
+  [
+    "31112",
+    "Costo"
+  ],
+  [
+    "31113",
+    "Revaluación"
+  ],
+  [
+    "3112",
+    "Rurales"
+  ],
+  [
+    "31121",
+    "Valor razonable"
+  ],
+  [
+    "31122",
+    "Costo"
+  ],
+  [
+    "31123",
+    "Revaluación"
+  ],
+  [
+    "312",
+    "Edificaciones"
+  ],
+  [
+    "3121",
+    "Edificaciones"
+  ],
+  [
+    "31211",
+    "Valor razonable"
+  ],
+  [
+    "31212",
+    "Costo"
+  ],
+  [
+    "31213",
+    "Revaluación"
+  ],
+  [
+    "31214",
+    "Costos de financiación – Inversiones inmobiliarias"
+  ],
+  [
+    "32",
+    "ACTIVOS ADQUIRIDOS EN ARRENDAMIENTO FINANCIERO"
+  ],
+  [
+    "321",
+    "Inversiones inmobiliarias"
+  ],
+  [
+    "3211",
+    "Terrenos"
+  ],
+  [
+    "3212",
+    "Edificaciones"
+  ],
+  [
+    "322",
+    "Inmuebles, maquinaria y equipo"
+  ],
+  [
+    "3221",
+    "Terrenos"
+  ],
+  [
+    "3222",
+    "Edificaciones"
+  ],
+  [
+    "3223",
+    "Maquinarias y equipos de explotación"
+  ],
+  [
+    "3224",
+    "Equipo de transporte"
+  ],
+  [
+    "3225",
+    "Muebles y enseres"
+  ],
+  [
+    "3226",
+    "Equipos diversos"
+  ],
+  [
+    "3227",
+    "Herramientas y unidades de reemplazo"
+  ],
+  [
+    "33",
+    "INMUEBLES, MAQUINARIA Y EQUIPO"
+  ],
+  [
+    "331",
+    "Terrenos"
+  ],
+  [
+    "3311",
+    "Terrenos"
+  ],
+  [
+    "33111",
+    "Costo"
+  ],
+  [
+    "33112",
+    "Revaluación"
+  ],
+  [
+    "332",
+    "Edificaciones"
+  ],
+  [
+    "3321",
+    "Edificaciones administrativas"
+  ],
+  [
+    "33211",
+    "Costo de adquisición o construcción"
+  ],
+  [
+    "33212",
+    "Revaluación"
+  ],
+  [
+    "33213",
+    "Costo de financiación – Edificaciones"
+  ],
+  [
+    "3322",
+    "Almacenes"
+  ],
+  [
+    "33221",
+    "Costo de adquisición o construcción"
+  ],
+  [
+    "33222",
+    "Revaluación"
+  ],
+  [
+    "33223",
+    "Costo de financiación – Almacenes"
+  ],
+  [
+    "3323",
+    "Edificaciones para producción"
+  ],
+  [
+    "33231",
+    "Costo de adquisición o construcción"
+  ],
+  [
+    "33232",
+    "Revaluación"
+  ],
+  [
+    "33233",
+    "Costo de financiación – Edificaciones para producción"
+  ],
+  [
+    "3324",
+    "Instalaciones"
+  ],
+  [
+    "33241",
+    "Costo de adquisición o construcción"
+  ],
+  [
+    "33242",
+    "Revaluación"
+  ],
+  [
+    "33243",
+    "Costo de financiación – Instalaciones"
+  ],
+  [
+    "333",
+    "Maquinarias y equipos de explotación"
+  ],
+  [
+    "3331",
+    "Maquinarias y equipos de explotación"
+  ],
+  [
+    "33311",
+    "Costo de adquisición o construcción"
+  ],
+  [
+    "33312",
+    "Revaluación"
+  ],
+  [
+    "33313",
+    "Costo de financiación – Maquinarias y equipos de explotación"
+  ],
+  [
+    "334",
+    "Unidades de transporte"
+  ],
+  [
+    "3341",
+    "Vehículos motorizados"
+  ],
+  [
+    "33411",
+    "Costo"
+  ],
+  [
+    "33412",
+    "Revaluación"
+  ],
+  [
+    "3342",
+    "Vehículos no motorizados"
+  ],
+  [
+    "33421",
+    "Costo"
+  ],
+  [
+    "33422",
+    "Revaluación"
+  ],
+  [
+    "335",
+    "Muebles y enseres"
+  ],
+  [
+    "3351",
+    "Muebles"
+  ],
+  [
+    "33511",
+    "Costo"
+  ],
+  [
+    "33512",
+    "Revaluación"
+  ],
+  [
+    "3352",
+    "Enseres"
+  ],
+  [
+    "33521",
+    "Costo"
+  ],
+  [
+    "33522",
+    "Revaluación"
+  ],
+  [
+    "336",
+    "Equipos diversos"
+  ],
+  [
+    "3361",
+    "Equipo para procesamiento de información (de cómputo)"
+  ],
+  [
+    "33611",
+    "Costo"
+  ],
+  [
+    "33612",
+    "Revaluación"
+  ],
+  [
+    "3362",
+    "Equipo de comunicación"
+  ],
+  [
+    "33621",
+    "Costo"
+  ],
+  [
+    "33622",
+    "Revaluación"
+  ],
+  [
+    "3363",
+    "Equipo de seguridad"
+  ],
+  [
+    "33631",
+    "Costo"
+  ],
+  [
+    "33632",
+    "Revaluación"
+  ],
+  [
+    "3369",
+    "Otros equipos"
+  ],
+  [
+    "33691",
+    "Costo"
+  ],
+  [
+    "33692",
+    "Revaluación"
+  ],
+  [
+    "337",
+    "Herramientas y unidades de reemplazo"
+  ],
+  [
+    "3371",
+    "Herramientas"
+  ],
+  [
+    "33711",
+    "Costo"
+  ],
+  [
+    "33712",
+    "Revaluación"
+  ],
+  [
+    "3372",
+    "Unidades de reemplazo"
+  ],
+  [
+    "33721",
+    "Costo"
+  ],
+  [
+    "33722",
+    "Revaluación"
+  ],
+  [
+    "338",
+    "Unidades por recibir"
+  ],
+  [
+    "3381",
+    "Maquinarias y equipos de explotación"
+  ],
+  [
+    "3382",
+    "Equipo de transporte"
+  ],
+  [
+    "3383",
+    "Muebles y enseres"
+  ],
+  [
+    "3386",
+    "Equipos diversos"
+  ],
+  [
+    "3387",
+    "Herramientas y unidades de reemplazo"
+  ],
+  [
+    "339",
+    "Construcciones y obras en curso"
+  ],
+  [
+    "3391",
+    "Adaptación de terrenos"
+  ],
+  [
+    "3392",
+    "Construcciones en curso"
+  ],
+  [
+    "3393",
+    "Maquinaria en montaje"
+  ],
+  [
+    "3394",
+    "Inversión inmobiliaria en curso"
+  ],
+  [
+    "3397",
+    "Costo de financiación – Inversiones inmobiliarias"
+  ],
+  [
+    "33971",
+    "Costo de financiación – Edificaciones"
+  ],
+  [
+    "3398",
+    "Costo de financiación – Inmuebles, maquinaria y equipo"
+  ],
+  [
+    "33981",
+    "Costo de financiación – Edificaciones"
+  ],
+  [
+    "33982",
+    "Costo de financiación – Maquinarias y equipos de explotación"
+  ],
+  [
+    "3399",
+    "Otros activos en curso"
+  ],
+  [
+    "34",
+    "INTANGIBLES"
+  ],
+  [
+    "341",
+    "Concesiones, licencias y otros derechos"
+  ],
+  [
+    "3411",
+    "Concesiones"
+  ],
+  [
+    "34111",
+    "Costo"
+  ],
+  [
+    "34112",
+    "Revaluación"
+  ],
+  [
+    "3412",
+    "Licencias"
+  ],
+  [
+    "34121",
+    "Costo"
+  ],
+  [
+    "34122",
+    "Revaluación"
+  ],
+  [
+    "3419",
+    "Otros derechos"
+  ],
+  [
+    "34191",
+    "Costo"
+  ],
+  [
+    "34192",
+    "Revaluación"
+  ],
+  [
+    "342",
+    "Patentes y propiedad industrial"
+  ],
+  [
+    "3421",
+    "Patentes"
+  ],
+  [
+    "34211",
+    "Costo"
+  ],
+  [
+    "34212",
+    "Revaluación"
+  ],
+  [
+    "3422",
+    "Marcas"
+  ],
+  [
+    "34221",
+    "Costo"
+  ],
+  [
+    "34222",
+    "Revaluación"
+  ],
+  [
+    "343",
+    "Programas de computadora (software)"
+  ],
+  [
+    "3431",
+    "Aplicaciones informáticas"
+  ],
+  [
+    "34311",
+    "Costo"
+  ],
+  [
+    "34312",
+    "Revaluación"
+  ],
+  [
+    "344",
+    "Costos de exploración y desarrollo"
+  ],
+  [
+    "3441",
+    "Costos de exploración"
+  ],
+  [
+    "34411",
+    "Costo"
+  ],
+  [
+    "34412",
+    "Revaluación"
+  ],
+  [
+    "34413",
+    "Costo de financiación"
+  ],
+  [
+    "3442",
+    "Costos de desarrollo"
+  ],
+  [
+    "34421",
+    "Costo"
+  ],
+  [
+    "34422",
+    "Revaluación"
+  ],
+  [
+    "34423",
+    "Costo de financiación"
+  ],
+  [
+    "345",
+    "Fórmulas, diseños y prototipos"
+  ],
+  [
+    "3451",
+    "Fórmulas"
+  ],
+  [
+    "34511",
+    "Costo"
+  ],
+  [
+    "34512",
+    "Revaluación"
+  ],
+  [
+    "3452",
+    "Diseños y prototipos"
+  ],
+  [
+    "34521",
+    "Costo"
+  ],
+  [
+    "34522",
+    "Revaluación"
+  ],
+  [
+    "346",
+    "Reservas de recursos extraíbles"
+  ],
+  [
+    "3461",
+    "Minerales"
+  ],
+  [
+    "34611",
+    "Costo"
+  ],
+  [
+    "34612",
+    "Revaluación"
+  ],
+  [
+    "3462",
+    "Petróleo y gas"
+  ],
+  [
+    "34621",
+    "Costo"
+  ],
+  [
+    "34622",
+    "Revaluación"
+  ],
+  [
+    "3463",
+    "Madera"
+  ],
+  [
+    "34631",
+    "Costo"
+  ],
+  [
+    "34632",
+    "Revaluación"
+  ],
+  [
+    "3469",
+    "Otros recursos extraíbles"
+  ],
+  [
+    "34691",
+    "Costo"
+  ],
+  [
+    "34692",
+    "Revaluación"
+  ],
+  [
+    "347",
+    "Plusvalía mercantil"
+  ],
+  [
+    "3471",
+    "Plusvalía mercantil"
+  ],
+  [
+    "349",
+    "Otros activos intangibles"
+  ],
+  [
+    "3491",
+    "Otros activos intangibles"
+  ],
+  [
+    "34911",
+    "Costo"
+  ],
+  [
+    "34912",
+    "Revaluación"
+  ],
+  [
+    "35",
+    "ACTIVOS BIOLÓGICOS"
+  ],
+  [
+    "351",
+    "Activos biológicos en producción"
+  ],
+  [
+    "3511",
+    "De origen animal"
+  ],
+  [
+    "35111",
+    "Valor razonable"
+  ],
+  [
+    "35112",
+    "Costo"
+  ],
+  [
+    "35113",
+    "Costo de financiación"
+  ],
+  [
+    "3512",
+    "De origen vegetal"
+  ],
+  [
+    "35121",
+    "Valor razonable"
+  ],
+  [
+    "35122",
+    "Costo"
+  ],
+  [
+    "35123",
+    "Costo de financiación"
+  ],
+  [
+    "352",
+    "Activos biológicos en desarrollo"
+  ],
+  [
+    "3521",
+    "De origen animal"
+  ],
+  [
+    "35211",
+    "Valor razonable"
+  ],
+  [
+    "35212",
+    "Costo"
+  ],
+  [
+    "35213",
+    "Costo de financiación"
+  ],
+  [
+    "3522",
+    "De origen vegetal"
+  ],
+  [
+    "35221",
+    "Valor razonable"
+  ],
+  [
+    "35222",
+    "Costo"
+  ],
+  [
+    "35223",
+    "Costo de financiación"
+  ],
+  [
+    "36",
+    "DESVALORIZACIÓN DE ACTIVO INMOVILIZADO"
+  ],
+  [
+    "361",
+    "Desvalorización de inversiones inmobiliarias"
+  ],
+  [
+    "3611",
+    "Terrenos"
+  ],
+  [
+    "3612",
+    "Edificaciones"
+  ],
+  [
+    "36121",
+    "Edificaciones – Costo de adquisición o construcción"
+  ],
+  [
+    "36122",
+    "Edificaciones – Costo de financiación"
+  ],
+  [
+    "363",
+    "Desvalorización de inmuebles, maquinaria y equipo"
+  ],
+  [
+    "3631",
+    "Terrenos"
+  ],
+  [
+    "3632",
+    "Edificaciones"
+  ],
+  [
+    "36321",
+    "Edificaciones – Costo de adquisición o construcción"
+  ],
+  [
+    "36322",
+    "Edificaciones – Costo de financiación"
+  ],
+  [
+    "3633",
+    "Maquinarias y equipos de explotación"
+  ],
+  [
+    "36331",
+    "Maquinarias y equipos de explotación – Costo de adquisición o construcción"
+  ],
+  [
+    "36332",
+    "Maquinarias y equipos de explotación – Costo de financiación"
+  ],
+  [
+    "3634",
+    "Equipo de transporte"
+  ],
+  [
+    "3635",
+    "Muebles y enseres"
+  ],
+  [
+    "3636",
+    "Equipos diversos"
+  ],
+  [
+    "3637",
+    "Herramientas y unidades de reemplazo"
+  ],
+  [
+    "364",
+    "Desvalorización de intangibles"
+  ],
+  [
+    "3641",
+    "Concesiones, licencias y otros derechos"
+  ],
+  [
+    "3642",
+    "Patentes y propiedad industrial"
+  ],
+  [
+    "3643",
+    "Programas de computadora (software)"
+  ],
+  [
+    "3644",
+    "Costos de exploración y desarrollo"
+  ],
+  [
+    "36441",
+    "Costo"
+  ],
+  [
+    "36442",
+    "Costo de financiación"
+  ],
+  [
+    "3645",
+    "Fórmulas, diseños y prototipos"
+  ],
+  [
+    "3647",
+    "Plusvalía mercantil"
+  ],
+  [
+    "3649",
+    "Otros activos intangibles"
+  ],
+  [
+    "365",
+    "Desvalorización de activos biológicos"
+  ],
+  [
+    "3651",
+    "Activos biológicos en producción"
+  ],
+  [
+    "36511",
+    "Costo"
+  ],
+  [
+    "36512",
+    "Costo de financiación"
+  ],
+  [
+    "3652",
+    "Activos biológicos en desarrollo"
+  ],
+  [
+    "36521",
+    "Costo"
+  ],
+  [
+    "36522",
+    "Costo de financiación"
+  ],
+  [
+    "366",
+    "Desvalorización de inversiones mobiliarias"
+  ],
+  [
+    "3661",
+    "Inversiones a ser mantenidas hasta el vencimiento"
+  ],
+  [
+    "3662",
+    "Inversiones financieras representativas de derecho patrimonial"
+  ],
+  [
+    "37",
+    "ACTIVO DIFERIDO"
+  ],
+  [
+    "371",
+    "Impuesto a la renta diferido"
+  ],
+  [
+    "3711",
+    "Impuesto a la renta diferido – Patrimonio"
+  ],
+  [
+    "3712",
+    "Impuesto a la renta diferido – Resultados"
+  ],
+  [
+    "372",
+    "Participaciones de los trabajadores diferidas"
+  ],
+  [
+    "3721",
+    "Participaciones de los trabajadores diferidas – Patrimonio"
+  ],
+  [
+    "3722",
+    "Participaciones de los trabajadores diferidas – Resultados"
+  ],
+  [
+    "373",
+    "Intereses diferidos"
+  ],
+  [
+    "3731",
+    "Intereses no devengados en transacciones con terceros"
+  ],
+  [
+    "3732",
+    "Intereses no devengados en medición a valor descontado"
+  ],
+  [
+    "38",
+    "OTROS ACTIVOS"
+  ],
+  [
+    "381",
+    "Bienes de arte y cultura"
+  ],
+  [
+    "3811",
+    "Obras de arte"
+  ],
+  [
+    "3812",
+    "Biblioteca"
+  ],
+  [
+    "3813",
+    "Otros"
+  ],
+  [
+    "382",
+    "Diversos"
+  ],
+  [
+    "3821",
+    "Monedas y joyas"
+  ],
+  [
+    "3822",
+    "Bienes entregados en comodato"
+  ],
+  [
+    "3823",
+    "Bienes recibidos en pago (adjudicados y realizables)"
+  ],
+  [
+    "3829",
+    "Otros"
+  ],
+  [
+    "39",
+    "DEPRECIACIÓN, AMORTIZACIÓN Y AGOTAMIENTO ACUMULADOS"
+  ],
+  [
+    "391",
+    "Depreciación acumulada"
+  ],
+  [
+    "3911",
+    "Inversiones Inmobiliarias"
+  ],
+  [
+    "39111",
+    "Edificaciones – Costo de adquisición o construcción"
+  ],
+  [
+    "39112",
+    "Edificaciones – Revaluación"
+  ],
+  [
+    "39113",
+    "Edificaciones – Costo de financiación"
+  ],
+  [
+    "3912",
+    "Activos adquiridos en arrendamiento financiero"
+  ],
+  [
+    "39121",
+    "Inversiones inmobiliarias – Edificaciones"
+  ],
+  [
+    "39122",
+    "Inmuebles, maquinaria y equipo – Edificaciones"
+  ],
+  [
+    "39123",
+    "Inmuebles, maquinaria y equipo – Maquinarias y equipos de explotación"
+  ],
+  [
+    "39124",
+    "Inmuebles, maquinaria y equipo – Equipos de transporte"
+  ],
+  [
+    "39126",
+    "Inmuebles, maquinaria y equipo – Equipos diversos"
+  ],
+  [
+    "3913",
+    "Inmuebles, maquinaria y equipo – Costo"
+  ],
+  [
+    "39131",
+    "Edificaciones"
+  ],
+  [
+    "39132",
+    "Maquinarias y equipos de explotación"
+  ],
+  [
+    "39133",
+    "Equipo de transporte"
+  ],
+  [
+    "39134",
+    "Muebles y enseres"
+  ],
+  [
+    "39135",
+    "Equipos diversos"
+  ],
+  [
+    "39136",
+    "Herramientas y unidades de reemplazo"
+  ],
+  [
+    "3914",
+    "Inmuebles, maquinaria y equipo – Revaluación"
+  ],
+  [
+    "39141",
+    "Edificaciones"
+  ],
+  [
+    "39142",
+    "Maquinarias y equipos de explotación"
+  ],
+  [
+    "39143",
+    "Equipo de transporte"
+  ],
+  [
+    "39144",
+    "Muebles y enseres"
+  ],
+  [
+    "39145",
+    "Equipos diversos"
+  ],
+  [
+    "39146",
+    "Herramientas y unidades de reemplazo"
+  ],
+  [
+    "3915",
+    "Inmuebles, maquinaria y equipo – Costo de financiación"
+  ],
+  [
+    "39151",
+    "Edificaciones"
+  ],
+  [
+    "39152",
+    "Maquinarias y equipos de explotación"
+  ],
+  [
+    "3916",
+    "Activos biológicos en producción – Costo"
+  ],
+  [
+    "39161",
+    "Activos biológicos de origen animal"
+  ],
+  [
+    "39162",
+    "Activos biológicos de origen vegetal"
+  ],
+  [
+    "3917",
+    "Activos biológicos en producción – Costo de financiación"
+  ],
+  [
+    "39171",
+    "Activos biológicos de origen animal"
+  ],
+  [
+    "39172",
+    "Activos biológicos de origen vegetal"
+  ],
+  [
+    "392",
+    "Amortización acumulada"
+  ],
+  [
+    "3921",
+    "Intangibles – Costo"
+  ],
+  [
+    "39211",
+    "Concesiones, licencias y otros derechos"
+  ],
+  [
+    "39212",
+    "Patentes y propiedad industrial"
+  ],
+  [
+    "39213",
+    "Programas de computadora (software)"
+  ],
+  [
+    "39214",
+    "Costos de exploración y desarrollo"
+  ],
+  [
+    "39215",
+    "Fórmulas, diseños y prototipos"
+  ],
+  [
+    "39219",
+    "Otros activos intangibles"
+  ],
+  [
+    "3922",
+    "Intangibles – Revaluación"
+  ],
+  [
+    "39221",
+    "Concesiones, licencias y otros derechos"
+  ],
+  [
+    "39222",
+    "Patentes y propiedad industrial"
+  ],
+  [
+    "39223",
+    "Programas de computadora (software)"
+  ],
+  [
+    "39224",
+    "Costos de exploración y desarrollo"
+  ],
+  [
+    "39225",
+    "Fórmulas, diseños y prototipos"
+  ],
+  [
+    "39229",
+    "Otros activos intangibles"
+  ],
+  [
+    "3923",
+    "Intangibles – Costos de financiación"
+  ],
+  [
+    "39234",
+    "Costos de exploración y desarrollo"
+  ],
+  [
+    "393",
+    "Agotamiento acumulado"
+  ],
+  [
+    "3931",
+    "Agotamiento de reservas de recursos extraíbles"
+  ],
+  [
+    "40",
+    "TRIBUTOS, CONTRAPRESTACIONES Y APORTES AL SISTEMA DE PENSIONES Y DE SALUD POR PAGAR"
+  ],
+  [
+    "401",
+    "Gobierno central"
+  ],
+  [
+    "4011",
+    "Impuesto general a las ventas"
+  ],
+  [
+    "40111",
+    "IGV – Cuenta propia"
+  ],
+  [
+    "40112",
+    "IGV – Servicios prestados por no domiciliados"
+  ],
+  [
+    "40113",
+    "IGV – Régimen de percepciones"
+  ],
+  [
+    "40114",
+    "IGV – Régimen de retenciones"
+  ],
+  [
+    "4012",
+    "Impuesto selectivo al consumo"
+  ],
+  [
+    "4015",
+    "Derechos aduaneros"
+  ],
+  [
+    "40151",
+    "Derechos arancelarios"
+  ],
+  [
+    "40152",
+    "Derechos aduaneros por ventas"
+  ],
+  [
+    "4017",
+    "Impuesto a la renta"
+  ],
+  [
+    "40171",
+    "Renta de tercera categoría"
+  ],
+  [
+    "40172",
+    "Renta de cuarta categoría"
+  ],
+  [
+    "40173",
+    "Renta de quinta categoría"
+  ],
+  [
+    "40174",
+    "Renta de no domiciliados"
+  ],
+  [
+    "40175",
+    "Otras retenciones"
+  ],
+  [
+    "4018",
+    "Otros impuestos y contraprestaciones"
+  ],
+  [
+    "40181",
+    "Impuesto a las transacciones financieras"
+  ],
+  [
+    "40182",
+    "Impuesto a los juegos de casino y tragamonedas"
+  ],
+  [
+    "40183",
+    "Tasas por la prestación de servicios públicos"
+  ],
+  [
+    "40184",
+    "Regalías"
+  ],
+  [
+    "40185",
+    "Impuesto a los dividendos"
+  ],
+  [
+    "40186",
+    "Impuesto temporal a los activos netos"
+  ],
+  [
+    "40189",
+    "Otros impuestos"
+  ],
+  [
+    "402",
+    "Certificados tributarios"
+  ],
+  [
+    "403",
+    "Instituciones públicas"
+  ],
+  [
+    "4031",
+    "ESSALUD"
+  ],
+  [
+    "4032",
+    "ONP"
+  ],
+  [
+    "4033",
+    "Contribución al SENATI"
+  ],
+  [
+    "4034",
+    "Contribución al SENCICO"
+  ],
+  [
+    "4039",
+    "Otras instituciones"
+  ],
+  [
+    "405",
+    "Gobiernos regionales"
+  ],
+  [
+    "406",
+    "Gobiernos locales"
+  ],
+  [
+    "4061",
+    "Impuestos"
+  ],
+  [
+    "40611",
+    "Impuesto al patrimonio vehicular"
+  ],
+  [
+    "40612",
+    "Impuesto a las apuestas"
+  ],
+  [
+    "40613",
+    "Impuesto a los juegos"
+  ],
+  [
+    "40614",
+    "Impuesto de alcabala"
+  ],
+  [
+    "40615",
+    "Impuesto predial"
+  ],
+  [
+    "40616",
+    "Impuesto a los espectáculos públicos no deportivos"
+  ],
+  [
+    "4062",
+    "Contribuciones"
+  ],
+  [
+    "4063",
+    "Tasas"
+  ],
+  [
+    "40631",
+    "Licencia de apertura de establecimientos"
+  ],
+  [
+    "40632",
+    "Transporte público"
+  ],
+  [
+    "40633",
+    "Estacionamiento de vehículos"
+  ],
+  [
+    "40634",
+    "Servicios públicos o arbitrios"
+  ],
+  [
+    "40635",
+    "Servicios administrativos o derechos"
+  ],
+  [
+    "407",
+    "Administradoras de fondos de pensiones"
+  ],
+  [
+    "408",
+    "Empresas prestadoras de servicios de salud"
+  ],
+  [
+    "4081",
+    "Cuenta propia"
+  ],
+  [
+    "4082",
+    "Cuenta de terceros"
+  ],
+  [
+    "409",
+    "Otros costos administrativos e intereses"
+  ],
+  [
+    "41",
+    "REMUNERACIONES Y PARTICIPACIONES POR PAGAR"
+  ],
+  [
+    "411",
+    "Remuneraciones por pagar"
+  ],
+  [
+    "4111",
+    "Sueldos y salarios por pagar"
+  ],
+  [
+    "4112",
+    "Comisiones por pagar"
+  ],
+  [
+    "4113",
+    "Remuneraciones en especie por pagar"
+  ],
+  [
+    "4114",
+    "Gratificaciones por pagar"
+  ],
+  [
+    "4115",
+    "Vacaciones por pagar"
+  ],
+  [
+    "413",
+    "Participaciones de los trabajadores por pagar"
+  ],
+  [
+    "415",
+    "Beneficios sociales de los trabajadores por pagar"
+  ],
+  [
+    "4151",
+    "Compensación por tiempo de servicios"
+  ],
+  [
+    "4152",
+    "Adelanto de compensación por tiempo de servicios"
+  ],
+  [
+    "4153",
+    "Pensiones y jubilaciones"
+  ],
+  [
+    "419",
+    "Otras remuneraciones y participaciones por pagar"
+  ],
+  [
+    "42",
+    "CUENTAS POR PAGAR COMERCIALES – TERCEROS"
+  ],
+  [
+    "421",
+    "Facturas, boletas y otros comprobantes por pagar"
+  ],
+  [
+    "4211",
+    "No emitidas"
+  ],
+  [
+    "4212",
+    "Emitidas"
+  ],
+  [
+    "422",
+    "Anticipos a proveedores"
+  ],
+  [
+    "423",
+    "Letras por pagar"
+  ],
+  [
+    "424",
+    "Honorarios por pagar"
+  ],
+  [
+    "43",
+    "CUENTAS POR PAGAR COMERCIALES – RELACIONADAS"
+  ],
+  [
+    "431",
+    "Facturas, boletas y otros comprobantes por pagar"
+  ],
+  [
+    "4311",
+    "No emitidas"
+  ],
+  [
+    "43111",
+    "Matriz"
+  ],
+  [
+    "43112",
+    "Subsidiarias"
+  ],
+  [
+    "43113",
+    "Asociadas"
+  ],
+  [
+    "43114",
+    "Sucursales"
+  ],
+  [
+    "43115",
+    "Otros"
+  ],
+  [
+    "4312",
+    "Emitidas"
+  ],
+  [
+    "43121",
+    "Matriz"
+  ],
+  [
+    "43122",
+    "Subsidiarias"
+  ],
+  [
+    "43123",
+    "Asociadas"
+  ],
+  [
+    "43124",
+    "Sucursales"
+  ],
+  [
+    "43125",
+    "Otros"
+  ],
+  [
+    "432",
+    "Anticipos otorgados"
+  ],
+  [
+    "4321",
+    "Anticipos otorgados"
+  ],
+  [
+    "43211",
+    "Matriz"
+  ],
+  [
+    "43212",
+    "Subsidiarias"
+  ],
+  [
+    "43213",
+    "Asociadas"
+  ],
+  [
+    "43214",
+    "Sucursales"
+  ],
+  [
+    "43215",
+    "Otros"
+  ],
+  [
+    "433",
+    "Letras por pagar"
+  ],
+  [
+    "4331",
+    "Letras por pagar"
+  ],
+  [
+    "43311",
+    "Matriz"
+  ],
+  [
+    "43312",
+    "Subsidiarias"
+  ],
+  [
+    "43313",
+    "Asociadas"
+  ],
+  [
+    "43314",
+    "Sucursales"
+  ],
+  [
+    "43315",
+    "Otros"
+  ],
+  [
+    "434",
+    "Honorarios por pagar"
+  ],
+  [
+    "4341",
+    "Honorarios por pagar"
+  ],
+  [
+    "43411",
+    "Matriz"
+  ],
+  [
+    "43412",
+    "Subsidiarias"
+  ],
+  [
+    "43413",
+    "Asociadas"
+  ],
+  [
+    "43414",
+    "Sucursales"
+  ],
+  [
+    "43415",
+    "Otros"
+  ],
+  [
+    "44",
+    "CUENTAS POR PAGAR A LOS ACCIONISTAS (SOCIOS), DIRECTORES Y GERENTES"
+  ],
+  [
+    "441",
+    "Accionistas (o socios)"
+  ],
+  [
+    "4411",
+    "Préstamos"
+  ],
+  [
+    "4412",
+    "Dividendos"
+  ],
+  [
+    "4419",
+    "Otras cuentas por pagar"
+  ],
+  [
+    "442",
+    "Directores"
+  ],
+  [
+    "4421",
+    "Dietas"
+  ],
+  [
+    "4429",
+    "Otras cuentas por pagar"
+  ],
+  [
+    "443",
+    "Gerentes"
+  ],
+  [
+    "45",
+    "OBLIGACIONES FINANCIERAS"
+  ],
+  [
+    "451",
+    "Préstamos de instituciones financieras y otras entidades"
+  ],
+  [
+    "4511",
+    "Instituciones financieras"
+  ],
+  [
+    "4512",
+    "Otras entidades"
+  ],
+  [
+    "452",
+    "Contratos de arrendamiento financiero"
+  ],
+  [
+    "453",
+    "Obligaciones emitidas"
+  ],
+  [
+    "4531",
+    "Bonos emitidos"
+  ],
+  [
+    "4532",
+    "Bonos titulizados"
+  ],
+  [
+    "4533",
+    "Papeles comerciales"
+  ],
+  [
+    "4539",
+    "Otras obligaciones"
+  ],
+  [
+    "454",
+    "Otros Instrumentos financieros por pagar"
+  ],
+  [
+    "4541",
+    "Letras"
+  ],
+  [
+    "4542",
+    "Papeles comerciales"
+  ],
+  [
+    "4543",
+    "Bonos"
+  ],
+  [
+    "4544",
+    "Pagarés"
+  ],
+  [
+    "4545",
+    "Facturas conformadas"
+  ],
+  [
+    "4549",
+    "Otras obligaciones financieras"
+  ],
+  [
+    "455",
+    "Costos de financiación por pagar"
+  ],
+  [
+    "4551",
+    "Préstamos de instituciones financieras y otras entidades"
+  ],
+  [
+    "45511",
+    "Instituciones financieras"
+  ],
+  [
+    "45512",
+    "Otras entidades"
+  ],
+  [
+    "4552",
+    "Contratos de arrendamiento financiero"
+  ],
+  [
+    "4553",
+    "Obligaciones emitidas"
+  ],
+  [
+    "45531",
+    "Bonos emitidos"
+  ],
+  [
+    "45532",
+    "Bonos titulizados"
+  ],
+  [
+    "45533",
+    "Papeles comerciales"
+  ],
+  [
+    "45539",
+    "Otras obligaciones"
+  ],
+  [
+    "4554",
+    "Otros instrumentos financieros por pagar"
+  ],
+  [
+    "45541",
+    "Letras"
+  ],
+  [
+    "45542",
+    "Papeles comerciales"
+  ],
+  [
+    "45543",
+    "Bonos"
+  ],
+  [
+    "45544",
+    "Pagarés"
+  ],
+  [
+    "45545",
+    "Facturas conformadas"
+  ],
+  [
+    "45549",
+    "Otras obligaciones financieras"
+  ],
+  [
+    "456",
+    "Préstamos con compromisos de recompra"
+  ],
+  [
+    "46",
+    "CUENTAS POR PAGAR DIVERSAS – TERCEROS"
+  ],
+  [
+    "461",
+    "Reclamaciones de terceros"
+  ],
+  [
+    "464",
+    "Pasivos por instrumentos financieros"
+  ],
+  [
+    "4641",
+    "Instrumentos financieros primarios"
+  ],
+  [
+    "4642",
+    "Instrumentos financieros derivados"
+  ],
+  [
+    "46421",
+    "Cartera de negociación"
+  ],
+  [
+    "46422",
+    "Instrumentos de cobertura"
+  ],
+  [
+    "465",
+    "Pasivos por compra de activo inmovilizado"
+  ],
+  [
+    "4651",
+    "Inversiones mobiliarias"
+  ],
+  [
+    "4652",
+    "Inversiones inmobiliarias"
+  ],
+  [
+    "4653",
+    "Activos adquiridos en arrendamiento financiero"
+  ],
+  [
+    "4654",
+    "Inmuebles, maquinaria y equipo"
+  ],
+  [
+    "4655",
+    "Intangibles"
+  ],
+  [
+    "4656",
+    "Activos biológicos"
+  ],
+  [
+    "467",
+    "Depósitos recibidos en garantía"
+  ],
+  [
+    "469",
+    "Otras cuentas por pagar diversas"
+  ],
+  [
+    "4691",
+    "Subsidios gubernamentales"
+  ],
+  [
+    "4692",
+    "Donaciones condicionadas"
+  ],
+  [
+    "4699",
+    "Otras cuentas por pagar"
+  ],
+  [
+    "47",
+    "CUENTAS POR PAGAR DIVERSAS – RELACIONADAS"
+  ],
+  [
+    "471",
+    "Préstamos"
+  ],
+  [
+    "4711",
+    "Matriz"
+  ],
+  [
+    "4712",
+    "Subsidiarias"
+  ],
+  [
+    "4713",
+    "Asociadas"
+  ],
+  [
+    "4714",
+    "Sucursales"
+  ],
+  [
+    "4715",
+    "Otras"
+  ],
+  [
+    "472",
+    "Costos de financiación"
+  ],
+  [
+    "4721",
+    "Matriz"
+  ],
+  [
+    "4722",
+    "Subsidiarias"
+  ],
+  [
+    "4723",
+    "Asociadas"
+  ],
+  [
+    "4724",
+    "Sucursales"
+  ],
+  [
+    "4725",
+    "Otras"
+  ],
+  [
+    "473",
+    "Anticipos recibidos"
+  ],
+  [
+    "4731",
+    "Matriz"
+  ],
+  [
+    "4732",
+    "Subsidiarias"
+  ],
+  [
+    "4733",
+    "Asociadas"
+  ],
+  [
+    "4734",
+    "Sucursales"
+  ],
+  [
+    "4735",
+    "Otras"
+  ],
+  [
+    "474",
+    "Regalías"
+  ],
+  [
+    "4741",
+    "Matriz"
+  ],
+  [
+    "4742",
+    "Subsidiarias"
+  ],
+  [
+    "4743",
+    "Asociadas"
+  ],
+  [
+    "4744",
+    "Sucursales"
+  ],
+  [
+    "4745",
+    "Otras"
+  ],
+  [
+    "475",
+    "Dividendos"
+  ],
+  [
+    "4751",
+    "Matriz"
+  ],
+  [
+    "4752",
+    "Subsidiarias"
+  ],
+  [
+    "4753",
+    "Asociadas"
+  ],
+  [
+    "4754",
+    "Sucursales"
+  ],
+  [
+    "4755",
+    "Otras"
+  ],
+  [
+    "477",
+    "Pasivo por compra de activo inmovilizado"
+  ],
+  [
+    "4771",
+    "Inversiones mobiliarias"
+  ],
+  [
+    "47711",
+    "Matriz"
+  ],
+  [
+    "47712",
+    "Subsidiarias"
+  ],
+  [
+    "47713",
+    "Asociadas"
+  ],
+  [
+    "47714",
+    "Sucursales"
+  ],
+  [
+    "47715",
+    "Otras"
+  ],
+  [
+    "4772",
+    "Inversiones inmobiliarias"
+  ],
+  [
+    "47721",
+    "Matriz"
+  ],
+  [
+    "47722",
+    "Subsidiarias"
+  ],
+  [
+    "47723",
+    "Asociadas"
+  ],
+  [
+    "47724",
+    "Sucursales"
+  ],
+  [
+    "47725",
+    "Otras"
+  ],
+  [
+    "4773",
+    "Activos adquiridos en arrendamiento financiero"
+  ],
+  [
+    "47731",
+    "Matriz"
+  ],
+  [
+    "47732",
+    "Subsidiarias"
+  ],
+  [
+    "47733",
+    "Asociadas"
+  ],
+  [
+    "47734",
+    "Sucursales"
+  ],
+  [
+    "47735",
+    "Otras"
+  ],
+  [
+    "4774",
+    "Inmuebles, maquinaria y equipo"
+  ],
+  [
+    "47741",
+    "Matriz"
+  ],
+  [
+    "47742",
+    "Subsidiarias"
+  ],
+  [
+    "47743",
+    "Asociadas"
+  ],
+  [
+    "47744",
+    "Sucursales"
+  ],
+  [
+    "47745",
+    "Otras"
+  ],
+  [
+    "4775",
+    "Intangibles"
+  ],
+  [
+    "47751",
+    "Matriz"
+  ],
+  [
+    "47752",
+    "Subsidiarias"
+  ],
+  [
+    "47753",
+    "Asociadas"
+  ],
+  [
+    "47754",
+    "Sucursales"
+  ],
+  [
+    "47755",
+    "Otras"
+  ],
+  [
+    "4776",
+    "Activos biológicos"
+  ],
+  [
+    "47761",
+    "Matriz"
+  ],
+  [
+    "47762",
+    "Subsidiarias"
+  ],
+  [
+    "47763",
+    "Asociadas"
+  ],
+  [
+    "47764",
+    "Sucursales"
+  ],
+  [
+    "47765",
+    "Otras"
+  ],
+  [
+    "479",
+    "Otras cuentas por pagar diversas"
+  ],
+  [
+    "4791",
+    "Otras cuentas por pagar diversas"
+  ],
+  [
+    "47911",
+    "Matriz"
+  ],
+  [
+    "47912",
+    "Subsidiarias"
+  ],
+  [
+    "47913",
+    "Asociadas"
+  ],
+  [
+    "47914",
+    "Sucursales"
+  ],
+  [
+    "47915",
+    "Otras"
+  ],
+  [
+    "48",
+    "PROVISIONES"
+  ],
+  [
+    "481",
+    "Provisión para litigios"
+  ],
+  [
+    "482",
+    "Provisión por desmantelamiento, retiro o rehabilitación del inmovilizado"
+  ],
+  [
+    "483",
+    "Provisión para reestructuraciones"
+  ],
+  [
+    "484",
+    "Provisión para protección y remediación del medio ambiente"
+  ],
+  [
+    "485",
+    "Provisión para gastos de responsabilidad social"
+  ],
+  [
+    "486",
+    "Provisión para garantías"
+  ],
+  [
+    "489",
+    "Otras provisiones"
+  ],
+  [
+    "49",
+    "PASIVO DIFERIDO"
+  ],
+  [
+    "491",
+    "Impuesto a la renta diferido"
+  ],
+  [
+    "4911",
+    "Impuesto a la renta diferido – Patrimonio"
+  ],
+  [
+    "4912",
+    "Impuesto a la renta diferido – Resultados"
+  ],
+  [
+    "492",
+    "Participaciones de los trabajadores diferidas"
+  ],
+  [
+    "4921",
+    "Participaciones de los trabajadores diferidas – Patrimonio"
+  ],
+  [
+    "4922",
+    "Participaciones de los trabajadores diferidas – Resultados"
+  ],
+  [
+    "493",
+    "Intereses diferidos"
+  ],
+  [
+    "4931",
+    "Intereses no devengados en transacciones con terceros"
+  ],
+  [
+    "4932",
+    "Intereses no devengados en medición a valor descontado"
+  ],
+  [
+    "494",
+    "Ganancia en venta con arrendamiento financiero paralelo"
+  ],
+  [
+    "495",
+    "Subsidios recibidos diferidos"
+  ],
+  [
+    "496",
+    "Ingresos diferidos"
+  ],
+  [
+    "497",
+    "Costos diferidos"
+  ],
+  [
+    "50",
+    "CAPITAL"
+  ],
+  [
+    "501",
+    "Capital social"
+  ],
+  [
+    "5011",
+    "Acciones"
+  ],
+  [
+    "5012",
+    "Participaciones"
+  ],
+  [
+    "502",
+    "Acciones en tesorería"
+  ],
+  [
+    "51",
+    "ACCIONES DE INVERSIÓN"
+  ],
+  [
+    "511",
+    "Acciones de inversión"
+  ],
+  [
+    "512",
+    "Acciones de inversión en tesorería"
+  ],
+  [
+    "52",
+    "CAPITAL ADICIONAL"
+  ],
+  [
+    "521",
+    "Primas (descuento) de acciones"
+  ],
+  [
+    "522",
+    "Capitalizaciones en trámite"
+  ],
+  [
+    "5221",
+    "Aportes"
+  ],
+  [
+    "5222",
+    "Reservas"
+  ],
+  [
+    "5223",
+    "Acreencias"
+  ],
+  [
+    "5224",
+    "Utilidades"
+  ],
+  [
+    "523",
+    "Reducciones de capital pendientes de formalización"
+  ],
+  [
+    "56",
+    "RESULTADOS NO REALIZADOS"
+  ],
+  [
+    "561",
+    "Diferencia en cambio de inversiones permanentes en entidades extranjeras"
+  ],
+  [
+    "562",
+    "Instrumentos financieros – Cobertura de flujo de efectivo"
+  ],
+  [
+    "563",
+    "Ganancia o pérdida en activos o pasivos financieros disponibles para la venta"
+  ],
+  [
+    "5631",
+    "Ganancia"
+  ],
+  [
+    "5632",
+    "Pérdida"
+  ],
+  [
+    "564",
+    "Ganancia o pérdida en activos o pasivos financieros disponibles para la venta – Compra o venta convencional fecha de liquidación"
+  ],
+  [
+    "5641",
+    "Ganancia"
+  ],
+  [
+    "5642",
+    "Pérdida"
+  ],
+  [
+    "57",
+    "EXCEDENTE DE REVALUACIÓN"
+  ],
+  [
+    "571",
+    "Excedente de revaluación"
+  ],
+  [
+    "5711",
+    "Inversiones inmobiliarias"
+  ],
+  [
+    "5712",
+    "Inmuebles, maquinaria y equipos"
+  ],
+  [
+    "5713",
+    "Intangibles"
+  ],
+  [
+    "572",
+    "Excedente de revaluación – Acciones liberadas recibidas"
+  ],
+  [
+    "573",
+    "Participación en excedente de revaluación – Inversiones en entidades relacionadas"
+  ],
+  [
+    "58",
+    "RESERVAS"
+  ],
+  [
+    "581",
+    "Reinversión"
+  ],
+  [
+    "582",
+    "Legal"
+  ],
+  [
+    "583",
+    "Contractuales"
+  ],
+  [
+    "584",
+    "Estatutarias"
+  ],
+  [
+    "585",
+    "Facultativas"
+  ],
+  [
+    "589",
+    "Otras reservas"
+  ],
+  [
+    "59",
+    "RESULTADOS ACUMULADOS"
+  ],
+  [
+    "591",
+    "Utilidades no distribuidas"
+  ],
+  [
+    "5911",
+    "Utilidades acumuladas"
+  ],
+  [
+    "5912",
+    "Ingresos de años anteriores"
+  ],
+  [
+    "592",
+    "Pérdidas acumuladas"
+  ],
+  [
+    "5921",
+    "Pérdidas acumuladas"
+  ],
+  [
+    "5922",
+    "Gastos de años anteriores"
+  ],
+  [
+    "60",
+    "COMPRAS"
+  ],
+  [
+    "601",
+    "Mercaderías"
+  ],
+  [
+    "6011",
+    "Mercaderías manufacturadas"
+  ],
+  [
+    "6012",
+    "Mercaderías de extracción"
+  ],
+  [
+    "6013",
+    "Mercaderías agropecuarias y piscícolas"
+  ],
+  [
+    "6014",
+    "Mercaderías inmuebles"
+  ],
+  [
+    "6018",
+    "Otras mercaderías"
+  ],
+  [
+    "602",
+    "Materias primas"
+  ],
+  [
+    "6021",
+    "Materias primas para productos manufacturados"
+  ],
+  [
+    "6022",
+    "Materias primas para productos de extracción"
+  ],
+  [
+    "6023",
+    "Materias primas para productos agropecuarios y piscícolas"
+  ],
+  [
+    "6024",
+    "Materias primas para productos inmuebles"
+  ],
+  [
+    "603",
+    "Materiales auxiliares, suministros y repuestos"
+  ],
+  [
+    "6031",
+    "Materiales auxiliares"
+  ],
+  [
+    "6032",
+    "Suministros"
+  ],
+  [
+    "6033",
+    "Repuestos"
+  ],
+  [
+    "604",
+    "Envases y embalajes"
+  ],
+  [
+    "6041",
+    "Envases"
+  ],
+  [
+    "6042",
+    "Embalajes"
+  ],
+  [
+    "609",
+    "Costos vinculados con las compras"
+  ],
+  [
+    "6091",
+    "Costos vinculados con las compras de mercaderías"
+  ],
+  [
+    "60911",
+    "Transporte"
+  ],
+  [
+    "60912",
+    "Seguros"
+  ],
+  [
+    "60913",
+    "Derechos aduaneros"
+  ],
+  [
+    "60914",
+    "Comisiones"
+  ],
+  [
+    "60919",
+    "Otros costos vinculados con las compras de mercaderías"
+  ],
+  [
+    "6092",
+    "Costos vinculados con las compras de materias primas"
+  ],
+  [
+    "60921",
+    "Transporte"
+  ],
+  [
+    "60922",
+    "Seguros"
+  ],
+  [
+    "60923",
+    "Derechos aduaneros"
+  ],
+  [
+    "60924",
+    "Comisiones"
+  ],
+  [
+    "60925",
+    "Otros costos vinculados con las compras de materias primas"
+  ],
+  [
+    "6093",
+    "Costos vinculados con las compras de materiales, suministros y repuestos"
+  ],
+  [
+    "60931",
+    "Transporte"
+  ],
+  [
+    "60932",
+    "Seguros"
+  ],
+  [
+    "60933",
+    "Derechos aduaneros"
+  ],
+  [
+    "60934",
+    "Comisiones"
+  ],
+  [
+    "60935",
+    "Otros costos vinculados con las compras de materiales, suministros y repuestos"
+  ],
+  [
+    "6094",
+    "Costos vinculados con las compras de envases y embalajes"
+  ],
+  [
+    "60941",
+    "Transporte"
+  ],
+  [
+    "60942",
+    "Seguros"
+  ],
+  [
+    "60943",
+    "Derechos aduaneros"
+  ],
+  [
+    "60944",
+    "Comisiones"
+  ],
+  [
+    "60945",
+    "Otros costos vinculados con las compras de envases y embalajes"
+  ],
+  [
+    "61",
+    "VARIACIÓN DE EXISTENCIAS"
+  ],
+  [
+    "611",
+    "Mercaderías"
+  ],
+  [
+    "6111",
+    "Mercaderías manufacturadas"
+  ],
+  [
+    "6112",
+    "Mercaderías de extracción"
+  ],
+  [
+    "6113",
+    "Mercaderías agropecuarias y piscícolas"
+  ],
+  [
+    "6114",
+    "Mercaderías inmuebles"
+  ],
+  [
+    "6115",
+    "Otras mercaderías"
+  ],
+  [
+    "612",
+    "Materias primas"
+  ],
+  [
+    "6121",
+    "Materias primas para productos manufacturados"
+  ],
+  [
+    "6122",
+    "Materias primas para productos de extracción"
+  ],
+  [
+    "6123",
+    "Materias primas para productos agropecuarios y piscícolas"
+  ],
+  [
+    "6124",
+    "Materias primas para productos inmuebles"
+  ],
+  [
+    "613",
+    "Materiales auxiliares, suministros y repuestos"
+  ],
+  [
+    "6131",
+    "Materiales auxiliares"
+  ],
+  [
+    "6132",
+    "Suministros"
+  ],
+  [
+    "6133",
+    "Repuestos"
+  ],
+  [
+    "614",
+    "Envases y embalajes"
+  ],
+  [
+    "6141",
+    "Envases"
+  ],
+  [
+    "6142",
+    "Embalajes"
+  ],
+  [
+    "62",
+    "GASTOS DE PERSONAL, DIRECTORES Y GERENTES"
+  ],
+  [
+    "621",
+    "Remuneraciones"
+  ],
+  [
+    "6211",
+    "Sueldos y salarios"
+  ],
+  [
+    "6212",
+    "Comisiones"
+  ],
+  [
+    "6213",
+    "Remuneraciones en especie"
+  ],
+  [
+    "6214",
+    "Gratificaciones"
+  ],
+  [
+    "6215",
+    "Vacaciones"
+  ],
+  [
+    "622",
+    "Otras remuneraciones"
+  ],
+  [
+    "623",
+    "Indemnizaciones al personal"
+  ],
+  [
+    "624",
+    "Capacitación"
+  ],
+  [
+    "625",
+    "Atención al personal"
+  ],
+  [
+    "626",
+    "Gerentes"
+  ],
+  [
+    "627",
+    "Seguridad, previsión social y otras contribuciones"
+  ],
+  [
+    "6271",
+    "Régimen de prestaciones de salud"
+  ],
+  [
+    "6272",
+    "Régimen de pensiones"
+  ],
+  [
+    "6273",
+    "Seguro complementario de trabajo de riesgo, accidentes de trabajo y enfermedades profesionales"
+  ],
+  [
+    "6274",
+    "Seguro de vida"
+  ],
+  [
+    "6275",
+    "Seguros particulares de prestaciones de salud – EPS y otros particulares"
+  ],
+  [
+    "6276",
+    "Caja de beneficios de seguridad social del pescador"
+  ],
+  [
+    "6277",
+    "Contribuciones al SENCICO y el SENATI"
+  ],
+  [
+    "628",
+    "Retribuciones al directorio"
+  ],
+  [
+    "629",
+    "Beneficios sociales de los trabajadores"
+  ],
+  [
+    "6291",
+    "Compensación por tiempo de servicio"
+  ],
+  [
+    "6292",
+    "Pensiones y jubilaciones"
+  ],
+  [
+    "6293",
+    "Otros beneficios post-empleo"
+  ],
+  [
+    "63",
+    "GASTOS DE SERVICIOS PRESTADOS POR TERCEROS"
+  ],
+  [
+    "631",
+    "Transporte, correos y gastos de viaje"
+  ],
+  [
+    "6311",
+    "Transporte"
+  ],
+  [
+    "63111",
+    "De carga"
+  ],
+  [
+    "63112",
+    "De pasajeros"
+  ],
+  [
+    "6312",
+    "Correos"
+  ],
+  [
+    "6313",
+    "Alojamiento"
+  ],
+  [
+    "6314",
+    "Alimentación"
+  ],
+  [
+    "6315",
+    "Otros gastos de viaje"
+  ],
+  [
+    "632",
+    "Asesoría y consultoría"
+  ],
+  [
+    "6321",
+    "Administrativa"
+  ],
+  [
+    "6322",
+    "Legal y tributaria"
+  ],
+  [
+    "6323",
+    "Auditoría y contable"
+  ],
+  [
+    "6324",
+    "Mercadotecnia"
+  ],
+  [
+    "6325",
+    "Medioambiental"
+  ],
+  [
+    "6326",
+    "Investigación y desarrollo"
+  ],
+  [
+    "6327",
+    "Producción"
+  ],
+  [
+    "6329",
+    "Otros"
+  ],
+  [
+    "633",
+    "Producción encargada a terceros"
+  ],
+  [
+    "634",
+    "Mantenimiento y reparaciones"
+  ],
+  [
+    "6341",
+    "Inversión inmobiliaria"
+  ],
+  [
+    "6342",
+    "Activos adquiridos en arrendamiento financiero"
+  ],
+  [
+    "6343",
+    "Inmuebles, maquinaria y equipo"
+  ],
+  [
+    "6344",
+    "Intangibles"
+  ],
+  [
+    "6345",
+    "Activos biológicos"
+  ],
+  [
+    "635",
+    "Alquileres"
+  ],
+  [
+    "6351",
+    "Terrenos"
+  ],
+  [
+    "6352",
+    "Edificaciones"
+  ],
+  [
+    "6353",
+    "Maquinarias y equipos de explotación"
+  ],
+  [
+    "6354",
+    "Equipo de transporte"
+  ],
+  [
+    "6356",
+    "Equipos diversos"
+  ],
+  [
+    "636",
+    "Servicios básicos"
+  ],
+  [
+    "6361",
+    "Energía eléctrica"
+  ],
+  [
+    "6362",
+    "Gas"
+  ],
+  [
+    "6363",
+    "Agua"
+  ],
+  [
+    "6364",
+    "Teléfono"
+  ],
+  [
+    "6365",
+    "Internet"
+  ],
+  [
+    "6366",
+    "Radio"
+  ],
+  [
+    "6367",
+    "Cable"
+  ],
+  [
+    "637",
+    "Publicidad, publicaciones, relaciones públicas"
+  ],
+  [
+    "6371",
+    "Publicidad"
+  ],
+  [
+    "6372",
+    "Publicaciones"
+  ],
+  [
+    "6373",
+    "Relaciones públicas"
+  ],
+  [
+    "638",
+    "Servicios de contratistas"
+  ],
+  [
+    "639",
+    "Otros servicios prestados por terceros"
+  ],
+  [
+    "6391",
+    "Gastos bancarios"
+  ],
+  [
+    "6392",
+    "Gastos de laboratorio"
+  ],
+  [
+    "64",
+    "GASTOS POR TRIBUTOS"
+  ],
+  [
+    "641",
+    "Gobierno central"
+  ],
+  [
+    "6411",
+    "Impuesto general a las ventas y selectivo al consumo"
+  ],
+  [
+    "6412",
+    "Impuesto a las transacciones financieras"
+  ],
+  [
+    "6413",
+    "Impuesto temporal a los activos netos"
+  ],
+  [
+    "6414",
+    "Impuesto a los juegos de casino y máquinas tragamonedas"
+  ],
+  [
+    "6415",
+    "Regalías mineras"
+  ],
+  [
+    "6416",
+    "Cánones"
+  ],
+  [
+    "6419",
+    "Otros"
+  ],
+  [
+    "642",
+    "Gobierno regional"
+  ],
+  [
+    "643",
+    "Gobierno local"
+  ],
+  [
+    "6431",
+    "Impuesto predial"
+  ],
+  [
+    "6432",
+    "Arbitrios municipales y seguridad ciudadana"
+  ],
+  [
+    "6433",
+    "Impuesto al patrimonio vehicular"
+  ],
+  [
+    "6434",
+    "Licencia de funcionamiento"
+  ],
+  [
+    "6439",
+    "Otros"
+  ],
+  [
+    "644",
+    "Otros gastos por tributos"
+  ],
+  [
+    "6441",
+    "Contribución al SENATI"
+  ],
+  [
+    "6442",
+    "Contribución al SENCICO"
+  ],
+  [
+    "6443",
+    "Otros"
+  ],
+  [
+    "65",
+    "OTROS GASTOS DE GESTION"
+  ],
+  [
+    "651",
+    "Seguros"
+  ],
+  [
+    "652",
+    "Regalías"
+  ],
+  [
+    "653",
+    "Suscripciones"
+  ],
+  [
+    "654",
+    "Licencias y derechos de vigencia"
+  ],
+  [
+    "655",
+    "Costo neto de enajenación de activos inmovilizados y operaciones discontinuadas"
+  ],
+  [
+    "6551",
+    "Costo neto de enajenación de activos inmovilizados"
+  ],
+  [
+    "65511",
+    "Inversiones inmobiliarias"
+  ],
+  [
+    "65512",
+    "Activos adquiridos en arrendamiento financiero"
+  ],
+  [
+    "65513",
+    "Inmuebles, maquinaria y equipo"
+  ],
+  [
+    "65514",
+    "Intangibles"
+  ],
+  [
+    "65515",
+    "Activos biológicos"
+  ],
+  [
+    "6552",
+    "Operaciones discontinuadas – Abandono de activos"
+  ],
+  [
+    "65521",
+    "Inversiones inmobiliarias"
+  ],
+  [
+    "65522",
+    "Activos adquiridos en arrendamiento financiero"
+  ],
+  [
+    "65523",
+    "Inmuebles, maquinaria y equipo"
+  ],
+  [
+    "65524",
+    "Intangibles"
+  ],
+  [
+    "65525",
+    "Activos biológicos"
+  ],
+  [
+    "656",
+    "Suministros"
+  ],
+  [
+    "658",
+    "Gestión medioambiental"
+  ],
+  [
+    "659",
+    "Otros gastos de gestión"
+  ],
+  [
+    "6591",
+    "Donaciones"
+  ],
+  [
+    "6592",
+    "Sanciones administrativas"
+  ],
+  [
+    "66",
+    "PERDIDA POR MEDICIÓN DE ACTIVOS NO FINANCIEROS AL VALOR RAZONABLE"
+  ],
+  [
+    "661",
+    "Activo realizable"
+  ],
+  [
+    "6611",
+    "Mercaderías"
+  ],
+  [
+    "6612",
+    "Productos terminados"
+  ],
+  [
+    "6613",
+    "Activos no corrientes mantenidos para la venta"
+  ],
+  [
+    "66131",
+    "Inversión inmobiliaria"
+  ],
+  [
+    "66132",
+    "Inmuebles, maquinaria y equipo"
+  ],
+  [
+    "66133",
+    "Intangibles"
+  ],
+  [
+    "66134",
+    "Activos biológicos"
+  ],
+  [
+    "662",
+    "Activo inmovilizado"
+  ],
+  [
+    "6621",
+    "Inversiones inmobiliarias"
+  ],
+  [
+    "6622",
+    "Activos biológicos"
+  ],
+  [
+    "67",
+    "GASTOS FINANCIEROS"
+  ],
+  [
+    "671",
+    "Gastos en operaciones de endeudamiento y otros"
+  ],
+  [
+    "6711",
+    "Préstamos de instituciones financieras y otras entidades"
+  ],
+  [
+    "6712",
+    "Contratos de arrendamiento financiero"
+  ],
+  [
+    "6713",
+    "Emisión y colocación de instrumentos representativos de deuda y patrimonio"
+  ],
+  [
+    "6714",
+    "Documentos vendidos o descontados"
+  ],
+  [
+    "672",
+    "Pérdida por instrumentos financieros derivados"
+  ],
+  [
+    "673",
+    "Intereses por préstamos y otras obligaciones"
+  ],
+  [
+    "6731",
+    "Préstamos de instituciones financieras y otras entidades"
+  ],
+  [
+    "67311",
+    "Instituciones financieras"
+  ],
+  [
+    "67312",
+    "Otras entidades"
+  ],
+  [
+    "6732",
+    "Contratos de arrendamiento financiero"
+  ],
+  [
+    "6733",
+    "Otros instrumentos financieros por pagar"
+  ],
+  [
+    "6734",
+    "Documentos vendidos o descontados"
+  ],
+  [
+    "6735",
+    "Obligaciones emitidas"
+  ],
+  [
+    "6736",
+    "Obligaciones comerciales"
+  ],
+  [
+    "6737",
+    "Obligaciones tributarias"
+  ],
+  [
+    "674",
+    "Gastos en operaciones de factoraje (factoring)"
+  ],
+  [
+    "6741",
+    "Gastos por menor valor"
+  ],
+  [
+    "675",
+    "Descuentos concedidos por pronto pago"
+  ],
+  [
+    "676",
+    "Diferencia de cambio"
+  ],
+  [
+    "677",
+    "Pérdida por medición de activos y pasivos financieros al valor razonable"
+  ],
+  [
+    "6771",
+    "Inversiones para negociación"
+  ],
+  [
+    "6772",
+    "Inversiones disponibles para la venta"
+  ],
+  [
+    "6773",
+    "Otros"
+  ],
+  [
+    "678",
+    "Participación en resultados de entidades relacionadas"
+  ],
+  [
+    "6781",
+    "Participación en los resultados de subsidiarias y asociadas bajo el método del valor patrimonial"
+  ],
+  [
+    "6782",
+    "Participaciones en negocios conjuntos"
+  ],
+  [
+    "679",
+    "Otros gastos financieros"
+  ],
+  [
+    "6791",
+    "Primas por opciones"
+  ],
+  [
+    "6792",
+    "Gastos financieros en medición a valor descontado"
+  ],
+  [
+    "68",
+    "VALUACIÓN Y DETERIORO DE ACTIVOS Y PROVISIONES"
+  ],
+  [
+    "681",
+    "Depreciación"
+  ],
+  [
+    "6811",
+    "Depreciación de inversiones inmobiliarias"
+  ],
+  [
+    "68111",
+    "Edificaciones – Costo"
+  ],
+  [
+    "68112",
+    "Edificaciones – Revaluación"
+  ],
+  [
+    "68113",
+    "Edificaciones – Costo de financiación"
+  ],
+  [
+    "6812",
+    "Depreciación de activos adquiridos en arrendamiento financiero – Inversiones inmobiliarias"
+  ],
+  [
+    "68121",
+    "Edificaciones"
+  ],
+  [
+    "6813",
+    "Depreciación de activos adquiridos en arrendamiento financiero – Inmuebles, maquinaria y equipo"
+  ],
+  [
+    "68131",
+    "Edificaciones"
+  ],
+  [
+    "68132",
+    "Maquinarias y equipos de explotación"
+  ],
+  [
+    "68133",
+    "Equipo de transporte"
+  ],
+  [
+    "68134",
+    "Equipos diversos"
+  ],
+  [
+    "6814",
+    "Depreciación de inmuebles, maquinaria y equipo – Costo"
+  ],
+  [
+    "68141",
+    "Edificaciones"
+  ],
+  [
+    "68142",
+    "Maquinarias y equipos de explotación"
+  ],
+  [
+    "68143",
+    "Equipo de transporte"
+  ],
+  [
+    "68144",
+    "Muebles y enseres"
+  ],
+  [
+    "68145",
+    "Equipos diversos"
+  ],
+  [
+    "68146",
+    "Herramientas y unidades de reemplazo"
+  ],
+  [
+    "6815",
+    "Depreciación de inmuebles, maquinaria y equipo – Revaluación"
+  ],
+  [
+    "68151",
+    "Edificaciones"
+  ],
+  [
+    "68152",
+    "Maquinarias y equipos de explotación"
+  ],
+  [
+    "68153",
+    "Equipo de transporte"
+  ],
+  [
+    "68154",
+    "Muebles y enseres"
+  ],
+  [
+    "68155",
+    "Equipos diversos"
+  ],
+  [
+    "68156",
+    "Herramientas y unidades de reemplazo"
+  ],
+  [
+    "6816",
+    "Depreciación de inmuebles, maquinaria y equipo – Costos de financiación"
+  ],
+  [
+    "68161",
+    "Edificaciones"
+  ],
+  [
+    "68162",
+    "Maquinarias y equipos de explotación"
+  ],
+  [
+    "6817",
+    "Depreciación de activos biológicos en producción – Costo"
+  ],
+  [
+    "68171",
+    "Activos biológicos de origen animal"
+  ],
+  [
+    "68172",
+    "Activos biológicos de origen vegetal"
+  ],
+  [
+    "6818",
+    "Depreciación de activos biológicos en producción – Costo de financiación"
+  ],
+  [
+    "68181",
+    "Activos biológicos de origen animal"
+  ],
+  [
+    "68182",
+    "Activos biológicos de origen vegetal"
+  ],
+  [
+    "682",
+    "Amortización de intangibles"
+  ],
+  [
+    "6821",
+    "Amortización de intangibles – Costo"
+  ],
+  [
+    "68211",
+    "Concesiones, licencias y otros derechos"
+  ],
+  [
+    "68212",
+    "Patentes y propiedad industrial"
+  ],
+  [
+    "68213",
+    "Programas de computadora (software)"
+  ],
+  [
+    "68214",
+    "Costos de exploración y desarrollo"
+  ],
+  [
+    "68215",
+    "Fórmulas, diseños y prototipos"
+  ],
+  [
+    "68219",
+    "Otros activos intangibles"
+  ],
+  [
+    "6822",
+    "Amortización de intangibles – Revaluación"
+  ],
+  [
+    "68221",
+    "Concesiones, licencias y otros derechos"
+  ],
+  [
+    "68222",
+    "Patentes y propiedad industrial"
+  ],
+  [
+    "68223",
+    "Programas de computadora (software)"
+  ],
+  [
+    "68224",
+    "Costos de exploración y desarrollo"
+  ],
+  [
+    "68225",
+    "Fórmulas, diseños y prototipos"
+  ],
+  [
+    "68229",
+    "Otros activos intangibles"
+  ],
+  [
+    "683",
+    "Agotamiento"
+  ],
+  [
+    "6831",
+    "Agotamiento de recursos naturales adquiridos"
+  ],
+  [
+    "684",
+    "Valuación de activos"
+  ],
+  [
+    "6841",
+    "Estimación de cuentas de cobranza dudosa"
+  ],
+  [
+    "68411",
+    "Cuentas por cobrar comerciales – Terceros"
+  ],
+  [
+    "68412",
+    "Cuentas por cobrar comerciales – Relacionadas"
+  ],
+  [
+    "68413",
+    "Cuentas por cobrar al personal, a los accionistas (socios), directores y gerentes"
+  ],
+  [
+    "68414",
+    "Cuentas por cobrar diversas – Terceros"
+  ],
+  [
+    "68415",
+    "Cuentas por cobrar diversas – Relacionadas"
+  ],
+  [
+    "6843",
+    "Desvalorización de inversiones mobiliarias"
+  ],
+  [
+    "68431",
+    "Inversiones a ser mantenidas hasta el vencimiento"
+  ],
+  [
+    "68432",
+    "Instrumentos financieros representativos de derecho patrimonial"
+  ],
+  [
+    "685",
+    "Deterioro del valor de los activos"
+  ],
+  [
+    "6851",
+    "Desvalorización de inversiones inmobiliarias"
+  ],
+  [
+    "68511",
+    "Edificaciones"
+  ],
+  [
+    "6852",
+    "Desvalorización de inmuebles maquinaria y equipo"
+  ],
+  [
+    "68521",
+    "Edificaciones"
+  ],
+  [
+    "68522",
+    "Maquinarias y equipos de explotación"
+  ],
+  [
+    "68523",
+    "Equipo de transporte"
+  ],
+  [
+    "68524",
+    "Muebles y enseres"
+  ],
+  [
+    "68525",
+    "Equipos diversos"
+  ],
+  [
+    "68526",
+    "Herramientas y unidades de reemplazo"
+  ],
+  [
+    "6853",
+    "Desvalorización de intangibles"
+  ],
+  [
+    "68531",
+    "Concesiones, licencias y otros derechos"
+  ],
+  [
+    "68532",
+    "Patentes y propiedad industrial"
+  ],
+  [
+    "68533",
+    "Programas de computadora (software)"
+  ],
+  [
+    "68534",
+    "Costos de exploración y desarrollo"
+  ],
+  [
+    "68535",
+    "Fórmulas, diseños y prototipos"
+  ],
+  [
+    "68536",
+    "Otros activos intangibles"
+  ],
+  [
+    "68537",
+    "Plusvalía mercantil"
+  ],
+  [
+    "6854",
+    "Desvalorización de activos biológicos en producción"
+  ],
+  [
+    "68541",
+    "Activos biológicos de origen animal"
+  ],
+  [
+    "68542",
+    "Activos biológicos de origen vegetal"
+  ],
+  [
+    "686",
+    "Provisiones"
+  ],
+  [
+    "6861",
+    "Provisión para litigios"
+  ],
+  [
+    "68611",
+    "Provisión para litigios – Costo"
+  ],
+  [
+    "68612",
+    "Provisión para litigios – Actualización financiera"
+  ],
+  [
+    "6862",
+    "Provisión por desmantelamiento, retiro o rehabilitación del inmovilizado"
+  ],
+  [
+    "68621",
+    "Provisión por desmantelamiento, retiro o rehabilitación del inmovilizado – Costo"
+  ],
+  [
+    "68622",
+    "Provisión por desmantelamiento, retiro o rehabilitación del inmovilizado – Actualización financiera"
+  ],
+  [
+    "6863",
+    "Provisión para reestructuraciones"
+  ],
+  [
+    "6864",
+    "Provisión para protección y remediación del medio ambiente"
+  ],
+  [
+    "68641",
+    "Provisión para protección y remediación del medio ambiente – Costo"
+  ],
+  [
+    "68642",
+    "Provisión para protección y remediación del medio ambiente – Actualización financiera"
+  ],
+  [
+    "6866",
+    "Provisión para garantías"
+  ],
+  [
+    "68661",
+    "Provisión para garantías – Costo"
+  ],
+  [
+    "68662",
+    "Provisión para garantías – Actualización financiera"
+  ],
+  [
+    "6869",
+    "Otras provisiones"
+  ],
+  [
+    "69",
+    "COSTO DE VENTAS"
+  ],
+  [
+    "691",
+    "Mercaderías"
+  ],
+  [
+    "6911",
+    "Mercaderías manufacturadas"
+  ],
+  [
+    "69111",
+    "Terceros"
+  ],
+  [
+    "69112",
+    "Relacionadas"
+  ],
+  [
+    "6912",
+    "Mercaderías de extracción"
+  ],
+  [
+    "69121",
+    "Terceros"
+  ],
+  [
+    "69122",
+    "Relacionadas"
+  ],
+  [
+    "6913",
+    "Mercaderías agropecuarias y piscícolas"
+  ],
+  [
+    "69131",
+    "Terceros"
+  ],
+  [
+    "69132",
+    "Relacionadas"
+  ],
+  [
+    "6914",
+    "Mercaderías inmuebles"
+  ],
+  [
+    "69141",
+    "Terceros"
+  ],
+  [
+    "69142",
+    "Relacionadas"
+  ],
+  [
+    "6915",
+    "Otras mercaderías"
+  ],
+  [
+    "69151",
+    "Terceros"
+  ],
+  [
+    "69152",
+    "Relacionadas"
+  ],
+  [
+    "692",
+    "Productos terminados"
+  ],
+  [
+    "6921",
+    "Productos manufacturados"
+  ],
+  [
+    "69211",
+    "Terceros"
+  ],
+  [
+    "69212",
+    "Relacionadas"
+  ],
+  [
+    "6922",
+    "Productos de extracción terminados"
+  ],
+  [
+    "69221",
+    "Terceros"
+  ],
+  [
+    "69222",
+    "Relacionadas"
+  ],
+  [
+    "6923",
+    "Productos agropecuarios y piscícolas terminados"
+  ],
+  [
+    "69231",
+    "Terceros"
+  ],
+  [
+    "69232",
+    "Relacionadas"
+  ],
+  [
+    "6924",
+    "Productos inmuebles terminados"
+  ],
+  [
+    "69241",
+    "Terceros"
+  ],
+  [
+    "69242",
+    "Relacionadas"
+  ],
+  [
+    "6925",
+    "Existencias de servicios terminados"
+  ],
+  [
+    "69251",
+    "Terceros"
+  ],
+  [
+    "69252",
+    "Relacionadas"
+  ],
+  [
+    "6926",
+    "Costos de financiación – Productos terminados"
+  ],
+  [
+    "69261",
+    "Terceros"
+  ],
+  [
+    "69262",
+    "Relacionadas"
+  ],
+  [
+    "6927",
+    "Costos de producción no absorbido – Productos terminados"
+  ],
+  [
+    "6928",
+    "Costo de ineficiencia – Productos terminados"
+  ],
+  [
+    "693",
+    "Subproductos, desechos y desperdicios"
+  ],
+  [
+    "6931",
+    "Subproductos"
+  ],
+  [
+    "69311",
+    "Terceros"
+  ],
+  [
+    "69312",
+    "Relacionadas"
+  ],
+  [
+    "6932",
+    "Desechos y desperdicios"
+  ],
+  [
+    "69321",
+    "Terceros"
+  ],
+  [
+    "69322",
+    "Relacionadas"
+  ],
+  [
+    "694",
+    "Servicios"
+  ],
+  [
+    "6941",
+    "Terceros"
+  ],
+  [
+    "6942",
+    "Relacionadas"
+  ],
+  [
+    "695",
+    "Gastos por desvalorización de existencias"
+  ],
+  [
+    "6951",
+    "Mercaderías"
+  ],
+  [
+    "6952",
+    "Productos terminados"
+  ],
+  [
+    "6953",
+    "Subproductos, desechos y desperdicios"
+  ],
+  [
+    "6954",
+    "Productos en proceso"
+  ],
+  [
+    "6955",
+    "Materias primas"
+  ],
+  [
+    "6956",
+    "Materiales auxiliares, suministros y repuestos"
+  ],
+  [
+    "6957",
+    "Envases y embalajes"
+  ],
+  [
+    "6958",
+    "Existencias por recibir"
+  ],
+  [
+    "70",
+    "VENTAS"
+  ],
+  [
+    "701",
+    "Mercaderías"
+  ],
+  [
+    "7011",
+    "Mercaderías manufacturadas"
+  ],
+  [
+    "70111",
+    "Terceros"
+  ],
+  [
+    "70112",
+    "Relacionadas"
+  ],
+  [
+    "7012",
+    "Mercaderías de extracción"
+  ],
+  [
+    "70121",
+    "Terceros"
+  ],
+  [
+    "70122",
+    "Relacionadas"
+  ],
+  [
+    "7013",
+    "Mercaderías agropecuarias y piscícolas"
+  ],
+  [
+    "70131",
+    "Terceros"
+  ],
+  [
+    "70132",
+    "Relacionadas"
+  ],
+  [
+    "7014",
+    "Mercaderías inmuebles"
+  ],
+  [
+    "70141",
+    "Terceros"
+  ],
+  [
+    "70142",
+    "Relacionadas"
+  ],
+  [
+    "7015",
+    "Mercaderías – Otras"
+  ],
+  [
+    "70151",
+    "Terceros"
+  ],
+  [
+    "70152",
+    "Relacionadas"
+  ],
+  [
+    "702",
+    "Productos terminados"
+  ],
+  [
+    "7021",
+    "Productos manufacturados"
+  ],
+  [
+    "70211",
+    "Terceros"
+  ],
+  [
+    "70212",
+    "Relacionadas"
+  ],
+  [
+    "7022",
+    "Productos de extracción terminados"
+  ],
+  [
+    "70221",
+    "Terceros"
+  ],
+  [
+    "70222",
+    "Relacionadas"
+  ],
+  [
+    "7023",
+    "Productos agropecuarios y piscícolas terminados"
+  ],
+  [
+    "70231",
+    "Terceros"
+  ],
+  [
+    "70232",
+    "Relacionadas"
+  ],
+  [
+    "7024",
+    "Productos inmuebles terminados"
+  ],
+  [
+    "70241",
+    "Terceros"
+  ],
+  [
+    "70242",
+    "Relacionadas"
+  ],
+  [
+    "7025",
+    "Existencias de servicios terminados"
+  ],
+  [
+    "70251",
+    "Terceros"
+  ],
+  [
+    "70252",
+    "Relacionadas"
+  ],
+  [
+    "703",
+    "Subproductos, desechos y desperdicios"
+  ],
+  [
+    "7031",
+    "Subproductos"
+  ],
+  [
+    "70311",
+    "Terceros"
+  ],
+  [
+    "70312",
+    "Relacionadas"
+  ],
+  [
+    "7032",
+    "Desechos y desperdicios"
+  ],
+  [
+    "70321",
+    "Terceros"
+  ],
+  [
+    "70322",
+    "Relacionadas"
+  ],
+  [
+    "704",
+    "Prestación de servicios"
+  ],
+  [
+    "7041",
+    "Terceros"
+  ],
+  [
+    "7042",
+    "Relacionadas"
+  ],
+  [
+    "709",
+    "Devoluciones sobre ventas"
+  ],
+  [
+    "7091",
+    "Mercaderías – Terceros"
+  ],
+  [
+    "70911",
+    "Mercaderías manufacturadas"
+  ],
+  [
+    "70912",
+    "Mercaderías de extracción"
+  ],
+  [
+    "70913",
+    "Mercaderías agropecuarias y piscícolas"
+  ],
+  [
+    "70914",
+    "Mercaderías inmuebles"
+  ],
+  [
+    "70915",
+    "Mercaderías – Otras"
+  ],
+  [
+    "7092",
+    "Mercaderías – Relacionadas"
+  ],
+  [
+    "70921",
+    "Mercaderías manufacturadas"
+  ],
+  [
+    "70922",
+    "Mercaderías de extracción"
+  ],
+  [
+    "70923",
+    "Mercaderías agropecuarias y piscícolas"
+  ],
+  [
+    "70924",
+    "Mercaderías inmuebles"
+  ],
+  [
+    "70925",
+    "Mercaderías – Otras"
+  ],
+  [
+    "7093",
+    "Productos terminados – Terceros"
+  ],
+  [
+    "70931",
+    "Productos manufacturados"
+  ],
+  [
+    "70932",
+    "Productos de extracción terminados"
+  ],
+  [
+    "70933",
+    "Productos agropecuarios y piscícolas terminados"
+  ],
+  [
+    "70934",
+    "Productos inmuebles terminados"
+  ],
+  [
+    "70935",
+    "Existencias de servicios terminados"
+  ],
+  [
+    "7094",
+    "Productos terminados – Relacionadas"
+  ],
+  [
+    "70941",
+    "Productos manufacturados"
+  ],
+  [
+    "70942",
+    "Productos de extracción terminados"
+  ],
+  [
+    "70943",
+    "Productos agropecuarios y piscícolas terminados"
+  ],
+  [
+    "70944",
+    "Productos inmuebles terminados"
+  ],
+  [
+    "70945",
+    "Existencias de servicios terminados"
+  ],
+  [
+    "7095",
+    "Subproductos, desechos y desperdicios – Terceros"
+  ],
+  [
+    "70951",
+    "Subproductos"
+  ],
+  [
+    "70952",
+    "Desechos y desperdicios"
+  ],
+  [
+    "7096",
+    "Subproductos, desechos y desperdicios – Relacionadas"
+  ],
+  [
+    "70961",
+    "Subproductos"
+  ],
+  [
+    "70962",
+    "Desechos y desperdicios"
+  ],
+  [
+    "71",
+    "VARIACIÓN DE LA PRODUCCIÓN ALMACENADA"
+  ],
+  [
+    "711",
+    "Variación de productos terminados"
+  ],
+  [
+    "7111",
+    "Productos manufacturados"
+  ],
+  [
+    "7112",
+    "Productos de extracción terminados"
+  ],
+  [
+    "7113",
+    "Productos agropecuarios y piscícolas terminados"
+  ],
+  [
+    "7114",
+    "Productos inmuebles terminados"
+  ],
+  [
+    "7115",
+    "Existencias de servicios terminados"
+  ],
+  [
+    "712",
+    "Variación de subproductos, desechos y desperdicios"
+  ],
+  [
+    "7121",
+    "Subproductos"
+  ],
+  [
+    "7122",
+    "Desechos y desperdicios"
+  ],
+  [
+    "713",
+    "Variación de productos en proceso"
+  ],
+  [
+    "7131",
+    "Productos en proceso de manufactura"
+  ],
+  [
+    "7132",
+    "Productos extraídos en proceso de transformación"
+  ],
+  [
+    "7133",
+    "Productos agropecuarios y piscícolas en proceso"
+  ],
+  [
+    "7134",
+    "Productos inmuebles en proceso"
+  ],
+  [
+    "7135",
+    "Existencias de servicios en proceso"
+  ],
+  [
+    "7138",
+    "Otros productos en proceso"
+  ],
+  [
+    "714",
+    "Variación de envases y embalajes"
+  ],
+  [
+    "7141",
+    "Envases"
+  ],
+  [
+    "7142",
+    "Embalajes"
+  ],
+  [
+    "715",
+    "Variación de existencias de servicios"
+  ],
+  [
+    "72",
+    "PRODUCCIÓN DE ACTIVO INMOVILIZADO"
+  ],
+  [
+    "721",
+    "Inversiones inmobiliarias"
+  ],
+  [
+    "7211",
+    "Edificaciones"
+  ],
+  [
+    "722",
+    "Inmuebles, maquinaria y equipo"
+  ],
+  [
+    "7221",
+    "Edificaciones"
+  ],
+  [
+    "7222",
+    "Maquinarias y otros equipos de explotación"
+  ],
+  [
+    "7223",
+    "Equipo de transporte"
+  ],
+  [
+    "7224",
+    "Muebles y enseres"
+  ],
+  [
+    "7225",
+    "Equipos diversos"
+  ],
+  [
+    "723",
+    "Intangibles"
+  ],
+  [
+    "7231",
+    "Programas de computadora (software)"
+  ],
+  [
+    "7232",
+    "Costos de exploración y desarrollo"
+  ],
+  [
+    "7233",
+    "Fórmulas, diseños y prototipos"
+  ],
+  [
+    "724",
+    "Activos biológicos"
+  ],
+  [
+    "7241",
+    "Activos biológicos en desarrollo de origen animal"
+  ],
+  [
+    "7242",
+    "Activos biológicos en desarrollo de origen vegetal"
+  ],
+  [
+    "725",
+    "Costos de financiación capitalizados"
+  ],
+  [
+    "7251",
+    "Costos de financiación – Inversiones inmobiliarias"
+  ],
+  [
+    "72511",
+    "Edificaciones"
+  ],
+  [
+    "7252",
+    "Costos de financiación – Inmuebles, maquinaria y equipo"
+  ],
+  [
+    "72521",
+    "Edificaciones"
+  ],
+  [
+    "72522",
+    "Maquinarias y otros equipos de explotación"
+  ],
+  [
+    "7253",
+    "Costos de financiación – Intangibles"
+  ],
+  [
+    "7254",
+    "Costos de financiación – Activos biológicos en desarrollo"
+  ],
+  [
+    "72541",
+    "Activos biológicos de origen animal"
+  ],
+  [
+    "72542",
+    "Activos biológicos de origen vegetal"
+  ],
+  [
+    "73",
+    "DESCUENTOS, REBAJAS Y BONIFICACIONES OBTENIDOS"
+  ],
+  [
+    "731",
+    "Descuentos, rebajas y bonificaciones obtenidos"
+  ],
+  [
+    "7311",
+    "Terceros"
+  ],
+  [
+    "7312",
+    "Relacionadas"
+  ],
+  [
+    "74",
+    "DESCUENTOS, REBAJAS Y BONIFICACIONES CONCEDIDOS"
+  ],
+  [
+    "741",
+    "Descuentos, rebajas y bonificaciones concedidos"
+  ],
+  [
+    "7411",
+    "Terceros"
+  ],
+  [
+    "7412",
+    "Relacionadas"
+  ],
+  [
+    "75",
+    "OTROS INGRESOS DE GESTIÓN"
+  ],
+  [
+    "751",
+    "Servicios en beneficio del personal"
+  ],
+  [
+    "752",
+    "Comisiones y corretajes"
+  ],
+  [
+    "753",
+    "Regalías"
+  ],
+  [
+    "754",
+    "Alquileres"
+  ],
+  [
+    "7541",
+    "Terrenos"
+  ],
+  [
+    "7542",
+    "Edificaciones"
+  ],
+  [
+    "7543",
+    "Maquinarias y equipos de explotación"
+  ],
+  [
+    "7544",
+    "Equipo de transporte"
+  ],
+  [
+    "7545",
+    "Equipos diversos"
+  ],
+  [
+    "755",
+    "Recuperación de cuentas de valuación"
+  ],
+  [
+    "7551",
+    "Recuperación – Cuentas de cobranza dudosa"
+  ],
+  [
+    "7552",
+    "Recuperación – Desvalorización de existencias"
+  ],
+  [
+    "7553",
+    "Recuperación – Desvalorización de inversiones mobiliarias"
+  ],
+  [
+    "756",
+    "Enajenación de activos inmovilizados"
+  ],
+  [
+    "7561",
+    "Inversiones mobiliarias"
+  ],
+  [
+    "7562",
+    "Inversiones inmobiliarias"
+  ],
+  [
+    "7563",
+    "Activos adquiridos en arrendamiento financiero"
+  ],
+  [
+    "7564",
+    "Inmuebles, maquinaria y equipo"
+  ],
+  [
+    "7565",
+    "Intangibles"
+  ],
+  [
+    "7566",
+    "Activos biológicos"
+  ],
+  [
+    "757",
+    "Recuperación de deterioro de cuentas de activos inmovilizados"
+  ],
+  [
+    "7571",
+    "Recuperación de deterioro de inversiones inmobiliarias"
+  ],
+  [
+    "7572",
+    "Recuperación de deterioro de inmuebles, maquinaria y equipo"
+  ],
+  [
+    "7573",
+    "Recuperación de deterioro de intangibles"
+  ],
+  [
+    "7574",
+    "Recuperación de deterioro de activos biológicos"
+  ],
+  [
+    "759",
+    "Otros ingresos de gestión"
+  ],
+  [
+    "7591",
+    "Subsidios gubernamentales"
+  ],
+  [
+    "7592",
+    "Reclamos al seguro"
+  ],
+  [
+    "7593",
+    "Donaciones"
+  ],
+  [
+    "7599",
+    "Otros ingresos de gestión"
+  ],
+  [
+    "76",
+    "GANANCIA POR MEDICIÓN DE ACTIVOS NO FINANCIEROS AL VALOR RAZONABLE"
+  ],
+  [
+    "761",
+    "Activo realizable"
+  ],
+  [
+    "7611",
+    "Mercaderías"
+  ],
+  [
+    "7612",
+    "Productos terminados"
+  ],
+  [
+    "7613",
+    "Activos no corrientes mantenidos para la venta"
+  ],
+  [
+    "76131",
+    "Inversiones inmobiliarias"
+  ],
+  [
+    "76132",
+    "Inmuebles, maquinaria y equipo"
+  ],
+  [
+    "76133",
+    "Intangibles"
+  ],
+  [
+    "76134",
+    "Activos biológicos"
+  ],
+  [
+    "762",
+    "Activo inmovilizado"
+  ],
+  [
+    "7621",
+    "Inversiones inmobiliarias"
+  ],
+  [
+    "7622",
+    "Activos biológicos"
+  ],
+  [
+    "77",
+    "INGRESOS FINANCIEROS"
+  ],
+  [
+    "771",
+    "Ganancia por instrumento financiero derivado"
+  ],
+  [
+    "772",
+    "Rendimientos ganados"
+  ],
+  [
+    "7721",
+    "Depósitos en instituciones financieras"
+  ],
+  [
+    "7722",
+    "Cuentas por cobrar comerciales"
+  ],
+  [
+    "7723",
+    "Préstamos otorgados"
+  ],
+  [
+    "7724",
+    "Inversiones a ser mantenidas hasta el vencimiento"
+  ],
+  [
+    "7725",
+    "Instrumentos financieros representativos de derecho patrimonial"
+  ],
+  [
+    "773",
+    "Dividendos"
+  ],
+  [
+    "774",
+    "Ingresos en operaciones de factoraje (factoring)"
+  ],
+  [
+    "775",
+    "Descuentos obtenidos por pronto pago"
+  ],
+  [
+    "776",
+    "Diferencia en cambio"
+  ],
+  [
+    "777",
+    "Ganancia por medición de activos y pasivos financieros al valor razonable"
+  ],
+  [
+    "7771",
+    "Inversiones mantenidas para negociación"
+  ],
+  [
+    "7772",
+    "Inversiones disponibles para la venta"
+  ],
+  [
+    "7773",
+    "Otras"
+  ],
+  [
+    "778",
+    "Participación en resultados de entidades relacionadas"
+  ],
+  [
+    "7781",
+    "Participación en los resultados de subsidiarias y asociadas bajo el método del valor patrimonial"
+  ],
+  [
+    "7782",
+    "Ingresos por participaciones en negocios conjuntos"
+  ],
+  [
+    "779",
+    "Otros ingresos financieros"
+  ],
+  [
+    "7792",
+    "Ingresos financieros en medición a valor descontado"
+  ],
+  [
+    "78",
+    "CARGAS CUBIERTAS POR PROVISIONES"
+  ],
+  [
+    "781",
+    "Cargas cubiertas por provisiones"
+  ],
+  [
+    "79",
+    "CARGAS IMPUTABLES A CUENTAS DE COSTOS Y GASTOS"
+  ],
+  [
+    "791",
+    "Cargas imputables a cuentas de costos y gastos"
+  ],
+  [
+    "792",
+    "Gastos financieros imputables a cuentas de existencias"
+  ],
+  [
+    "80",
+    "MARGEN COMERCIAL"
+  ],
+  [
+    "801",
+    "Margen comercial"
+  ],
+  [
+    "81",
+    "PRODUCCIÓN DEL EJERCICIO"
+  ],
+  [
+    "811",
+    "Producción de bienes"
+  ],
+  [
+    "812",
+    "Producción de servicios"
+  ],
+  [
+    "813",
+    "Producción de activo inmovilizado"
+  ],
+  [
+    "82",
+    "VALOR AGREGADO"
+  ],
+  [
+    "821",
+    "Valor agregado"
+  ],
+  [
+    "83",
+    "EXCEDENTE BRUTO (INSUFICIENCIA BRUTA) DE EXPLOTACIÓN"
+  ],
+  [
+    "831",
+    "Excedente bruto (insuficiencia bruta) de explotación"
+  ],
+  [
+    "84",
+    "RESULTADO DE EXPLOTACIÓN"
+  ],
+  [
+    "841",
+    "Resultado de explotación"
+  ],
+  [
+    "85",
+    "RESULTADO ANTES DE PARTICIPACIONES E IMPUESTOS"
+  ],
+  [
+    "851",
+    "Resultado antes de participaciones e impuestos"
+  ],
+  [
+    "87",
+    "PARTICIPACIONES DE LOS TRABAJADORES"
+  ],
+  [
+    "871",
+    "Participación de los trabajadores – Corriente"
+  ],
+  [
+    "872",
+    "Participación de los trabajadores – Diferida"
+  ],
+  [
+    "88",
+    "IMPUESTO A LA RENTA"
+  ],
+  [
+    "881",
+    "Impuesto a la renta – Corriente"
+  ],
+  [
+    "882",
+    "Impuesto a la renta – Diferido"
+  ],
+  [
+    "89",
+    "DETERMINACIÓN DEL RESULTADO DEL EJERCICIO"
+  ],
+  [
+    "891",
+    "Utilidad"
+  ],
+  [
+    "892",
+    "Pérdida"
+  ],
+  [
+    "9",
+    "CONTABILIDAD ANALÍTICA DE EXPLOTACIÓN: COSTOS DE PRODUCCIÓN Y GASTOS POR FUNCIÓN (a estructurar según necesidad de cada entidad)"
+  ],
+  [
+    "01",
+    "BIENES Y VALORES ENTREGADOS"
+  ],
+  [
+    "011",
+    "Bienes en préstamo, custodia y no capitalizables"
+  ],
+  [
+    "0111",
+    "Bienes en préstamo"
+  ],
+  [
+    "0112",
+    "Bienes en custodia"
+  ],
+  [
+    "012",
+    "Valores y bienes entregados en garantía"
+  ],
+  [
+    "0121",
+    "Cartas fianza"
+  ],
+  [
+    "0122",
+    "Cuentas por cobrar"
+  ],
+  [
+    "0123",
+    "Existencias"
+  ],
+  [
+    "0124",
+    "Inversión mobiliaria"
+  ],
+  [
+    "0125",
+    "Inversión inmobiliaria"
+  ],
+  [
+    "0126",
+    "Inmuebles, maquinaria y equipo"
+  ],
+  [
+    "0127",
+    "Intangibles"
+  ],
+  [
+    "0128",
+    "Activos biológicos"
+  ],
+  [
+    "013",
+    "Activos realizables entregados en consignación"
+  ],
+  [
+    "02",
+    "DERECHOS SOBRE INSTRUMENTOS FINANCIEROS"
+  ],
+  [
+    "021",
+    "Primarios"
+  ],
+  [
+    "0211",
+    "Inversiones mantenidas para negociación"
+  ],
+  [
+    "0212",
+    "Inversiones disponibles para la venta"
+  ],
+  [
+    "0213",
+    "Inversiones a ser mantenidas hasta el vencimiento"
+  ],
+  [
+    "022",
+    "Derivados"
+  ],
+  [
+    "0221",
+    "Contratos a futuro"
+  ],
+  [
+    "0222",
+    "Contratos a término (forward)"
+  ],
+  [
+    "0223",
+    "Permutas financieras (swap)"
+  ],
+  [
+    "0224",
+    "Contratos de opción"
+  ],
+  [
+    "03",
+    "OTRAS CUENTAS DE ORDEN DEUDORAS"
+  ],
+  [
+    "031",
+    "Contratos aprobados"
+  ],
+  [
+    "0311",
+    "Contratos en ejecución"
+  ],
+  [
+    "0312",
+    "Contratos en trámite"
+  ],
+  [
+    "032",
+    "Bienes dados de baja"
+  ],
+  [
+    "0321",
+    "Suministros"
+  ],
+  [
+    "0322",
+    "Inmuebles, maquinaria y equipo"
+  ],
+  [
+    "039",
+    "Diversas"
+  ],
+  [
+    "04",
+    "DEUDORAS POR CONTRA"
+  ],
+  [
+    "06",
+    "BIENES Y VALORES RECIBIDOS"
+  ],
+  [
+    "061",
+    "Bienes recibidos en préstamo y custodia"
+  ],
+  [
+    "0611",
+    "Bienes recibidos en préstamo"
+  ],
+  [
+    "0612",
+    "Bienes recibidos en custodia"
+  ],
+  [
+    "062",
+    "Valores y bienes recibidos en garantía"
+  ],
+  [
+    "0621",
+    "Cartas fianza"
+  ],
+  [
+    "0622",
+    "Cuentas por cobrar"
+  ],
+  [
+    "0623",
+    "Existencias"
+  ],
+  [
+    "0624",
+    "Inversión mobiliaria"
+  ],
+  [
+    "0625",
+    "Inversión inmobiliaria"
+  ],
+  [
+    "0626",
+    "Inmuebles, maquinaria y equipo"
+  ],
+  [
+    "0627",
+    "Intangibles"
+  ],
+  [
+    "0628",
+    "Activos biológicos"
+  ],
+  [
+    "063",
+    "Activos realizables recibidos en consignación"
+  ],
+  [
+    "07",
+    "COMPROMISOS SOBRE INSTRUMENTOS FINANCIEROS"
+  ],
+  [
+    "071",
+    "Primarios"
+  ],
+  [
+    "0711",
+    "Inversiones mantenidas para negociación"
+  ],
+  [
+    "0712",
+    "Inversiones disponibles para la venta"
+  ],
+  [
+    "0713",
+    "Inversiones a ser mantenidas hasta el vencimiento"
+  ],
+  [
+    "072",
+    "Derivados"
+  ],
+  [
+    "0721",
+    "Contratos a futuro"
+  ],
+  [
+    "0722",
+    "Contratos a término (forward)"
+  ],
+  [
+    "0723",
+    "Permutas financieras (swap)"
+  ],
+  [
+    "0724",
+    "Contratos de opción"
+  ],
+  [
+    "08",
+    "OTRAS CUENTAS DE ORDEN ACREEDORAS"
+  ],
+  [
+    "089",
+    "Diversas"
+  ],
+  [
+    "09",
+    "ACREEDORAS POR CONTRA"
+  ]
+]
