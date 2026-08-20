@@ -494,6 +494,191 @@ def validate_asientos(data, pcge_map):
 
     return valid, errors, warnings
 
+def _numeric_from_obj(obj, keys):
+    """Busca de forma tolerante un importe asociado a alguna clave."""
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            kl = str(k).strip().lower()
+            if kl in keys:
+                n = _to_float(v, None)
+                if n is not None:
+                    return n
+            found = _numeric_from_obj(v, keys)
+            if found is not None:
+                return found
+    elif isinstance(obj, list):
+        for item in obj:
+            found = _numeric_from_obj(item, keys)
+            if found is not None:
+                return found
+    return None
+
+
+def _find_account_amount(items, account_code):
+    """Encuentra un saldo/importe de una cuenta en el estado inicial."""
+    if isinstance(items, dict):
+        code = str(items.get("codigo", items.get("cuenta", ""))).strip()
+        if code == account_code:
+            for key in ("importe", "saldo", "monto", "haber", "debe", "valor"):
+                n = _to_float(items.get(key), None)
+                if n is not None and n != 0:
+                    return abs(n)
+        for v in items.values():
+            found = _find_account_amount(v, account_code)
+            if found is not None:
+                return found
+    elif isinstance(items, list):
+        for item in items:
+            found = _find_account_amount(item, account_code)
+            if found is not None:
+                return found
+    return None
+
+
+def _find_operation(operations, number):
+    for op in operations or []:
+        try:
+            if int(op.get("numero")) == int(number):
+                return op
+        except Exception:
+            continue
+    return {}
+
+
+def corregir_retiro_socio(asientos, monografia_json):
+    """
+    Regla específica de la monografía de transformación de TANA:
+
+    - La separación/venta privada de participaciones (Operación 3) NO genera
+      un asiento en la sociedad: no modifica el capital social.
+    - La distribución de utilidades al socio separado (Operación 4) se registra:
+        59111  Debe  -> utilidad acumulada correspondiente al socio
+        48185  Haber -> retención sobre dividendos (5%)
+        44191  Haber -> dividendo neto por pagar
+      y el pago:
+        44191  Debe
+        10411  Haber
+
+    La participación se calcula desde los datos de la monografía cuando están
+    disponibles: participaciones del socio / capital total. Para la práctica
+    actual esto da 15,000 / 60,000 = 25%, y sobre 10,000 de utilidades acumuladas
+    da 2,500; retención 5% = 125; neto = 2,375.
+    """
+    data = monografia_json or {}
+    operaciones = data.get("operaciones", []) or []
+    estado = data.get("estado_inicial", []) or []
+
+    op3 = _find_operation(operaciones, 3)
+    op4 = _find_operation(operaciones, 4)
+
+    desc3 = str(op3.get("descripcion", "")).lower()
+    desc4 = str(op4.get("descripcion", "")).lower()
+    parece_retiro = any(x in (desc3 + " " + desc4) for x in (
+        "separación", "separacion", "socio", "participaciones", "utilidades"
+    ))
+    if not parece_retiro:
+        return asientos
+
+    capital_total = _find_account_amount(estado, "50121")
+    utilidades = _find_account_amount(estado, "59111")
+
+    # La operación 3 suele traer el valor nominal de las participaciones
+    # que corresponden al socio que se retira.
+    participacion_socio = _to_float(op3.get("importe"), None)
+    if participacion_socio is None:
+        participacion_socio = _numeric_from_obj(
+            op3,
+            {"participaciones", "acciones", "valor_participaciones", "valor_nominal"},
+        )
+
+    porcentaje = _to_float(op4.get("porcentaje"), None)
+    if porcentaje is None:
+        porcentaje = _to_float(op3.get("porcentaje"), None)
+    if porcentaje is None and capital_total and participacion_socio is not None:
+        porcentaje = round(participacion_socio / capital_total * 100, 6)
+
+    # Para esta práctica, la información base del estado inicial es 10,000
+    # de utilidades acumuladas y la participación del socio es 25%.
+    if utilidades is None and porcentaje is not None:
+        # No inventamos utilidades: si no están disponibles, dejamos que el
+        # asiento original pase a revisión.
+        return asientos
+    if porcentaje is None or utilidades is None:
+        return asientos
+
+    utilidad_socio = calcular_porcentaje(utilidades, porcentaje)
+    retencion = round(utilidad_socio * 0.05, 2)
+    neto = round(utilidad_socio - retencion, 2)
+
+    # Conservamos el número/fecha/documento/glosa que ya generó Gemini para
+    # no romper la numeración global del libro diario.
+    meta4 = [a for a in asientos if str(a.get("operacion_numero", "")) == "4"]
+    meta_dist = meta4[0] if meta4 else {}
+    meta_pago = meta4[1] if len(meta4) > 1 else meta_dist
+
+    # Si Gemini no trae operacion_numero, usamos el orden y la descripción.
+    if not meta_dist:
+        for a in asientos:
+            txt = str(a.get("glosa", "")).lower()
+            if "utilidad" in txt or "dividend" in txt:
+                meta_dist = a
+                break
+    if not meta_pago:
+        meta_pago = meta_dist
+
+    def make_asiento(meta, default_numero, glosa, lineas):
+        return {
+            "numero": meta.get("numero", default_numero),
+            "fecha": meta.get("fecha", op4.get("fecha", "")),
+            "glosa": glosa,
+            "documento": meta.get("documento", op4.get("documento", "")),
+            "operacion_numero": 4,
+            "requiere_revision": False,
+            "observacion": "",
+            "lineas": lineas,
+        }
+
+    # Operación 3: transacción privada entre socios, sin asiento contable.
+    resultado = [
+        a for a in asientos
+        if str(a.get("operacion_numero", "")) != "3"
+    ]
+
+    # El reparto sustituye cualquier versión previa de la Operación 4.
+    resultado = [
+        a for a in resultado
+        if str(a.get("operacion_numero", "")) != "4"
+    ]
+
+    dist = make_asiento(
+        meta_dist,
+        10,
+        "Reparto de utilidades al socio separado",
+        [
+            {"codigo": "59111", "denominacion": "Utilidades acumuladas", "debe": utilidad_socio, "haber": 0.0,
+             "concepto": f"{porcentaje:.2f}% de utilidades acumuladas"},
+            {"codigo": "48185", "denominacion": "Impuesto a los dividendos", "debe": 0.0, "haber": retencion,
+             "concepto": "Retención del 5% sobre dividendos"},
+            {"codigo": "44191", "denominacion": "Otras cuentas por pagar", "debe": 0.0, "haber": neto,
+             "concepto": "Dividendo neto por pagar al socio"},
+        ],
+    )
+    pago = make_asiento(
+        meta_pago,
+        11,
+        "Pago de utilidades al socio separado",
+        [
+            {"codigo": "44191", "denominacion": "Otras cuentas por pagar", "debe": neto, "haber": 0.0,
+             "concepto": "Cancelación del dividendo neto"},
+            {"codigo": "10411", "denominacion": "Cuentas corrientes operativas", "debe": 0.0, "haber": neto,
+             "concepto": "Pago mediante transferencia bancaria"},
+        ],
+    )
+
+    resultado.extend([dist, pago])
+    return resultado
+
+
 def resolve_asientos_with_gemini():
     client = get_gemini_client()
     if client is None:
@@ -549,6 +734,14 @@ if "monografia_json" in st.session_state:
 
                 if not isinstance(asientos_generados, list):
                     raise ValueError("La clave 'asientos' de Gemini no contiene una lista.")
+
+                # Corrección determinista de la Operación 3/4 de retiro de socio:
+                # la venta privada no se contabiliza en la sociedad y el reparto
+                # de utilidades usa 59111/48185/44191 y luego 44191/10411.
+                asientos_generados = corregir_retiro_socio(
+                    asientos_generados,
+                    st.session_state.get("monografia_json", {}),
+                )
 
                 valid, errors, warnings = validate_asientos(
                     {"asientos": asientos_generados},
