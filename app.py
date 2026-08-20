@@ -36,6 +36,11 @@ GEMINI_MODEL = "gemini-3.5-flash"
 with open("pcge_data.json", encoding="utf-8") as f:
     PCGE_DATA = json.load(f)
 
+# Catálogo disponible para toda la aplicación, incluido el generador de Excel.
+# El motor de Gemini crea su propia copia local, pero el Excel también necesita
+# resolver la denominación de cada código sin depender de esa función.
+pcge_map = {str(cod).strip(): str(desc) for cod, desc in PCGE_DATA}
+
 
 def get_gemini_client():
     api_key = st.secrets.get("GEMINI_API_KEY", "")
