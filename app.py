@@ -1013,12 +1013,28 @@ if "asientos_contables" in st.session_state:
     rr = 2
     pcge_map_export = {str(cod).strip(): str(desc) for cod, desc in PCGE_DATA}
     for asiento in st.session_state["asientos_contables"]:
+        first_line = True
         for line in asiento.get("lineas", []):
             code = str(line.get("codigo", "")).strip()
+
+            # Para una presentación limpia: los datos identificadores del asiento
+            # aparecen únicamente en su primera línea.
+            if first_line:
+                numero = asiento.get("numero", "")
+                fecha = asiento.get("fecha", "")
+                glosa = asiento.get("glosa", "")
+                documento = asiento.get("documento", "")
+                operacion = asiento.get("operacion_numero", "")
+                first_line = False
+            else:
+                numero = ""
+                fecha = ""
+                glosa = ""
+                documento = ""
+                operacion = ""
+
             values = [
-                asiento.get("numero", ""), asiento.get("fecha", ""),
-                asiento.get("glosa", ""), asiento.get("documento", ""),
-                asiento.get("operacion_numero", ""), code,
+                numero, fecha, glosa, documento, operacion, code,
                 pcge_map_export.get(code, line.get("denominacion", "")),
                 line.get("concepto", ""), line.get("debe", 0), line.get("haber", 0)
             ]
@@ -1043,6 +1059,30 @@ if "monografia_texto" in st.session_state:
     ws_mono["A4"].alignment = Alignment(vertical="top", wrap_text=True)
     ws_mono.column_dimensions["A"].width = 120
     ws_mono.freeze_panes = "A4"
+
+# ============================================================
+# PRESENTACIÓN DEL EXCEL FINAL
+# ============================================================
+# Las hojas auxiliares siguen existiendo durante la construcción porque
+# alimentan las fórmulas de los estados financieros, pero no se entregan
+# al usuario. El archivo final muestra únicamente los reportes solicitados.
+HOJAS_PUBLICAS = [
+    "Asientos_Contables",
+    "LM",
+    "HT",
+    "SF",
+    "RF",
+    "RN",
+]
+
+for ws in wb.worksheets:
+    if ws.title not in HOJAS_PUBLICAS:
+        ws.sheet_state = "hidden"
+
+# Dejamos como primera hoja la de Asientos Contables.
+if "Asientos_Contables" in wb.sheetnames:
+    wb._sheets.remove(wb["Asientos_Contables"])
+    wb._sheets.insert(0, wb["Asientos_Contables"])
 
 # ============================================================
 # GENERAR ARCHIVO EN MEMORIA Y OFRECER DESCARGA
