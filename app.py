@@ -1080,9 +1080,12 @@ for ws in wb.worksheets:
         ws.sheet_state = "hidden"
 
 # Dejamos como primera hoja la de Asientos Contables.
+# Guardamos la referencia ANTES de quitarla de la lista; después de
+# wb._sheets.remove(), volver a hacer wb["Asientos_Contables"] provoca KeyError.
 if "Asientos_Contables" in wb.sheetnames:
-    wb._sheets.remove(wb["Asientos_Contables"])
-    wb._sheets.insert(0, wb["Asientos_Contables"])
+    ws_asientos = wb["Asientos_Contables"]
+    wb._sheets.remove(ws_asientos)
+    wb._sheets.insert(0, ws_asientos)
 
 # ============================================================
 # GENERAR ARCHIVO EN MEMORIA Y OFRECER DESCARGA
