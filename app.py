@@ -30,7 +30,13 @@ from google.genai import types
 
 SUPPORTED_TYPES = ["pdf", "doc", "docx", "xls", "xlsx", "jpg", "jpeg", "png"]
 
+# Gemini se configura con una cadena de respaldo para que TANA no se detenga
+# cuando se agota la cuota de un modelo/proyecto. La primera opción conserva
+# el comportamiento actual; las siguientes se usan solo si hay 429/cuota o
+# si el modelo configurado no está disponible.
 GEMINI_MODEL = st.secrets.get("TANA_GEMINI_MODEL", os.getenv("TANA_GEMINI_MODEL", "gemini-3.5-flash"))
+GEMINI_MODEL_2 = st.secrets.get("TANA_GEMINI_MODEL_2", os.getenv("TANA_GEMINI_MODEL_2", "gemini-3.5-flash-lite"))
+GEMINI_MODEL_3 = st.secrets.get("TANA_GEMINI_MODEL_3", os.getenv("TANA_GEMINI_MODEL_3", "gemini-2.5-flash"))
 
 # Cargar el PCGE antes del motor de resolución, incluso antes de generar el Excel.
 PCGE_PATHS = [
@@ -200,11 +206,108 @@ def aplicar_calculos_deterministas(operaciones):
     return resultados
 
 
-def get_gemini_client():
-    api_key = st.secrets.get("GEMINI_API_KEY", "")
+def _secret_or_env(name, default=""):
+    try:
+        value = st.secrets.get(name, "")
+    except Exception:
+        value = ""
+    return value or os.getenv(name, default) or default
+
+
+def get_gemini_profiles():
+    """Devuelve las rutas Gemini disponibles, en orden de preferencia.
+
+    Perfil 1: proyecto/modelo actual.
+    Perfil 2: segundo proyecto (si se proporciona GEMINI_API_KEY_2) o, si no,
+              el mismo proyecto con un modelo alternativo de menor costo.
+    Perfil 3: tercer proyecto (si se proporciona GEMINI_API_KEY_3) o, si no,
+              otro modelo alternativo.
+    """
+    key1 = _secret_or_env("GEMINI_API_KEY")
+    key2 = _secret_or_env("GEMINI_API_KEY_2") or key1
+    key3 = _secret_or_env("GEMINI_API_KEY_3") or key1
+
+    profiles = []
+    seen = set()
+    candidates = [
+        (key1, GEMINI_MODEL, "Principal"),
+        (key2, GEMINI_MODEL_2, "Respaldo 1"),
+        (key3, GEMINI_MODEL_3, "Respaldo 2"),
+    ]
+    for api_key, model, label in candidates:
+        api_key = str(api_key or "").strip()
+        model = str(model or "").strip()
+        if not api_key or not model:
+            continue
+        marker = (api_key, model)
+        if marker in seen:
+            continue
+        seen.add(marker)
+        profiles.append({"api_key": api_key, "model": model, "label": label})
+    return profiles
+
+
+def get_gemini_client(api_key=None):
+    api_key = api_key or _secret_or_env("GEMINI_API_KEY")
     if not api_key:
         return None
     return genai.Client(api_key=api_key)
+
+
+def _is_gemini_fallback_error(exc):
+    low = str(exc).lower()
+    return any(token in low for token in (
+        "429", "resource_exhausted", "quota", "rate limit",
+        "not found", "model not found", "unsupported model",
+    ))
+
+
+def _fallback_error_message(errors):
+    if not errors:
+        return "No hay una configuración de Gemini disponible."
+    details = []
+    for label, model, exc in errors:
+        low = str(exc).lower()
+        if "429" in low or "resource_exhausted" in low or "quota" in low:
+            details.append(f"{label} ({model}): cuota agotada")
+        elif "not found" in low or "unsupported model" in low:
+            details.append(f"{label} ({model}): modelo no disponible")
+        else:
+            details.append(f"{label} ({model}): {str(exc)[:180]}")
+    return (
+        "TANA intentó las rutas disponibles de Gemini y ninguna pudo procesar "
+        "la solicitud. Revisiones realizadas: " + "; ".join(details) + ". "
+        "Puedes configurar GEMINI_API_KEY_2/GEMINI_API_KEY_3 y sus modelos "
+        "alternativos en Streamlit Secrets."
+    )
+
+
+def _generate_with_fallback(contents_factory, config):
+    """Genera contenido probando automáticamente las rutas Gemini disponibles."""
+    profiles = get_gemini_profiles()
+    if not profiles:
+        raise RuntimeError(
+            "TANA no tiene configurada ninguna GEMINI_API_KEY. En Streamlit "
+            "abre App settings → Secrets y agrega GEMINI_API_KEY = \"TU_CLAVE\"."
+        )
+
+    errors = []
+    for profile in profiles:
+        client = get_gemini_client(profile["api_key"])
+        try:
+            response = client.models.generate_content(
+                model=profile["model"],
+                contents=contents_factory(client),
+                config=config,
+            )
+            return response, profile
+        except Exception as exc:
+            errors.append((profile["label"], profile["model"], exc))
+            if not _is_gemini_fallback_error(exc):
+                raise RuntimeError(str(exc)) from exc
+
+    raise RuntimeError(_fallback_error_message(errors))
+
 
 EXTRACTION_PROMPT = """
 Eres el módulo de extracción documental de TANA, un sistema contable peruano.
@@ -257,42 +360,59 @@ def _gemini_error_message(exc):
     low = msg.lower()
     if "429" in low or "resource_exhausted" in low or "quota" in low:
         return (
-            "Se alcanzó la cuota de Gemini para este proyecto/modelo. "
-            "No es un error de la monografía ni de TANA. Espera a que se restablezca "
-            "la cuota o aumenta el límite/facturación de Gemini API. "
-            f"Modelo actual: {GEMINI_MODEL}."
+            "Se agotó una ruta de Gemini y TANA intentó automáticamente una ruta de respaldo. "
+            "Si todas las rutas fallan, configura GEMINI_API_KEY_2 o GEMINI_API_KEY_3 "
+            "en Streamlit Secrets. "
+            f"Ruta principal: {GEMINI_MODEL}."
         )
     return msg
 
+
 def extract_with_gemini(uploaded):
-    client = get_gemini_client()
-    if client is None:
+    profiles = get_gemini_profiles()
+    if not profiles:
         raise RuntimeError(
-            "TANA no tiene configurada GEMINI_API_KEY. "
+            "TANA no tiene configurada ninguna GEMINI_API_KEY. "
             "En Streamlit abre App settings → Secrets y agrega "
             'GEMINI_API_KEY = "TU_CLAVE".'
         )
 
     suffix = "." + uploaded.name.rsplit(".", 1)[-1].lower()
     temp_path = None
+    uploaded_bytes = uploaded.getvalue()
+
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            tmp.write(uploaded.getvalue())
+            tmp.write(uploaded_bytes)
             temp_path = tmp.name
 
-        gemini_file = client.files.upload(file=temp_path)
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=[gemini_file, EXTRACTION_PROMPT],
-            config=types.GenerateContentConfig(response_mime_type="application/json"),
-        )
-        raw = response.text or ""
-        return json.loads(raw)
-    except Exception as exc:
-        raise RuntimeError(_gemini_error_message(exc)) from exc
+        errors = []
+        for profile in profiles:
+            client = get_gemini_client(profile["api_key"])
+            gemini_file = None
+            try:
+                # Cada perfil tiene su propio cliente/proyecto. El archivo se sube
+                # a ese proyecto y solo entonces se consume la generación.
+                gemini_file = client.files.upload(file=temp_path)
+                response = client.models.generate_content(
+                    model=profile["model"],
+                    contents=[gemini_file, EXTRACTION_PROMPT],
+                    config=types.GenerateContentConfig(response_mime_type="application/json"),
+                )
+                raw = response.text or ""
+                data = json.loads(raw)
+                return data
+            except Exception as exc:
+                errors.append((profile["label"], profile["model"], exc))
+                if not _is_gemini_fallback_error(exc):
+                    raise RuntimeError(_gemini_error_message(exc)) from exc
+                continue
+
+        raise RuntimeError(_fallback_error_message(errors))
     finally:
         if temp_path and os.path.exists(temp_path):
             os.remove(temp_path)
+
 
 def extraction_to_text(data):
     parts = []
@@ -323,6 +443,15 @@ def extraction_to_text(data):
             parts.append(f"- {item}")
 
     return "\n".join(parts)
+
+profiles_status = get_gemini_profiles()
+if profiles_status:
+    st.caption(
+        "🤖 Gemini: " + " → ".join(
+            f"{p['label']} ({p['model']})" for p in profiles_status
+        )
+        + ". TANA cambiará automáticamente de ruta si una cuota se agota."
+    )
 
 with st.expander("📥 1. Subir monografía", expanded=True):
     uploaded_file = st.file_uploader(
@@ -893,9 +1022,8 @@ def corregir_retiro_socio(asientos, monografia_json):
     return resultado
 
 def resolve_asientos_with_gemini():
-    client = get_gemini_client()
-    if client is None:
-        raise RuntimeError("No está configurada GEMINI_API_KEY en Streamlit Secrets.")
+    if not get_gemini_profiles():
+        raise RuntimeError("No está configurada ninguna GEMINI_API_KEY en Streamlit Secrets.")
 
     pcge_map = {str(cod).strip(): str(desc) for cod, desc in PCGE_DATA}
     # Solo cuentas de 5 dígitos: el usuario indicó que este es el nivel operativo de TANA.
@@ -913,12 +1041,16 @@ def resolve_asientos_with_gemini():
         )
     )
 
-    response = client.models.generate_content(
-        model=GEMINI_MODEL,
-        contents=[prompt],
-        config=types.GenerateContentConfig(response_mime_type="application/json"),
+    def make_contents(_client):
+        return [prompt]
+
+    response, profile = _generate_with_fallback(
+        make_contents,
+        types.GenerateContentConfig(response_mime_type="application/json"),
     )
     data = json.loads(response.text or "{}")
+    data.setdefault("_tana_gemini_route", profile["label"])
+    data.setdefault("_tana_gemini_model", profile["model"])
     return data, pcge_map
 
 if "monografia_json" in st.session_state:
