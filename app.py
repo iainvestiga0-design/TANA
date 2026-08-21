@@ -2207,10 +2207,9 @@ ws7.freeze_panes = 'B5'
 # ============================================================
 ws9 = wb.create_sheet('ESF')
 _report_title(ws9, 'ESTADO DE SITUACIÓN FINANCIERA')
-# En el modelo enviado el ESF es un formato de dos bloques, pero se mantiene
-# una sola hoja para que sea fácil de imprimir y revisar.
+
+# Formato de dos bloques, alineado con el modelo del usuario.
 ws9['B4'] = 'ACTIVO'
-ws9['B4'].font = BOLD
 ws9['D4'] = 'Notas'
 ws9['E4'] = 'AÑO 2026'
 for c in (2,4,5):
@@ -2225,45 +2224,80 @@ for c in (7,9,10):
     ws9.cell(4,c).font = BOLD
     ws9.cell(4,c).alignment = Alignment(horizontal='center')
 
-# Se usa una fila compartida para ambos bloques, tal como el modelo.
-r = 5
-left_rows = []
-right_rows = []
+# En el ESF se separan correctamente los saldos por naturaleza:
+#   - Activo: cuentas 1, 2 y 3 con saldo deudor, más cuentas 4 con saldo deudor
+#             (por ejemplo, crédito fiscal).
+#   - Pasivo: cuentas 4 con saldo acreedor.
+#   - Patrimonio: cuentas 5, respetando su saldo deudor/acreedor.
+# Esto evita que una cuenta 40 sea presentada simultáneamente como activo y pasivo.
 
+def _sum_ht_prefixes(prefixes, column):
+    if not prefixes:
+        return '=0'
+    parts = []
+    for prefix in prefixes:
+        parts.append(
+            f'SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*HT!${column}$4:${column}${HT_LAST_ROW})'
+        )
+    return '=' + '+'.join(parts)
+
+# --------------------------- ACTIVO ---------------------------
+r = 5
 ws9.cell(r,2,'ACTIVO CORRIENTE').font = BOLD
-ws9.cell(r,7,'PASIVO CORRIENTE').font = BOLD
 r += 1
 
-# Activo corriente
-for prefix, label in [
+activo_corriente = [
     ('10','Efectivo y equivalentes de efectivo'),
     ('12','Cuentas por cobrar comerciales'),
     ('14','Cuentas por cobrar al personal / accionistas'),
     ('16','Cuentas por cobrar diversas'),
     ('18','Servicios y otros contratados por anticipado'),
     ('20','Mercaderías'),
+    ('21','Productos terminados / existencias'),
+    ('22','Subproductos / desechos / desperdicios'),
+    ('23','Productos en proceso'),
+    ('24','Materias primas'),
     ('25','Materiales y suministros'),
+    ('26','Envases y embalajes'),
+    ('27','Activos no corrientes mantenidos para la venta'),
+    ('28','Existencias por recibir'),
+    ('29','Desvalorización de existencias'),
     ('40','Tributos a favor / crédito fiscal'),
-]:
+]
+ac_rows = []
+for prefix, label in activo_corriente:
+    if not _prefix_exists(prefix):
+        continue
     _write_label(ws9, r, label)
+    # Solo el saldo DEUDOR de la cuenta se presenta como activo.
     _set_report_value(ws9, r, 5, f'={_sum_ht(prefix, "O")[1:]}')
-    left_rows.append(r)
+    ac_rows.append(r)
     r += 1
 
 ws9.cell(r,2,'TOTAL ACTIVO CORRIENTE').font = BOLD
-_set_report_value(ws9, r, 5, '=' + '+'.join(f'E{x}' for x in left_rows), True)
+_set_report_value(ws9, r, 5, '=' + '+'.join(f'E{x}' for x in ac_rows) if ac_rows else '=0', True)
 TOTAL_AC_ROW = r
 r += 2
 
 ws9.cell(r,2,'ACTIVO NO CORRIENTE').font = BOLD
 r += 1
-anc_rows = []
-for prefix, label in [
+
+activo_no_corriente = [
+    ('30','Inversiones mobiliarias'),
+    ('31','Inversiones inmobiliarias'),
+    ('32','Activos adquiridos en arrendamiento financiero'),
     ('33','Propiedad, planta y equipo - costo'),
-    ('37','Activos no corrientes / intangibles'),
+    ('34','Intangibles'),
+    ('35','Activos biológicos'),
     ('36','Desvalorización / deterioro de activos'),
+    ('37','Activos no corrientes / intangibles'),
+    ('38','Otros activos'),
     ('39','Depreciación y amortización acumulada'),
-]:
+]
+anc_rows = []
+for prefix, label in activo_no_corriente:
+    if not _prefix_exists(prefix):
+        continue
     _write_label(ws9, r, label)
     if prefix in {'36','39'}:
         _set_report_value(ws9, r, 5, f'=-{_sum_ht(prefix, "P")[1:]}')
@@ -2273,17 +2307,22 @@ for prefix, label in [
     r += 1
 
 ws9.cell(r,2,'TOTAL ACTIVO NO CORRIENTE').font = BOLD
-_set_report_value(ws9, r, 5, '=' + '+'.join(f'E{x}' for x in anc_rows), True)
+_set_report_value(ws9, r, 5, '=' + '+'.join(f'E{x}' for x in anc_rows) if anc_rows else '=0', True)
 TOTAL_ANC_ROW = r
 r += 1
+
+# TOTAL ACTIVO: este es el importe que debe cuadrar exactamente con
+# TOTAL PASIVO + TOTAL PATRIMONIO NETO.
 ws9.cell(r,2,'TOTAL ACTIVO').font = BOLD
 _set_report_value(ws9, r, 5, f'=E{TOTAL_AC_ROW}+E{TOTAL_ANC_ROW}', True)
 TOTAL_ACTIVO_ROW = r
 
-# Pasivo y patrimonio se coloca en paralelo, desde fila 6.
-r2 = 6
-pc_rows = []
-for prefix, label in [
+# ---------------------- PASIVO / PATRIMONIO ----------------------
+r2 = 5
+ws9.cell(r2,7,'PASIVO CORRIENTE').font = BOLD
+r2 += 1
+
+pasivo_corriente = [
     ('40','Tributos y cuentas por pagar al Estado'),
     ('41','Remuneraciones y participaciones por pagar'),
     ('42','Cuentas por pagar comerciales'),
@@ -2293,28 +2332,36 @@ for prefix, label in [
     ('46','Cuentas por pagar diversas / terceros'),
     ('47','Cuentas por pagar relacionadas'),
     ('48','Provisiones y obligaciones'),
-]:
+]
+pc_rows = []
+for prefix, label in pasivo_corriente:
+    if not _prefix_exists(prefix):
+        continue
     _write_label(ws9, r2, label)
+    # Solo el saldo ACREEDOR se presenta como pasivo.
     _set_report_value(ws9, r2, 10, f'={_sum_ht(prefix, "P")[1:]}')
     pc_rows.append(r2)
     r2 += 1
 
 ws9.cell(r2,7,'TOTAL PASIVO CORRIENTE').font = BOLD
-_set_report_value(ws9, r2, 10, '=' + '+'.join(f'J{x}' for x in pc_rows), True)
+_set_report_value(ws9, r2, 10, '=' + '+'.join(f'J{x}' for x in pc_rows) if pc_rows else '=0', True)
 TOTAL_PC_ROW = r2
 r2 += 2
+
 ws9.cell(r2,7,'PASIVO NO CORRIENTE').font = BOLD
 r2 += 1
-# Si hubiera cuentas 45/46/47 con tratamiento no corriente, no se inventa
-# una clasificación adicional: el total se muestra de forma transparente.
+# No se inventa una clasificación por vencimiento cuando la monografía
+# no la proporciona. Se deja el bloque preparado para ampliarlo después.
 ws9.cell(r2,7,'Obligaciones financieras y otras').font = BLACK
 _set_report_value(ws9, r2, 10, '=0')
 TOTAL_PNC_ROW = r2
 r2 += 1
+
 ws9.cell(r2,7,'TOTAL PASIVO').font = BOLD
 _set_report_value(ws9, r2, 10, f'=J{TOTAL_PC_ROW}+J{TOTAL_PNC_ROW}', True)
 TOTAL_PASIVO_ROW = r2
 r2 += 2
+
 ws9.cell(r2,7,'PATRIMONIO NETO').font = BOLD
 r2 += 1
 pat_rows = []
@@ -2327,11 +2374,14 @@ for prefix, label in [
     ('58','Reservas'),
     ('59','Resultados acumulados'),
 ]:
+    if not _prefix_exists(prefix):
+        continue
     _write_label(ws9, r2, label)
     if prefix == '59':
+        # Resultado acumulado = acreedor - deudor.
         _set_report_value(ws9, r2, 10, f'={_sum_ht(prefix, "P")[1:]}-{_sum_ht(prefix, "O")[1:]}')
     else:
-        _set_report_value(ws9, r2, 10, f'={_sum_ht(prefix, "P")[1:]}')
+        _set_report_value(ws9, r2, 10, f'={_sum_ht(prefix, "P")[1:]}-{_sum_ht(prefix, "O")[1:]}')
     pat_rows.append(r2)
     r2 += 1
 
@@ -2339,20 +2389,28 @@ ws9.cell(r2,7,'Resultado del ejercicio').font = BLACK
 _set_report_value(ws9, r2, 10, f'=ERN!E{resultado_ern_row}', False)
 pat_rows.append(r2)
 r2 += 1
+
 ws9.cell(r2,7,'TOTAL PATRIMONIO NETO').font = BOLD
-_set_report_value(ws9, r2, 10, '=' + '+'.join(f'J{x}' for x in pat_rows), True)
+_set_report_value(ws9, r2, 10, '=' + '+'.join(f'J{x}' for x in pat_rows) if pat_rows else '=0', True)
 TOTAL_PATRIMONIO_ROW = r2
 r2 += 1
+
+# TOTAL PASIVO Y PATRIMONIO NETO: debe ser exactamente igual a TOTAL ACTIVO.
 ws9.cell(r2,7,'TOTAL PASIVO Y PATRIMONIO NETO').font = BOLD
 _set_report_value(ws9, r2, 10, f'=J{TOTAL_PASIVO_ROW}+J{TOTAL_PATRIMONIO_ROW}', True)
 TOTAL_PYPN_ROW = r2
 r2 += 1
+
+# Control visible: si no es cero, el ESF no está cuadrado.
 control_esf_row = r2
-ws9.cell(r2,7,'DIFERENCIA (debe ser 0)').font = BOLD
+ws9.cell(r2,7,'DIFERENCIA: ACTIVO - (PASIVO + PATRIMONIO)').font = BOLD
 _set_report_value(ws9, r2, 10, f'=E{TOTAL_ACTIVO_ROW}-J{TOTAL_PYPN_ROW}', True)
 ws9.cell(r2,11, f'=IF(ABS(J{r2})<0.01,"CUADRADO","REVISAR")').font = BOLD
 _hide_control_row(ws9, control_esf_row)
 
+# Presentación: el TOTAL ACTIVO queda siempre en el bloque izquierdo y
+# el TOTAL PASIVO + PATRIMONIO en el bloque derecho, permitiendo comprobar
+# visualmente A = P + PN.
 for col, width in {'B':48,'C':3,'D':9,'E':18,'G':48,'H':3,'I':9,'J':18,'K':14}.items():
     ws9.column_dimensions[col].width = width
 ws9.freeze_panes = 'B5'
