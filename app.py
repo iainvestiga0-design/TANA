@@ -20,6 +20,16 @@ from pypdf import PdfReader
 from docx import Document
 from PIL import Image
 
+# ============================================================
+# CONFIGURACIÓN GENERAL / PÁGINA PÚBLICA
+# ============================================================
+st.set_page_config(
+    page_title="TANA | Inteligencia Artificial Contable",
+    page_icon="📊",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
+
 # Gemini
 from google import genai
 from google.genai import types
@@ -413,6 +423,110 @@ def extract_with_gemini(uploaded):
         if temp_path and os.path.exists(temp_path):
             os.remove(temp_path)
 
+
+# ============================================================
+# PÁGINA PÚBLICA DE TANA
+# ============================================================
+def _mostrar_landing_tana():
+    """Landing pública integrada en Streamlit; no altera el motor contable."""
+    st.markdown("""
+    <style>
+    .tana-wrap {max-width: 1180px; margin: 0 auto;}
+    .tana-hero {padding: 28px 8px 18px 8px;}
+    .tana-badge {display:inline-block; padding:7px 13px; border-radius:999px;
+                 background:#E8F4F8; color:#087EA4; font-weight:700; font-size:13px;}
+    .tana-title {font-size:52px; line-height:1.03; font-weight:800; color:#12304A;
+                 margin:14px 0 12px 0;}
+    .tana-subtitle {font-size:21px; line-height:1.5; color:#4D6172; max-width:760px;}
+    .tana-card {background:#FFFFFF; border:1px solid #DDE8EF; border-radius:18px;
+                padding:22px; min-height:150px; box-shadow:0 5px 18px rgba(18,48,74,.06);}
+    .tana-card h3 {margin-top:0; color:#12304A;}
+    .tana-card p {color:#5B6B78; line-height:1.45;}
+    .tana-flow {background:#F5FAFC; border:1px solid #DDE8EF; border-radius:20px;
+                padding:24px; margin:26px 0;}
+    .tana-small {color:#6B7B87; font-size:13px;}
+    </style>
+    """, unsafe_allow_html=True)
+
+    st.markdown('<div class="tana-wrap">', unsafe_allow_html=True)
+    hero_left, hero_right = st.columns([1.55, 1], gap="large")
+    with hero_left:
+        st.markdown('<div class="tana-hero">', unsafe_allow_html=True)
+        st.markdown('<span class="tana-badge">INTELIGENCIA ARTIFICIAL CONTABLE</span>', unsafe_allow_html=True)
+        st.markdown('<div class="tana-title">TANA</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="tana-subtitle">Convierte tus monografías y operaciones contables '
+            'en asientos, hoja de trabajo y estados financieros de forma automática.</div>',
+            unsafe_allow_html=True,
+        )
+        st.write("")
+        if st.button("🚀 Probar TANA", type="primary", use_container_width=False):
+            st.session_state["tana_workspace"] = True
+            st.rerun()
+        st.markdown('<div class="tana-small">Procesamiento contable asistido por IA + reglas deterministas.</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+    with hero_right:
+        logo_path = os.path.join(os.path.dirname(__file__), "LOGO TANA.jpg")
+        if os.path.exists(logo_path):
+            st.image(logo_path, use_container_width=True)
+
+    st.markdown("### ¿Qué hace TANA?")
+    cards = [
+        ("📄", "Lee la monografía", "Extrae operaciones, fechas, importes, documentos y condiciones sin resolverlas todavía."),
+        ("🧮", "Desarrolla los asientos", "Utiliza el PCGE de 5 dígitos y valida que cada asiento cumpla Debe = Haber."),
+        ("📊", "Genera los reportes", "Prepara HT, Estado de Resultados por Naturaleza, Estado de Resultados por Función y ESF."),
+        ("🤖", "Explica el resultado", "Puedes preguntarle a TANA por qué se hizo un asiento, cómo se calculó o por qué una cuenta va al Debe o Haber."),
+    ]
+    cols = st.columns(4, gap="medium")
+    for col, (icon, title, text) in zip(cols, cards):
+        with col:
+            st.markdown(
+                f'<div class="tana-card"><div style="font-size:30px">{icon}</div>'
+                f'<h3>{title}</h3><p>{text}</p></div>',
+                unsafe_allow_html=True,
+            )
+
+    st.markdown('<div class="tana-flow">', unsafe_allow_html=True)
+    st.markdown("### De la monografía al resultado contable")
+    fcols = st.columns(7, gap="small")
+    pasos = ["Monografía", "Detección", "Asientos", "HT", "ERN", "ERF", "ESF"]
+    for i, (col, paso) in enumerate(zip(fcols, pasos)):
+        with col:
+            st.markdown(f"**{i+1}.** {paso}")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown("### Pensado para estudiantes y profesionales")
+    c1, c2 = st.columns(2, gap="large")
+    with c1:
+        st.markdown(
+            '<div class="tana-card"><h3>🎓 Aprende mientras resuelves</h3>'
+            '<p>Pregunta a TANA cómo se desarrolló una operación y recibe una explicación contextualizada.</p></div>',
+            unsafe_allow_html=True,
+        )
+    with c2:
+        st.markdown(
+            '<div class="tana-card"><h3>✅ Verificación contable</h3>'
+            '<p>TANA valida las cuentas, la partida doble y la consistencia entre los estados financieros.</p></div>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("")
+    st.caption("TANA · Inteligencia Artificial Contable")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+if not st.session_state.get("tana_workspace", False):
+    _mostrar_landing_tana()
+    st.stop()
+
+# Barra mínima de navegación dentro del área de trabajo.
+nav_left, nav_right = st.columns([1, 8])
+with nav_left:
+    if st.button("← Inicio", key="btn_inicio_tana"):
+        st.session_state["tana_workspace"] = False
+        st.rerun()
+with nav_right:
+    st.markdown("### TANA · Área de trabajo")
 
 def extraction_to_text(data):
     parts = []
