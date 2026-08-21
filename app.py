@@ -546,6 +546,12 @@ REGLAS OBLIGATORIAS:
 - La glosa debe ser breve y profesional.
 - Los importes deben ser números positivos; el lado se expresa con debe/haber.
 
+REGLA CRÍTICA SOBRE CUENTAS DE DESTINO (79):
+- Si una operación requiere destino por función y se utiliza una cuenta del Elemento 9 (por ejemplo 94111, 94211, 94311, 94411, 94511, 94611, 95111, 95211, 95311, 95411, 95511, 95611, 95711, 95811 o 95911), DEBE registrarse también la cuenta 79111 en el HABER por el mismo importe total destinado.
+- No omitas la cuenta 79111 cuando exista un destino por función.
+- El asiento de destino normalmente es: cuenta del Elemento 9 en el DEBE y 79111 en el HABER.
+- No confundas la cuenta 79 con la cuenta 70 ni con la cuenta 69. La 79 es una cuenta puente de destino y debe quedar fuera de los estados de resultados.
+
 Devuelve SOLO JSON válido con esta estructura:
 {
   "asientos": [
@@ -683,6 +689,63 @@ def _find_operation(operations, number):
         except Exception:
             continue
     return {}
+
+
+def asegurar_cuenta_79_en_destinos(asientos, pcge_map):
+    """
+    Regla determinista de TANA para destinos por función.
+
+    Cuando un asiento contiene una cuenta del Elemento 9 (94, 95, etc.)
+    con importe en el DEBE, ese destino debe quedar compensado mediante
+    una cuenta de destino 79 en el HABER. Para el PCGE operativo de TANA
+    la cuenta estándar es 79111.
+
+    Esta regla evita depender de que Gemini recuerde escribir la 79.
+    Si ya existe una 79 en el asiento, no se duplica. Si existe pero está
+    incompleta, se agrega solo la diferencia necesaria.
+    """
+    resultado = []
+    for asiento in asientos or []:
+        a = dict(asiento) if isinstance(asiento, dict) else asiento
+        lineas = list(a.get("lineas", []) or []) if isinstance(a, dict) else []
+        if not lineas:
+            resultado.append(a)
+            continue
+
+        total_elemento9_debe = 0.0
+        total_79_haber = 0.0
+        for line in lineas:
+            if not isinstance(line, dict):
+                continue
+            code = str(line.get("codigo", "")).strip()
+            debe = _to_float(line.get("debe"), 0.0)
+            haber = _to_float(line.get("haber"), 0.0)
+            if re.fullmatch(r"9\d{4}", code):
+                total_elemento9_debe += max(debe, 0.0)
+            if code.startswith("79"):
+                total_79_haber += max(haber, 0.0)
+
+        if total_elemento9_debe > 0.009:
+            diferencia = round(total_elemento9_debe - total_79_haber, 2)
+            if diferencia > 0.009:
+                codigo_79 = "79111" if "79111" in pcge_map else next(
+                    (c for c in pcge_map if str(c).startswith("79") and len(str(c)) == 5),
+                    None,
+                )
+                if codigo_79:
+                    lineas.append({
+                        "codigo": codigo_79,
+                        "denominacion": pcge_map.get(codigo_79, "Cargas imputables a cuentas de costos y gastos"),
+                        "debe": 0.0,
+                        "haber": diferencia,
+                        "concepto": "Destino de gastos por función",
+                    })
+                    a["lineas"] = lineas
+                    nota = "Se incorporó automáticamente la cuenta 79 por destino de gastos por función."
+                    anterior = str(a.get("observacion", "") or "").strip()
+                    a["observacion"] = (anterior + " " + nota).strip()
+        resultado.append(a)
+    return resultado
 
 
 def corregir_retiro_socio(asientos, monografia_json):
@@ -1079,6 +1142,14 @@ if "monografia_json" in st.session_state:
 
                 if not isinstance(asientos_generados, list):
                     raise ValueError("La clave 'asientos' de Gemini no contiene una lista.")
+
+                # Regla determinista: toda cuenta de destino del Elemento 9
+                # debe tener su contrapartida 79 en el Haber. Esto corrige el
+                # caso en que Gemini desarrolle el destino pero omita la 79111.
+                asientos_generados = asegurar_cuenta_79_en_destinos(
+                    asientos_generados,
+                    pcge_map,
+                )
 
                 # Corrección determinista de la Operación 3/4 de retiro de socio:
                 # la venta privada no se contabiliza en la sociedad y el reparto
