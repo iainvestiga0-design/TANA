@@ -1909,295 +1909,457 @@ def ht_sum(code, col):
 # se generan diferencias artificiales entre ERN, ERF y ESF.
 
 # ------------------------------------------------------------
-# ERN - Estado de Resultados por Naturaleza
+# ESTADOS FINANCIEROS — PRESENTACIÓN FINAL TANA
 # ------------------------------------------------------------
-ws7 = wb.create_sheet("ERN")
-ws7["B2"] = "ESTADO DE RESULTADOS POR NATURALEZA"
-ws7["B2"].font = TITLE_FONT
-ws7["B3"] = "Expresado en soles"
-ws7["B3"].font = SUBTITLE_FONT
+# IMPORTANTE:
+# - La HT queda intacta y es la única fuente de datos.
+# - Los estados detectan las cuentas realmente presentes en la práctica.
+# - No se inventan cuentas ni importes.
+# - ERF: 70, 69, 94 y 95 son estructurales; 78 se incorpora si existe;
+#        65 y 67 se incorporan solo si existen y no tienen destino a 94/95.
+#        79 NO se presenta en el ERF.
+# - ERN: presenta las cuentas por naturaleza y el resultado del ejercicio.
+# - ESF: presenta activo, pasivo y patrimonio, y verifica A = P + PN.
 
-# En naturaleza se excluyen 69, elemento 9 y 79, porque 69/9 se presentan
-# por función y 79 es cuenta puente de destino. Se consideran ingresos
-# distintos de ventas (71-78) para no perder resultados que existan en la HT.
-ern_items = [
-    ("Ventas netas", "70", "acreedor"),
-    ("Compras", "60", "deudor"),
-    ("Variación de existencias", "61", "acreedor"),
-    ("Gastos de personal", "62", "deudor"),
-    ("Servicios prestados por terceros", "63", "deudor"),
-    ("Tributos", "64", "deudor"),
-    ("Otros gastos de gestión", "65", "deudor"),
-    ("Pérdidas por medición / deterioro", "66", "deudor"),
-    ("Gastos financieros", "67", "deudor"),
-    ("Depreciación y deterioro", "68", "deudor"),
-    ("Otros ingresos 71", "71", "acreedor"),
-    ("Otros ingresos 72", "72", "acreedor"),
-    ("Otros ingresos 73", "73", "acreedor"),
-    ("Otros ingresos 74", "74", "acreedor"),
-    ("Otros ingresos 75", "75", "acreedor"),
-    ("Otros ingresos 76", "76", "acreedor"),
-    ("Ingresos financieros 77", "77", "acreedor"),
-    ("Otros ingresos 78", "78", "acreedor"),
-]
+# ------------------------------------------------------------
+# Utilidades para los estados
+# ------------------------------------------------------------
+def _prefix_exists(prefix):
+    return any(str(c).startswith(prefix) for c in cuentas_reporte)
 
-def _ht_group_formula(prefix, side_col):
-    return f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*HT!${side_col}$4:${side_col}${HT_LAST_ROW})'
+
+def _sum_ht(prefix, column):
+    """Suma el saldo de una familia de cuentas en una columna de HT."""
+    return f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*HT!${column}$4:${column}${HT_LAST_ROW})'
+
+
+def _sum_ht_codes(codes, column):
+    if not codes:
+        return '=0'
+    formulas = [
+        f'SUMPRODUCT((HT!$A$4:$A${HT_LAST_ROW}="{code}")*HT!${column}$4:${column}${HT_LAST_ROW})'
+        for code in codes
+    ]
+    return '=' + '+'.join(formulas)
+
+
+def _set_report_value(ws, row, col, formula, bold=False):
+    cell = ws.cell(row=row, column=col, value=formula)
+    cell.font = BOLD if bold else BLACK
+    cell.number_format = '#,##0.00;(#,##0.00);"-"'
+    return cell
+
+
+def _report_title(ws, title):
+    ws.merge_cells('B2:E2')
+    ws['B2'] = title
+    ws['B2'].font = TITLE_FONT
+    ws['B2'].alignment = Alignment(horizontal='left')
+    ws.merge_cells('B3:E3')
+    ws['B3'] = 'Expresado en soles'
+    ws['B3'].font = SUBTITLE_FONT
+
+
+def _report_header(ws, row, right_label='AÑO 2026'):
+    ws.cell(row=row, column=2, value='DESCRIPCIÓN').font = BOLD
+    ws.cell(row=row, column=4, value='Notas').font = BOLD
+    ws.cell(row=row, column=5, value=right_label).font = BOLD
+    for c in (2, 4, 5):
+        ws.cell(row=row, column=c).fill = PatternFill('solid', fgColor='D9E1F2')
+        ws.cell(row=row, column=c).border = Border(
+            top=Side(style='thin', color='808080'),
+            bottom=Side(style='thin', color='808080')
+        )
+        ws.cell(row=row, column=c).alignment = Alignment(horizontal='center')
+
+
+def _write_label(ws, row, text, bold=False):
+    ws.cell(row=row, column=2, value=text).font = BOLD if bold else BLACK
+
+
+def _write_amount(ws, row, formula, bold=False):
+    # Columna E: importe del estado, alineado con el modelo enviado.
+    _set_report_value(ws, row, 5, formula, bold=bold)
+
+
+def _hide_control_row(ws, row):
+    if row:
+        ws.row_dimensions[row].hidden = True
+
+# ============================================================
+# ERF — ESTADO DE RESULTADOS POR FUNCIÓN
+# ============================================================
+ws8 = wb.create_sheet('ERF')
+_report_title(ws8, 'ESTADO DE RESULTADOS POR FUNCIÓN')
+_report_header(ws8, 4)
 
 r = 5
-ern_rows = []
-for label, prefix, side in ern_items:
-    ws7.cell(r, 2, label).font = BLACK
-    col = "L" if side == "acreedor" else "K"
-    ws7.cell(r, 4, _ht_group_formula(prefix, col)).font = BLACK
-    ws7.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-    ern_rows.append((r, prefix, side))
-    r += 1
-
-ws7.cell(r, 2, "TOTAL INGRESOS").font = BOLD
-income_rows = [rr for rr, pfx, side in ern_rows if side == "acreedor"]
-ws7.cell(r, 4, "=" + "+".join(f'D{x}' for x in income_rows)).font = BOLD
-ws7.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-ERN_TOTAL_ING = r
+_write_label(ws8, r, 'INGRESOS OPERACIONALES', True); r += 1
+ventas_row = r
+_write_label(ws8, r, 'VENTAS')
+_write_amount(ws8, r, _sum_ht('70', 'N'), False)
 r += 1
 
-ws7.cell(r, 2, "TOTAL GASTOS").font = BOLD
-gasto_rows = [rr for rr, pfx, side in ern_rows if side == "deudor"]
-ws7.cell(r, 4, "=" + "+".join(f'D{x}' for x in gasto_rows)).font = BOLD
-ws7.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-ERN_TOTAL_GAST = r
+# Líneas de detalle de ventas: solo se muestran cuando existen cuentas 70 adicionales.
+ventas_codes = sorted(c for c in cuentas_reporte if c.startswith('70'))
+if len(ventas_codes) > 1:
+    for code in ventas_codes:
+        _write_label(ws8, r, f'{code} - {pcge_map.get(code, code)}')
+        _write_amount(ws8, r, _sum_ht_codes([code], 'N'))
+        r += 1
+
+ventas_total_row = r
+_write_label(ws8, r, 'INGRESOS OPERACIONALES', True)
+_write_amount(ws8, r, f'=E{ventas_row}', True)
 r += 1
 
-ws7.cell(r, 2, "RESULTADO ANTES DE IMPUESTOS").font = BOLD
-ws7.cell(r, 4, f'=D{ERN_TOTAL_ING}-D{ERN_TOTAL_GAST}').font = BOLD
-ws7.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-ERN_RESULTADO_ROW = r
+_write_label(ws8, r, 'COSTO DE VENTA', True)
+costo_row = r
+_write_amount(ws8, r, _sum_ht('69', 'M'))
+r += 1
 
-# ------------------------------------------------------------
-# ERF - Estado de Resultados por Función
-# ------------------------------------------------------------
-ws8 = wb.create_sheet("ERF")
-ws8["B2"] = "ESTADO DE RESULTADOS POR FUNCIÓN"
-ws8["B2"].font = TITLE_FONT
-ws8["B3"] = "Expresado en soles"
-ws8["B3"].font = SUBTITLE_FONT
+utilidad_bruta_row = r
+_write_label(ws8, r, 'UTILIDAD BRUTA', True)
+_write_amount(ws8, r, f'=E{ventas_total_row}-E{costo_row}', True)
+r += 2
 
-r = 5
+_write_label(ws8, r, 'GASTOS OPERACIONALES', True); r += 1
 
-def erf_group(label, prefix, side="deudor", required=False):
-    """
-    Agrega una línea por grupo de cuenta (70, 69, 94, 95, 78).
-    Detecta todas las cuentas existentes con ese prefijo.
-    """
-    global r
-    existe = any(str(c).startswith(prefix) for c in cuentas_reporte)
-    if not existe and not required:
-        return None
-
-    ws8.cell(r, 2, label).font = BLACK
-    if side == "acreedor":
-        formula = f'=SUMIFS(HT!$N:$N,HT!$A:$A,"{prefix}*")'
-    else:
-        formula = f'=-SUMIFS(HT!$M:$M,HT!$A:$A,"{prefix}*")'
-    ws8.cell(r, 4, formula).font = BLACK
-    ws8.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
+gasto_operativo_rows = []
+# 95 y 94 son obligatorias en la estructura, aunque su saldo sea cero.
+for prefix, label in [('95', 'Gastos de venta'), ('94', 'Gastos de administración')]:
     rr = r
+    _write_label(ws8, r, label.upper())
+    _write_amount(ws8, r, f'=-{_sum_ht(prefix, "M")[1:]}')
+    gasto_operativo_rows.append(rr)
     r += 1
-    return rr
 
-# 1. Ventas: cualquier cuenta 70 existente.
-ventas_row = erf_group("Ventas (70)", "70", "acreedor", required=True)
+# 65: solo si existe y no fue destinada a 94/95.
+for code in sorted(c for c in cuentas_reporte if len(c) == 5 and c.startswith('65') and c not in CUENTAS_6_CON_DESTINO):
+    rr = r
+    _write_label(ws8, r, f'{code} - {pcge_map.get(code, code)}')
+    _write_amount(ws8, r, f'=-{_sum_ht_codes([code], "M")[1:]}')
+    gasto_operativo_rows.append(rr)
+    r += 1
 
-# 2. Costo de ventas: cualquier cuenta 69 existente.
-costo_row = erf_group("Costo de ventas (69)", "69", "deudor", required=True)
+utilidad_operativa_row = r
+_write_label(ws8, r, 'UTILIDAD OPERATIVA', True)
+parts = [f'E{utilidad_bruta_row}'] + [f'+E{x}' for x in gasto_operativo_rows]
+_write_amount(ws8, r, '=' + ''.join(parts), True)
+r += 2
 
-ws8.cell(r, 2, "UTILIDAD BRUTA").font = BOLD
-ws8.cell(r, 4, f'=D{ventas_row}+D{costo_row}').font = BOLD
-ws8.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-UTILIDAD_BRUTA_ROW = r
+_write_label(ws8, r, 'OTROS INGRESOS Y GASTOS', True); r += 1
+
+# 78: se incorpora si existe.
+otros_78_row = None
+if _prefix_exists('78'):
+    otros_78_row = r
+    _write_label(ws8, r, 'OTROS INGRESOS')
+    _write_amount(ws8, r, _sum_ht('78', 'N'))
+    r += 1
+
+# Ingreso financiero 77, si existe.
+ingreso_fin_row = None
+if _prefix_exists('77'):
+    ingreso_fin_row = r
+    _write_label(ws8, r, 'INGRESO FINANCIERO')
+    _write_amount(ws8, r, _sum_ht('77', 'N'))
+    r += 1
+
+# 67: solo si existe y no tiene destino a 94/95; se presenta como gasto financiero.
+gasto_fin_rows = []
+for code in sorted(c for c in cuentas_reporte if len(c) == 5 and c.startswith('67') and c not in CUENTAS_6_CON_DESTINO):
+    rr = r
+    _write_label(ws8, r, f'{code} - {pcge_map.get(code, code)}')
+    _write_amount(ws8, r, f'=-{_sum_ht_codes([code], "M")[1:]}')
+    gasto_fin_rows.append(rr)
+    r += 1
+
+resultado_antes_part_row = r
+_write_label(ws8, r, 'RESULTADO ANTES DE PARTICIPACIONES E IMPUESTOS', True)
+parts = [f'E{utilidad_operativa_row}']
+if otros_78_row is not None:
+    parts.append(f'+E{otros_78_row}')
+if ingreso_fin_row is not None:
+    parts.append(f'+E{ingreso_fin_row}')
+parts += [f'+E{x}' for x in gasto_fin_rows]
+_write_amount(ws8, r, '=' + ''.join(parts), True)
 r += 1
 
-# 3. Gastos por función: 95 y 94 son obligatorios en la estructura.
-gv_row = erf_group("Gastos de venta (95)", "95", "deudor", required=True)
-ga_row = erf_group("Gastos de administración (94)", "94", "deudor", required=True)
+# Participaciones: solo si existe elemento 87; si no existe, se mantiene 0.
+part_row = r
+_write_label(ws8, r, 'PARTICIPACIONES')
+_write_amount(ws8, r, f'=-{_sum_ht("87", "M")[1:]}')
+r += 1
 
-# 4. Excepción: 65 y 67 solamente si existen SIN destino a 94/95.
-#    No se agregan las demás cuentas del elemento 6.
-elemento6_excepciones = []
-for code6 in sorted(c for c in cuentas_reporte
-                    if len(c) == 5 and c[:2] in {"65", "67"}
-                    and c not in CUENTAS_6_CON_DESTINO):
-    desc6 = pcge_map.get(code6, code6)
-    rr = erf_group(f"{code6} - {desc6}", code6, "deudor", required=False)
-    if rr is not None:
-        elemento6_excepciones.append(rr)
+# Impuesto a la renta: solo si existe elemento 88; si no existe, 0.
+impuesto_row = r
+_write_label(ws8, r, 'IMPUESTO A LA RENTA')
+_write_amount(ws8, r, f'=-{_sum_ht("88", "M")[1:]}')
+r += 1
 
-# 5. Cuenta 78: se incorpora solamente si existe.
-otros_78_row = erf_group("Otros ingresos (78)", "78", "acreedor", required=False)
-
-ws8.cell(r, 2, "RESULTADO DEL EJERCICIO").font = BOLD
-componentes = [f"D{UTILIDAD_BRUTA_ROW}", f"D{gv_row}", f"D{ga_row}"]
-componentes += [f"D{x}" for x in elemento6_excepciones]
-if otros_78_row is not None:
-    componentes.append(f"D{otros_78_row}")
-ws8.cell(r, 4, "=" + "+".join(componentes)).font = BOLD
-ws8.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-ERF_RESULTADO_ROW = r
+resultado_erf_row = r
+_write_label(ws8, r, 'RESULTADO DEL EJERCICIO', True)
+_write_amount(ws8, r, f'=E{resultado_antes_part_row}+E{part_row}+E{impuesto_row}', True)
 r += 2
 
-ws8.cell(r, 2, "CONTROL: ERN - ERF").font = BOLD
-ws8.cell(r, 4, f'=ERN!D{ERN_RESULTADO_ROW}-D{ERF_RESULTADO_ROW}').font = BOLD
-ws8.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-ws8.cell(r, 5, f'=IF(ABS(D{r})<0.01,"CUADRADO","REVISAR")').font = BOLD
-ERF_CONTROL_ROW = r
+# Control interno: no se muestra en el informe, pero permite comprobar que ERF = ERN.
+control_erf_row = r
+_write_label(ws8, r, 'CONTROL INTERNO ERF')
+_write_amount(ws8, r, '=0')
+ws8.cell(r, 6, f'=IF(ABS(E{r})<0.01,"CUADRADO","REVISAR")')
+_hide_control_row(ws8, control_erf_row)
 
-r += 2
-ws8.cell(r, 2, "NOTA DE CONTROL").font = BOLD
-ws8.cell(r, 2).comment = Comment(
-    "ERF: 70 y 69 se detectan por prefijo; 94 y 95 son obligatorias; "
-    "78 se incluye solo si existe; 65 y 67 solo se incluyen si no tienen "
-    "destino a 94/95. Las cuentas 60, 61, 62, 63, 64, 66 y 68 no se "
-    "incluyen automáticamente en ERF. La 79 es cuenta puente y NO forma "
-    "parte del Estado de Resultado por Función.",
-    "TANA"
-)
+ws8.column_dimensions['B'].width = 58
+ws8.column_dimensions['C'].width = 3
+ws8.column_dimensions['D'].width = 10
+ws8.column_dimensions['E'].width = 18
+ws8.freeze_panes = 'B5'
 
-autofit(ws8, [3, 58, 5, 18, 16])
-
-# ------------------------------------------------------------
-# ESF - Estado de Situación Financiera
-# ------------------------------------------------------------
-ws9 = wb.create_sheet("ESF")
-ws9["B2"] = "ESTADO DE SITUACIÓN FINANCIERA"
-ws9["B2"].font = TITLE_FONT
-ws9["B3"] = "Expresado en soles"
-ws9["B3"].font = SUBTITLE_FONT
+# ============================================================
+# ERN — ESTADO DE RESULTADOS POR NATURALEZA
+# ============================================================
+ws7 = wb.create_sheet('ERN')
+_report_title(ws7, 'ESTADO DE RESULTADOS POR NATURALEZA')
+_report_header(ws7, 4)
 
 r = 5
-ws9.cell(r, 2, "ACTIVO CORRIENTE").font = BOLD
+_write_label(ws7, r, 'INGRESOS OPERACIONALES', True); r += 1
+
+# Ventas y otros ingresos: se detectan por prefijo, sin inventar cuentas.
+ventas_ern_row = r
+_write_label(ws7, r, 'VENTAS')
+_write_amount(ws7, r, _sum_ht('70', 'L'))
 r += 1
 
-# Activos: elemento 1 y 2; cuentas 3 son no corrientes.
-activo_corriente = [
-    ("10", "Efectivo y equivalentes de efectivo"),
-    ("12", "Cuentas por cobrar comerciales"),
-    ("14", "Cuentas por cobrar al personal / accionistas"),
-    ("16", "Cuentas por cobrar diversas"),
-    ("18", "Servicios y otros contratados por anticipado"),
-    ("20", "Mercaderías"),
-    ("25", "Materiales y suministros"),
-]
-ac_rows = []
-for prefix, label in activo_corriente:
-    ws9.cell(r, 2, label).font = BLACK
-    ws9.cell(r, 4, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*HT!$O$4:$O${HT_LAST_ROW})').font = BLACK
-    ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-    ac_rows.append(r); r += 1
+# Ingresos por naturaleza que efectivamente existan. La 74 es gasto.
+for prefix, label in [
+    ('71', 'Variación de la producción almacenada'),
+    ('72', 'Producción de activo inmovilizado'),
+    ('73', 'Descuentos, rebajas y bonificaciones obtenidos'),
+    ('75', 'Otros ingresos de gestión'),
+    ('76', 'Ganancia por medición / valuación'),
+    ('77', 'Ingresos financieros'),
+    ('78', 'Otros ingresos'),
+]:
+    if _prefix_exists(prefix):
+        _write_label(ws7, r, label.upper())
+        _write_amount(ws7, r, _sum_ht(prefix, 'L'))
+        r += 1
 
-# Tributos a favor: solo el saldo deudor de elemento 40.
-ws9.cell(r, 2, "Tributos a favor / crédito fiscal").font = BLACK
-ws9.cell(r, 4, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="40")*HT!$O$4:$O${HT_LAST_ROW})').font = BLACK
-ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-ac_rows.append(r); r += 1
+ventas_total_ern_row = r
+_write_label(ws7, r, 'TOTAL INGRESOS OPERACIONALES', True)
+_write_amount(ws7, r, f'=SUM(E{ventas_ern_row}:E{r-1})', True)
+r += 2
 
-ws9.cell(r, 2, "TOTAL ACTIVO CORRIENTE").font = BOLD
-ws9.cell(r, 4, "=" + "+".join(f'D{x}' for x in ac_rows)).font = BOLD
-ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-TOTAL_AC_ROW = r; r += 2
+_write_label(ws7, r, 'COSTO Y GASTOS POR NATURALEZA', True); r += 1
 
-ws9.cell(r, 2, "ACTIVO NO CORRIENTE").font = BOLD
+naturaleza_rows = []
+for prefix, label in [
+    ('60', 'Compras'),
+    ('61', 'Variación de existencias'),
+    ('62', 'Gastos de personal'),
+    ('63', 'Servicios prestados por terceros'),
+    ('64', 'Tributos'),
+    ('65', 'Otros gastos de gestión'),
+    ('66', 'Pérdidas por medición / deterioro'),
+    ('67', 'Gastos financieros'),
+    ('68', 'Valuación, deterioro y depreciación'),
+    ('74', 'Descuentos, rebajas y bonificaciones concedidos'),
+]:
+    if _prefix_exists(prefix):
+        rr = r
+        _write_label(ws7, r, label.upper())
+        _write_amount(ws7, r, _sum_ht(prefix, 'K'))
+        naturaleza_rows.append(rr)
+        r += 1
+
+total_gastos_ern_row = r
+_write_label(ws7, r, 'TOTAL COSTO Y GASTOS', True)
+_write_amount(ws7, r, '=' + '+'.join(f'E{x}' for x in naturaleza_rows) if naturaleza_rows else '=0', True)
+r += 2
+
+resultado_ern_row = r
+_write_label(ws7, r, 'RESULTADO DEL EJERCICIO', True)
+_write_amount(ws7, r, f'=E{ventas_total_ern_row}-E{total_gastos_ern_row}', True)
+ERN_RESULTADO_ROW = r
+r += 1
+
+# Control interno oculto.
+control_ern_row = r
+_write_label(ws7, r, 'CONTROL INTERNO ERN')
+_write_amount(ws7, r, f'=E{resultado_ern_row}-ERF!E{resultado_erf_row}')
+ws7.cell(r, 6, f'=IF(ABS(E{r})<0.01,"CUADRADO","REVISAR")')
+_hide_control_row(ws7, control_ern_row)
+
+# Ahora que ERN_RESULTADO_ROW ya existe, completamos el control cruzado del ERF.
+ws8.cell(control_erf_row, 5, f'=E{resultado_erf_row}-ERN!E{ERN_RESULTADO_ROW}')
+ws8.cell(control_erf_row, 5).number_format = '#,##0.00;(#,##0.00);"-"'
+
+ws7.column_dimensions['B'].width = 58
+ws7.column_dimensions['C'].width = 3
+ws7.column_dimensions['D'].width = 10
+ws7.column_dimensions['E'].width = 18
+ws7.freeze_panes = 'B5'
+
+# ============================================================
+# ESF — ESTADO DE SITUACIÓN FINANCIERA
+# ============================================================
+ws9 = wb.create_sheet('ESF')
+_report_title(ws9, 'ESTADO DE SITUACIÓN FINANCIERA')
+# En el modelo enviado el ESF es un formato de dos bloques, pero se mantiene
+# una sola hoja para que sea fácil de imprimir y revisar.
+ws9['B4'] = 'ACTIVO'
+ws9['B4'].font = BOLD
+ws9['D4'] = 'Notas'
+ws9['E4'] = 'AÑO 2026'
+for c in (2,4,5):
+    ws9.cell(4,c).fill = PatternFill('solid', fgColor='D9E1F2')
+    ws9.cell(4,c).font = BOLD
+    ws9.cell(4,c).alignment = Alignment(horizontal='center')
+ws9['G4'] = 'PASIVO Y PATRIMONIO'
+ws9['I4'] = 'Notas'
+ws9['J4'] = 'AÑO 2026'
+for c in (7,9,10):
+    ws9.cell(4,c).fill = PatternFill('solid', fgColor='D9E1F2')
+    ws9.cell(4,c).font = BOLD
+    ws9.cell(4,c).alignment = Alignment(horizontal='center')
+
+# Se usa una fila compartida para ambos bloques, tal como el modelo.
+r = 5
+left_rows = []
+right_rows = []
+
+ws9.cell(r,2,'ACTIVO CORRIENTE').font = BOLD
+ws9.cell(r,7,'PASIVO CORRIENTE').font = BOLD
+r += 1
+
+# Activo corriente
+for prefix, label in [
+    ('10','Efectivo y equivalentes de efectivo'),
+    ('12','Cuentas por cobrar comerciales'),
+    ('14','Cuentas por cobrar al personal / accionistas'),
+    ('16','Cuentas por cobrar diversas'),
+    ('18','Servicios y otros contratados por anticipado'),
+    ('20','Mercaderías'),
+    ('25','Materiales y suministros'),
+    ('40','Tributos a favor / crédito fiscal'),
+]:
+    _write_label(ws9, r, label)
+    _set_report_value(ws9, r, 5, f'={_sum_ht(prefix, "O")[1:]}')
+    left_rows.append(r)
+    r += 1
+
+ws9.cell(r,2,'TOTAL ACTIVO CORRIENTE').font = BOLD
+_set_report_value(ws9, r, 5, '=' + '+'.join(f'E{x}' for x in left_rows), True)
+TOTAL_AC_ROW = r
+r += 2
+
+ws9.cell(r,2,'ACTIVO NO CORRIENTE').font = BOLD
 r += 1
 anc_rows = []
 for prefix, label in [
-    ("33", "Propiedad, planta y equipo - costo"),
-    ("37", "Activos no corrientes / intangibles"),
+    ('33','Propiedad, planta y equipo - costo'),
+    ('37','Activos no corrientes / intangibles'),
+    ('36','Desvalorización / deterioro de activos'),
+    ('39','Depreciación y amortización acumulada'),
 ]:
-    ws9.cell(r, 2, label).font = BLACK
-    ws9.cell(r, 4, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*HT!$O$4:$O${HT_LAST_ROW})').font = BLACK
-    ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-    anc_rows.append(r); r += 1
+    _write_label(ws9, r, label)
+    if prefix in {'36','39'}:
+        _set_report_value(ws9, r, 5, f'=-{_sum_ht(prefix, "P")[1:]}')
+    else:
+        _set_report_value(ws9, r, 5, f'={_sum_ht(prefix, "O")[1:]}')
+    anc_rows.append(r)
+    r += 1
 
-# Contra-activos 36 y 39: saldo acreedor resta del activo.
-for prefix, label in [("36", "Desvalorización / deterioro acumulado"), ("39", "Depreciación y amortización acumulada")]:
-    ws9.cell(r, 2, label).font = BLACK
-    ws9.cell(r, 4, f'=-SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*HT!$P$4:$P${HT_LAST_ROW})').font = BLACK
-    ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-    anc_rows.append(r); r += 1
-
-ws9.cell(r, 2, "TOTAL ACTIVO NO CORRIENTE").font = BOLD
-ws9.cell(r, 4, "=" + "+".join(f'D{x}' for x in anc_rows)).font = BOLD
-ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-TOTAL_ANC_ROW = r; r += 1
-
-ws9.cell(r, 2, "TOTAL ACTIVO").font = BOLD
-ws9.cell(r, 4, f'=D{TOTAL_AC_ROW}+D{TOTAL_ANC_ROW}').font = BOLD
-ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-TOTAL_ACTIVO_ROW = r; r += 2
-
-ws9.cell(r, 2, "PASIVO CORRIENTE").font = BOLD
+ws9.cell(r,2,'TOTAL ACTIVO NO CORRIENTE').font = BOLD
+_set_report_value(ws9, r, 5, '=' + '+'.join(f'E{x}' for x in anc_rows), True)
+TOTAL_ANC_ROW = r
 r += 1
+ws9.cell(r,2,'TOTAL ACTIVO').font = BOLD
+_set_report_value(ws9, r, 5, f'=E{TOTAL_AC_ROW}+E{TOTAL_ANC_ROW}', True)
+TOTAL_ACTIVO_ROW = r
+
+# Pasivo y patrimonio se coloca en paralelo, desde fila 6.
+r2 = 6
 pc_rows = []
 for prefix, label in [
-    ("40", "Tributos por pagar"),
-    ("41", "Remuneraciones y participaciones por pagar"),
-    ("42", "Cuentas por pagar comerciales"),
-    ("43", "Cuentas por pagar diversas"),
-    ("44", "Cuentas por pagar a socios / dividendos"),
-    ("46", "Cuentas por pagar diversas / terceros"),
-    ("47", "Cuentas por pagar relacionadas"),
-    ("48", "Provisiones y obligaciones"),
+    ('40','Tributos y cuentas por pagar al Estado'),
+    ('41','Remuneraciones y participaciones por pagar'),
+    ('42','Cuentas por pagar comerciales'),
+    ('43','Cuentas por pagar diversas'),
+    ('44','Cuentas por pagar a socios / dividendos'),
+    ('45','Obligaciones financieras'),
+    ('46','Cuentas por pagar diversas / terceros'),
+    ('47','Cuentas por pagar relacionadas'),
+    ('48','Provisiones y obligaciones'),
 ]:
-    ws9.cell(r, 2, label).font = BLACK
-    ws9.cell(r, 4, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*HT!$P$4:$P${HT_LAST_ROW})').font = BLACK
-    ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-    pc_rows.append(r); r += 1
+    _write_label(ws9, r2, label)
+    _set_report_value(ws9, r2, 10, f'={_sum_ht(prefix, "P")[1:]}')
+    pc_rows.append(r2)
+    r2 += 1
 
-# Obligaciones financieras, si aparecen.
-ws9.cell(r, 2, "Obligaciones financieras").font = BLACK
-ws9.cell(r, 4, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="45")*HT!$P$4:$P${HT_LAST_ROW})').font = BLACK
-ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-pc_rows.append(r); r += 1
-
-ws9.cell(r, 2, "TOTAL PASIVO").font = BOLD
-ws9.cell(r, 4, "=" + "+".join(f'D{x}' for x in pc_rows)).font = BOLD
-ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-TOTAL_PASIVO_ROW = r; r += 2
-
-ws9.cell(r, 2, "PATRIMONIO").font = BOLD
-r += 1
+ws9.cell(r2,7,'TOTAL PASIVO CORRIENTE').font = BOLD
+_set_report_value(ws9, r2, 10, '=' + '+'.join(f'J{x}' for x in pc_rows), True)
+TOTAL_PC_ROW = r2
+r2 += 2
+ws9.cell(r2,7,'PASIVO NO CORRIENTE').font = BOLD
+r2 += 1
+# Si hubiera cuentas 45/46/47 con tratamiento no corriente, no se inventa
+# una clasificación adicional: el total se muestra de forma transparente.
+ws9.cell(r2,7,'Obligaciones financieras y otras').font = BLACK
+_set_report_value(ws9, r2, 10, '=0')
+TOTAL_PNC_ROW = r2
+r2 += 1
+ws9.cell(r2,7,'TOTAL PASIVO').font = BOLD
+_set_report_value(ws9, r2, 10, f'=J{TOTAL_PC_ROW}+J{TOTAL_PNC_ROW}', True)
+TOTAL_PASIVO_ROW = r2
+r2 += 2
+ws9.cell(r2,7,'PATRIMONIO NETO').font = BOLD
+r2 += 1
 pat_rows = []
-for prefix, label in [("50", "Capital social"), ("51", "Acciones de inversión / capital adicional"), ("52", "Capital adicional"), ("56", "Resultados no realizados"), ("57", "Excedente de revaluación"), ("58", "Reservas"), ("59", "Resultados acumulados")]:
-    ws9.cell(r, 2, label).font = BLACK
-    if prefix == "59":
-        # Un saldo deudor en 59 reduce el patrimonio.
-        ws9.cell(r, 4, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="59")*(HT!$P$4:$P${HT_LAST_ROW}-HT!$O$4:$O${HT_LAST_ROW}))').font = BLACK
+for prefix, label in [
+    ('50','Capital social'),
+    ('51','Acciones de inversión / capital adicional'),
+    ('52','Capital adicional'),
+    ('56','Resultados no realizados'),
+    ('57','Excedente de revaluación'),
+    ('58','Reservas'),
+    ('59','Resultados acumulados'),
+]:
+    _write_label(ws9, r2, label)
+    if prefix == '59':
+        _set_report_value(ws9, r2, 10, f'={_sum_ht(prefix, "P")[1:]}-{_sum_ht(prefix, "O")[1:]}')
     else:
-        ws9.cell(r, 4, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*HT!$P$4:$P${HT_LAST_ROW})').font = BLACK
-    ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-    pat_rows.append(r); r += 1
+        _set_report_value(ws9, r2, 10, f'={_sum_ht(prefix, "P")[1:]}')
+    pat_rows.append(r2)
+    r2 += 1
 
-ws9.cell(r, 2, "Resultado del ejercicio").font = BLACK
-ws9.cell(r, 4, f'=ERN!D{ERN_RESULTADO_ROW}').font = BLACK
-ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-pat_rows.append(r); r += 1
+ws9.cell(r2,7,'Resultado del ejercicio').font = BLACK
+_set_report_value(ws9, r2, 10, f'=ERN!E{resultado_ern_row}', False)
+pat_rows.append(r2)
+r2 += 1
+ws9.cell(r2,7,'TOTAL PATRIMONIO NETO').font = BOLD
+_set_report_value(ws9, r2, 10, '=' + '+'.join(f'J{x}' for x in pat_rows), True)
+TOTAL_PATRIMONIO_ROW = r2
+r2 += 1
+ws9.cell(r2,7,'TOTAL PASIVO Y PATRIMONIO NETO').font = BOLD
+_set_report_value(ws9, r2, 10, f'=J{TOTAL_PASIVO_ROW}+J{TOTAL_PATRIMONIO_ROW}', True)
+TOTAL_PYPN_ROW = r2
+r2 += 1
+control_esf_row = r2
+ws9.cell(r2,7,'DIFERENCIA (debe ser 0)').font = BOLD
+_set_report_value(ws9, r2, 10, f'=E{TOTAL_ACTIVO_ROW}-J{TOTAL_PYPN_ROW}', True)
+ws9.cell(r2,11, f'=IF(ABS(J{r2})<0.01,"CUADRADO","REVISAR")').font = BOLD
+_hide_control_row(ws9, control_esf_row)
 
-ws9.cell(r, 2, "TOTAL PATRIMONIO").font = BOLD
-ws9.cell(r, 4, "=" + "+".join(f'D{x}' for x in pat_rows)).font = BOLD
-ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-TOTAL_PATRIMONIO_ROW = r; r += 2
+for col, width in {'B':48,'C':3,'D':9,'E':18,'G':48,'H':3,'I':9,'J':18,'K':14}.items():
+    ws9.column_dimensions[col].width = width
+ws9.freeze_panes = 'B5'
 
-ws9.cell(r, 2, "TOTAL PASIVO Y PATRIMONIO").font = BOLD
-ws9.cell(r, 4, f'=D{TOTAL_PASIVO_ROW}+D{TOTAL_PATRIMONIO_ROW}').font = BOLD
-ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-TOTAL_PYPN_ROW = r; r += 1
-
-ws9.cell(r, 2, "DIFERENCIA (debe ser 0)").font = BOLD
-ws9.cell(r, 4, f'=D{TOTAL_ACTIVO_ROW}-D{TOTAL_PYPN_ROW}').font = BOLD
-ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-ws9.cell(r, 5, f'=IF(ABS(D{r})<0.01,"CUADRADO","REVISAR")').font = BOLD
-ESF_CONTROL_ROW = r
-
-autofit(ws9, [3, 56, 5, 18, 16])
+# ============================================================
+# FIN DE ESTADOS FINANCIEROS
+# ============================================================
 
 # HOJA: ASIENTOS_CONTABLES (resueltos y validados por TANA)
 # ============================================================
