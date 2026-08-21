@@ -1684,10 +1684,53 @@ def es_naturaleza(code):
         return False
     return True
 
+# Cuentas del Elemento 6 que ya tienen un destino explícito a 94/95.
+# Se detectan a partir de los asientos desarrollados por TANA, para que
+# el ERF no vuelva a incluir un gasto por naturaleza que ya fue llevado
+# a una cuenta de función.
+def detectar_cuentas_6_con_destino(asientos):
+    con_destino = set()
+    for asiento in asientos or []:
+        lineas = asiento.get("lineas", []) if isinstance(asiento, dict) else []
+        hay_94_95 = any(
+            str(x.get("codigo", "")).strip().startswith(("94", "95"))
+            for x in lineas if isinstance(x, dict)
+        )
+        if not hay_94_95:
+            continue
+        for x in lineas:
+            if not isinstance(x, dict):
+                continue
+            codigo = str(x.get("codigo", "")).strip()
+            if codigo[:1] == "6" and len(codigo) == 5:
+                con_destino.add(codigo)
+    return con_destino
+
+CUENTAS_6_CON_DESTINO = detectar_cuentas_6_con_destino(
+    st.session_state.get("asientos_contables", [])
+)
+
 def es_funcion(code):
-    # Costo de ventas (69), elemento 9 completo (gastos por función) y
-    # depreciación/desvalorización (68) se presentan por función.
-    return es_costo_ventas(code) or es_elemento9(code) or code[:2] == "68"
+    """
+    Base del Estado de Resultado por Función en la HT:
+
+    - 70: ventas (se presenta específicamente 70121 en el ERF).
+    - 69: costo de ventas (específicamente 69121 en el ERF).
+    - 94 y 95: gastos por función.
+    - Elemento 6: solo las cuentas que NO tienen destino a 94/95.
+      Ej.: 67 se mantiene si no tiene destino; 65 solo se mantiene
+      cuando la operación no le asignó destino.
+    - 79 NO pertenece al ERF: es cuenta puente de distribución.
+    """
+    if code[:2] == "70":
+        return True
+    if es_costo_ventas(code):
+        return True
+    if code[:2] in {"94", "95"}:
+        return True
+    if code[:1] == "6" and len(code) == 5:
+        return code not in CUENTAS_6_CON_DESTINO
+    return False
 
 def es_balance(code):
     return not clasificar_resultado(code)
@@ -1930,64 +1973,72 @@ ws8["B3"].font = SUBTITLE_FONT
 
 r = 5
 
-def erf_line(label, prefix, side, multiplier=1):
+def erf_exact(label, code, side="deudor", multiplier=1):
     global r
     ws8.cell(r, 2, label).font = BLACK
     col = "N" if side == "acreedor" else "M"
-    sign = "" if multiplier == 1 else str(multiplier)
-    formula = f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*HT!${col}$4:${col}${HT_LAST_ROW})'
-    if multiplier == -1:
-        formula = f'=-SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*HT!${col}$4:${col}${HT_LAST_ROW})'
+    formula = (
+        f'=SUMIFS(HT!${col}:${col},HT!$A:$A,"{code}")'
+        if multiplier == 1
+        else f'=-SUMIFS(HT!${col}:${col},HT!$A:$A,"{code}")'
+    )
     ws8.cell(r, 4, formula).font = BLACK
     ws8.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
     rr = r
     r += 1
     return rr
 
-ventas_row = erf_line("Ventas netas", "70", "acreedor")
-costo_row = erf_line("Costo de ventas", "69", "deudor", -1)
+# En el PCGE operativo de TANA las ventas se desarrollan con 70121
+# (venta local) y el costo de ventas con 69121.
+ventas_row = erf_exact("Ventas locales (70121)", "70121", "acreedor")
+costo_row = erf_exact("Costo de ventas (69121)", "69121", "deudor", -1)
+
 ws8.cell(r, 2, "UTILIDAD BRUTA").font = BOLD
 ws8.cell(r, 4, f'=D{ventas_row}+D{costo_row}').font = BOLD
 ws8.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
 UTILIDAD_BRUTA_ROW = r
 r += 1
 
-gv_row = erf_line("Gastos de venta (95)", "95", "deudor", -1)
-ga_row = erf_line("Gastos de administración (94)", "94", "deudor", -1)
+# Solo las cuentas 94 y 95 forman la sección principal de gastos por función.
+gv_row = erf_exact("Gastos de venta (95)", "95", "deudor", -1)
+ga_row = erf_exact("Gastos de administración (94)", "94", "deudor", -1)
 
-# Otras cuentas del elemento 9, distintas de 94 y 95.
-ws8.cell(r, 2, "Otros gastos por función (Elemento 9)").font = BLACK
-ws8.cell(r, 4, f'=-(SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},1)="9")*HT!$M$4:$M${HT_LAST_ROW})-SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="94")*HT!$M$4:$M${HT_LAST_ROW})-SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="95")*HT!$M$4:$M${HT_LAST_ROW}))').font = BLACK
-ws8.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-otros_func_row = r
-r += 1
+# Las cuentas del Elemento 6 sin destino a 94/95 permanecen en el ERF.
+# Esto incluye, por ejemplo, 67 cuando no tiene destino; 65 es opcional
+# y solo se incluye cuando TANA no le asignó destino.
+cuentas_6_sin_destino = sorted(
+    c for c in cuentas_reporte
+    if c[:1] == "6" and len(c) == 5 and c not in CUENTAS_6_CON_DESTINO
+    and c not in {"69121"}
+)
 
-# Gastos financieros (67) no se reclasifican al elemento 9; se toman de R.Naturaleza.
-ws8.cell(r, 2, "Gastos financieros (67)").font = BLACK
-ws8.cell(r, 4, f'=-SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="67")*HT!$K$4:$K${HT_LAST_ROW})').font = BLACK
-ws8.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-fin_gasto_row = r
-r += 1
+elemento6_rows = []
+for code6 in cuentas_6_sin_destino:
+    desc6 = pcge_map.get(code6, code6)
+    rr = erf_exact(f"{code6} - {desc6}", code6, "deudor", -1)
+    elemento6_rows.append(rr)
 
-# Ingresos 71-78 que no forman parte del elemento 9.
+# Ingresos de otros elementos (71-78), sin introducir la 79.
 extra_income_rows = []
 for _pfx in ["71","72","73","74","75","76","77","78"]:
     ws8.cell(r, 2, f"Ingresos / resultados ({_pfx})").font = BLACK
-    ws8.cell(r, 4, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{_pfx}")*HT!$L$4:$L${HT_LAST_ROW})').font = BLACK
+    ws8.cell(
+        r, 4,
+        f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{_pfx}")*HT!$N$4:$N${HT_LAST_ROW})'
+    ).font = BLACK
     ws8.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
     extra_income_rows.append(r)
     r += 1
 
 ws8.cell(r, 2, "RESULTADO DEL EJERCICIO").font = BOLD
-ws8.cell(r, 4, (
-    f'=D{UTILIDAD_BRUTA_ROW}+D{gv_row}+D{ga_row}+D{otros_func_row}+'
-    f'D{fin_gasto_row}+' + '+'.join(f'D{x}' for x in extra_income_rows)
-)).font = BOLD
+componentes = [f"D{UTILIDAD_BRUTA_ROW}", f"D{gv_row}", f"D{ga_row}"]
+componentes += [f"D{x}" for x in elemento6_rows]
+componentes += [f"D{x}" for x in extra_income_rows]
+ws8.cell(r, 4, "=" + "+".join(componentes)).font = BOLD
 ws8.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
 ERF_RESULTADO_ROW = r
 r += 2
 
-# Conciliación visible: debe ser 0.00.
 ws8.cell(r, 2, "CONTROL: ERN - ERF").font = BOLD
 ws8.cell(r, 4, f'=ERN!D{ERN_RESULTADO_ROW}-D{ERF_RESULTADO_ROW}').font = BOLD
 ws8.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
@@ -1997,13 +2048,12 @@ ERF_CONTROL_ROW = r
 r += 2
 ws8.cell(r, 2, "NOTA DE CONTROL").font = BOLD
 ws8.cell(r, 2).comment = Comment(
-    "El ERF toma 69 y las cuentas del elemento 9 desde M/N de la HT. "
-    "La distribución 69/61 y 9/79 se muestra en Q/R, pero no elimina "
-    "la base funcional necesaria para presentar el Estado de Resultado por Función.",
+    "ERF: incluye 70121, 69121, 94, 95 y las cuentas del Elemento 6 "
+    "que no tienen destino a 94/95. La 79 es cuenta puente y NO forma "
+    "parte del Estado de Resultado por Función.",
     "TANA"
 )
 
-autofit(ws7, [3, 52, 5, 18])
 autofit(ws8, [3, 52, 5, 18, 16])
 
 # ------------------------------------------------------------
