@@ -1213,6 +1213,98 @@ if "monografia_json" in st.session_state:
         if alertas:
             st.warning("\n".join(f"- {x}" for x in alertas))
 
+# ============================================================
+# TUTOR INTERACTIVO TANA
+# ============================================================
+def _tana_contexto_tutor():
+    mono = st.session_state.get("monografia_texto", "")
+    asientos = st.session_state.get("asientos_contables", [])
+    asientos_txt = json.dumps(asientos, ensure_ascii=False, indent=2)
+    return (
+        "MONOGRAFÍA:\n" + mono[:14000]
+        + "\n\nASIENTOS GENERADOS POR TANA:\n" + asientos_txt[:18000]
+    )
+
+def _preguntar_a_tana(pregunta):
+    contexto = _tana_contexto_tutor()
+    prompt = f"""Eres TANA, tutor de contabilidad peruana.
+Responde la pregunta del estudiante usando únicamente el contexto proporcionado.
+Explica con claridad por qué se hizo el asiento, cómo se obtuvo el importe, por qué
+una cuenta va al Debe o Haber y, cuando corresponda, cómo se relaciona con la HT,
+la distribución y ajustes, ERN, ERF o ESF.
+No inventes información que no aparezca en el contexto. Si falta un dato, dilo.
+
+CONTEXTO:
+{contexto}
+
+PREGUNTA:
+{pregunta}"""
+
+    response, profile = _generate_with_fallback(
+        lambda client: [prompt],
+        types.GenerateContentConfig()
+    )
+    return response.text or "No pude generar una respuesta.", profile["label"]
+
+if "monografia_json" in st.session_state or "asientos_contables" in st.session_state:
+    st.divider()
+    st.subheader("🤖 Pregúntale a TANA")
+    st.caption("Pregunta por qué se hizo un asiento, cómo se calculó o por qué una cuenta va al Debe o al Haber.")
+
+    pregunta = st.text_input(
+        "Escribe tu pregunta",
+        placeholder="Ej.: ¿Por qué se utilizó la cuenta 79111 en este asiento?",
+        key="pregunta_tana",
+    )
+    c1, c2 = st.columns([4, 1])
+    with c1:
+        preguntar = st.button("💬 Preguntar a TANA", type="primary", key="btn_preguntar_tana")
+    with c2:
+        audio = st.audio_input("🎙️ Hablar", key="audio_tana") if hasattr(st, "audio_input") else None
+
+    if preguntar and pregunta.strip():
+        with st.spinner("TANA está preparando la explicación..."):
+            try:
+                respuesta, ruta = _preguntar_a_tana(pregunta.strip())
+                st.session_state["respuesta_tana"] = respuesta
+                st.session_state["respuesta_tana_ruta"] = ruta
+            except Exception as exc:
+                st.error(f"No se pudo responder: {_gemini_error_message(exc)}")
+
+    if audio is not None:
+        with st.spinner("TANA está escuchando y preparando la respuesta..."):
+            temp_audio = None
+            try:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+                    tmp.write(audio.getvalue())
+                    temp_audio = tmp.name
+
+                def audio_contents(client):
+                    audio_file = client.files.upload(file=temp_audio)
+                    return [
+                        audio_file,
+                        "Escucha el audio del estudiante, transcribe su pregunta y luego respóndela. "
+                        "No inventes datos. Usa el siguiente contexto:\n" + _tana_contexto_tutor(),
+                    ]
+
+                response, profile = _generate_with_fallback(
+                    audio_contents,
+                    types.GenerateContentConfig()
+                )
+                st.session_state["respuesta_tana"] = response.text or "No pude interpretar el audio."
+                st.session_state["respuesta_tana_ruta"] = profile["label"]
+            except Exception as exc:
+                st.error(f"No se pudo procesar el audio: {_gemini_error_message(exc)}")
+            finally:
+                if temp_audio and os.path.exists(temp_audio):
+                    os.remove(temp_audio)
+
+    if st.session_state.get("respuesta_tana"):
+        st.markdown("**Respuesta de TANA:**")
+        st.info(st.session_state["respuesta_tana"])
+        if st.session_state.get("respuesta_tana_ruta"):
+            st.caption(f"Procesado por {st.session_state['respuesta_tana_ruta']}.")
+
 st.divider()
 
 if not st.button("📊 Generar Excel contable", type="primary"):
@@ -1693,7 +1785,10 @@ for code in cuentas_reporte:
     ws6.cell(r, 9, sa_debe)
     ws6.cell(r, 10, sa_haber)
 
-    # Saldo neto tras ajuste, usado para R.Naturaleza / R.Función.
+    # Saldo neto tras ajuste.
+    # IMPORTANTE: para Naturaleza usamos el saldo después de 69 <-> 61;
+    # para Función NO debemos borrar 69 ni las cuentas del elemento 9,
+    # porque esas cuentas son precisamente las que alimentan el ERF.
     neto = (deudor + aj_deudor) - (acreedor + aj_acreedor)
     neto_deudor = max(neto, 0.0)
     neto_acreedor = max(-neto, 0.0)
@@ -1701,16 +1796,32 @@ for code in cuentas_reporte:
     if es_naturaleza(code):
         ws6.cell(r, 11, neto_deudor)
         ws6.cell(r, 12, neto_acreedor)
+
     if es_funcion(code):
-        ws6.cell(r, 13, neto_deudor)
-        ws6.cell(r, 14, neto_acreedor)
+        # ERF: conservar el saldo original de 69, 94, 95 y demás
+        # cuentas del elemento 9. No usar el saldo ajustado porque las
+        # contrapartidas de cierre las llevarían artificialmente a cero.
+        ws6.cell(r, 13, deudor)
+        ws6.cell(r, 14, acreedor)
+
     if es_balance(code):
         ws6.cell(r, 15, deudor)
         ws6.cell(r, 16, acreedor)
 
-    # Distribución y ajuste final: reservado para el cierre/transformación.
-    ws6.cell(r, 17, 0.0)
-    ws6.cell(r, 18, 0.0)
+    # Distribución y ajustes: presentación contable de las transferencias.
+    # 69 y elemento 9 pasan al HABER; 61 y 79 reciben la contrapartida
+    # en el DEBE. Esta columna es informativa y no reemplaza los ajustes
+    # G/H utilizados para el cálculo de los saldos.
+    distrib_debe = 0.0
+    distrib_haber = 0.0
+    if es_variacion_existencias(code):
+        distrib_debe = aj_deudor
+    elif es_cuenta79(code):
+        distrib_debe = aj_deudor
+    elif es_costo_ventas(code) or es_elemento9(code):
+        distrib_haber = aj_acreedor
+    ws6.cell(r, 17, distrib_debe)
+    ws6.cell(r, 18, distrib_haber)
 
     for c in range(1, 19):
         ws6.cell(r, c).font = BLACK
@@ -1882,6 +1993,15 @@ ws8.cell(r, 4, f'=ERN!D{ERN_RESULTADO_ROW}-D{ERF_RESULTADO_ROW}').font = BOLD
 ws8.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
 ws8.cell(r, 5, f'=IF(ABS(D{r})<0.01,"CUADRADO","REVISAR")').font = BOLD
 ERF_CONTROL_ROW = r
+
+r += 2
+ws8.cell(r, 2, "NOTA DE CONTROL").font = BOLD
+ws8.cell(r, 2).comment = Comment(
+    "El ERF toma 69 y las cuentas del elemento 9 desde M/N de la HT. "
+    "La distribución 69/61 y 9/79 se muestra en Q/R, pero no elimina "
+    "la base funcional necesaria para presentar el Estado de Resultado por Función.",
+    "TANA"
+)
 
 autofit(ws7, [3, 52, 5, 18])
 autofit(ws8, [3, 52, 5, 18, 16])
