@@ -1232,7 +1232,12 @@ Responde la pregunta del estudiante usando únicamente el contexto proporcionado
 Explica con claridad por qué se hizo el asiento, cómo se obtuvo el importe, por qué
 una cuenta va al Debe o Haber y, cuando corresponda, cómo se relaciona con la HT,
 la distribución y ajustes, ERN, ERF o ESF.
-No inventes información que no aparezca en el contexto. Si falta un dato, dilo.
+No inventes información que no aparezca en el contexto.
+ En los estados financieros respeta estrictamente estas reglas:
+ ERF: 70 y 69 se detectan por prefijo; 94 y 95 son obligatorias; 78 se incluye solo si existe; 65 y 67 solo si existen sin destino a 94/95. No incluyas 79 ni agregues automáticamente otras cuentas del elemento 6 al ERF.
+ ERN: presenta las cuentas por naturaleza y su resultado.
+ ESF: presenta activo, pasivo y patrimonio; resultados acumulados 59 con saldo deudor reducen el patrimonio. El resultado del ejercicio debe ser consistente con ERN y ERF y el ESF debe cumplir Activo = Pasivo + Patrimonio.
+ Si falta un dato, dilo.
 
 CONTEXTO:
 {contexto}
@@ -1712,23 +1717,29 @@ CUENTAS_6_CON_DESTINO = detectar_cuentas_6_con_destino(
 
 def es_funcion(code):
     """
-    Base del Estado de Resultado por Función en la HT:
+    Clasificación EXACTA para Resultado por Función según la plantilla
+    revisada por el usuario:
 
-    - 70: ventas (se presenta específicamente 70121 en el ERF).
-    - 69: costo de ventas (específicamente 69121 en el ERF).
-    - 94 y 95: gastos por función.
-    - Elemento 6: solo las cuentas que NO tienen destino a 94/95.
-      Ej.: 67 se mantiene si no tiene destino; 65 solo se mantiene
-      cuando la operación no le asignó destino.
-    - 79 NO pertenece al ERF: es cuenta puente de distribución.
+    OBLIGATORIAS:
+      - 70: ventas (detecta cualquier cuenta 70xxxxx presente).
+      - 69: costo de ventas (detecta cualquier cuenta 69xxxxx presente).
+      - 94 y 95: gastos por función.
+
+    ADICIONALES SOLO SI CORRESPONDE:
+      - 78: otros ingresos, si existe en la práctica.
+      - 65 y 67: solo si la cuenta existe y NO tiene destino a 94/95.
+
+    NO pertenecen al ERF:
+      - 60, 61, 62, 63, 64, 66 y 68 por el solo hecho de ser
+        cuentas del elemento 6.
+      - 79: es cuenta puente de distribución y nunca se presenta
+        como componente del ERF.
     """
-    if code[:2] == "70":
+    if not code:
+        return False
+    if code[:2] in {"70", "69", "78", "94", "95"}:
         return True
-    if es_costo_ventas(code):
-        return True
-    if code[:2] in {"94", "95"}:
-        return True
-    if code[:1] == "6" and len(code) == 5:
+    if code[:2] in {"65", "67"} and len(code) == 5:
         return code not in CUENTAS_6_CON_DESTINO
     return False
 
@@ -1973,25 +1984,32 @@ ws8["B3"].font = SUBTITLE_FONT
 
 r = 5
 
-def erf_exact(label, code, side="deudor", multiplier=1):
+def erf_group(label, prefix, side="deudor", required=False):
+    """
+    Agrega una línea por grupo de cuenta (70, 69, 94, 95, 78).
+    Detecta todas las cuentas existentes con ese prefijo.
+    """
     global r
+    existe = any(str(c).startswith(prefix) for c in cuentas_reporte)
+    if not existe and not required:
+        return None
+
     ws8.cell(r, 2, label).font = BLACK
-    col = "N" if side == "acreedor" else "M"
-    formula = (
-        f'=SUMIFS(HT!${col}:${col},HT!$A:$A,"{code}")'
-        if multiplier == 1
-        else f'=-SUMIFS(HT!${col}:${col},HT!$A:$A,"{code}")'
-    )
+    if side == "acreedor":
+        formula = f'=SUMIFS(HT!$N:$N,HT!$A:$A,"{prefix}*")'
+    else:
+        formula = f'=-SUMIFS(HT!$M:$M,HT!$A:$A,"{prefix}*")'
     ws8.cell(r, 4, formula).font = BLACK
     ws8.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
     rr = r
     r += 1
     return rr
 
-# En el PCGE operativo de TANA las ventas se desarrollan con 70121
-# (venta local) y el costo de ventas con 69121.
-ventas_row = erf_exact("Ventas locales (70121)", "70121", "acreedor")
-costo_row = erf_exact("Costo de ventas (69121)", "69121", "deudor", -1)
+# 1. Ventas: cualquier cuenta 70 existente.
+ventas_row = erf_group("Ventas (70)", "70", "acreedor", required=True)
+
+# 2. Costo de ventas: cualquier cuenta 69 existente.
+costo_row = erf_group("Costo de ventas (69)", "69", "deudor", required=True)
 
 ws8.cell(r, 2, "UTILIDAD BRUTA").font = BOLD
 ws8.cell(r, 4, f'=D{ventas_row}+D{costo_row}').font = BOLD
@@ -1999,41 +2017,29 @@ ws8.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
 UTILIDAD_BRUTA_ROW = r
 r += 1
 
-# Solo las cuentas 94 y 95 forman la sección principal de gastos por función.
-gv_row = erf_exact("Gastos de venta (95)", "95", "deudor", -1)
-ga_row = erf_exact("Gastos de administración (94)", "94", "deudor", -1)
+# 3. Gastos por función: 95 y 94 son obligatorios en la estructura.
+gv_row = erf_group("Gastos de venta (95)", "95", "deudor", required=True)
+ga_row = erf_group("Gastos de administración (94)", "94", "deudor", required=True)
 
-# Las cuentas del Elemento 6 sin destino a 94/95 permanecen en el ERF.
-# Esto incluye, por ejemplo, 67 cuando no tiene destino; 65 es opcional
-# y solo se incluye cuando TANA no le asignó destino.
-cuentas_6_sin_destino = sorted(
-    c for c in cuentas_reporte
-    if c[:1] == "6" and len(c) == 5 and c not in CUENTAS_6_CON_DESTINO
-    and c not in {"69121"}
-)
-
-elemento6_rows = []
-for code6 in cuentas_6_sin_destino:
+# 4. Excepción: 65 y 67 solamente si existen SIN destino a 94/95.
+#    No se agregan las demás cuentas del elemento 6.
+elemento6_excepciones = []
+for code6 in sorted(c for c in cuentas_reporte
+                    if len(c) == 5 and c[:2] in {"65", "67"}
+                    and c not in CUENTAS_6_CON_DESTINO):
     desc6 = pcge_map.get(code6, code6)
-    rr = erf_exact(f"{code6} - {desc6}", code6, "deudor", -1)
-    elemento6_rows.append(rr)
+    rr = erf_group(f"{code6} - {desc6}", code6, "deudor", required=False)
+    if rr is not None:
+        elemento6_excepciones.append(rr)
 
-# Ingresos de otros elementos (71-78), sin introducir la 79.
-extra_income_rows = []
-for _pfx in ["71","72","73","74","75","76","77","78"]:
-    ws8.cell(r, 2, f"Ingresos / resultados ({_pfx})").font = BLACK
-    ws8.cell(
-        r, 4,
-        f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{_pfx}")*HT!$N$4:$N${HT_LAST_ROW})'
-    ).font = BLACK
-    ws8.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-    extra_income_rows.append(r)
-    r += 1
+# 5. Cuenta 78: se incorpora solamente si existe.
+otros_78_row = erf_group("Otros ingresos (78)", "78", "acreedor", required=False)
 
 ws8.cell(r, 2, "RESULTADO DEL EJERCICIO").font = BOLD
 componentes = [f"D{UTILIDAD_BRUTA_ROW}", f"D{gv_row}", f"D{ga_row}"]
-componentes += [f"D{x}" for x in elemento6_rows]
-componentes += [f"D{x}" for x in extra_income_rows]
+componentes += [f"D{x}" for x in elemento6_excepciones]
+if otros_78_row is not None:
+    componentes.append(f"D{otros_78_row}")
 ws8.cell(r, 4, "=" + "+".join(componentes)).font = BOLD
 ws8.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
 ERF_RESULTADO_ROW = r
@@ -2048,13 +2054,15 @@ ERF_CONTROL_ROW = r
 r += 2
 ws8.cell(r, 2, "NOTA DE CONTROL").font = BOLD
 ws8.cell(r, 2).comment = Comment(
-    "ERF: incluye 70121, 69121, 94, 95 y las cuentas del Elemento 6 "
-    "que no tienen destino a 94/95. La 79 es cuenta puente y NO forma "
+    "ERF: 70 y 69 se detectan por prefijo; 94 y 95 son obligatorias; "
+    "78 se incluye solo si existe; 65 y 67 solo se incluyen si no tienen "
+    "destino a 94/95. Las cuentas 60, 61, 62, 63, 64, 66 y 68 no se "
+    "incluyen automáticamente en ERF. La 79 es cuenta puente y NO forma "
     "parte del Estado de Resultado por Función.",
     "TANA"
 )
 
-autofit(ws8, [3, 52, 5, 18, 16])
+autofit(ws8, [3, 58, 5, 18, 16])
 
 # ------------------------------------------------------------
 # ESF - Estado de Situación Financiera
@@ -2160,7 +2168,11 @@ r += 1
 pat_rows = []
 for prefix, label in [("50", "Capital social"), ("51", "Acciones de inversión / capital adicional"), ("52", "Capital adicional"), ("56", "Resultados no realizados"), ("57", "Excedente de revaluación"), ("58", "Reservas"), ("59", "Resultados acumulados")]:
     ws9.cell(r, 2, label).font = BLACK
-    ws9.cell(r, 4, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*HT!$P$4:$P${HT_LAST_ROW})').font = BLACK
+    if prefix == "59":
+        # Un saldo deudor en 59 reduce el patrimonio.
+        ws9.cell(r, 4, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="59")*(HT!$P$4:$P${HT_LAST_ROW}-HT!$O$4:$O${HT_LAST_ROW}))').font = BLACK
+    else:
+        ws9.cell(r, 4, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*HT!$P$4:$P${HT_LAST_ROW})').font = BLACK
     ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
     pat_rows.append(r); r += 1
 
