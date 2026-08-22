@@ -575,7 +575,7 @@ with inputbar_container:
         enviar_top = st.button("➤", type="primary", key="btn_enviar_tana_top", use_container_width=True)
 
 if uploaded_file:
-    st.caption(f"📄 {uploaded_file.name}")
+    st.caption(f"📎 {uploaded_file.name} · Pulsa ➤ para enviar y procesar")
 
 def _normalizar_nombre_hoja(nombre):
     return re.sub(r"[^a-z0-9]", "", str(nombre or "").lower())
@@ -864,83 +864,81 @@ def validate_asientos(data, pcge_map):
     return valid, errors, warnings
 
 
-    if st.session_state.get("tana_file_signature") != file_signature:
-        for _key in (
-            "monografia_json", "monografia_texto", "monografia_nombre", "archivo_excel_origen",
-            "asientos_contables", "asientos_validos", "errores_asientos",
-            "alertas_asientos", "respuesta_tana", "respuesta_tana_ruta", "audio_tana_processed",
-            "tana_modo_trabajo", "tana_correcciones", "tana_correccion_version",
-            "tana_excel_origen_bytes", "tana_diagnostico_excel",
-            "tana_excel_buffer", "tana_resuelto_signature",
-        ):
-            st.session_state.pop(_key, None)
-        if _es_excel_tana(uploaded_file.name):
-            with st.spinner("TANA está leyendo el Excel para revisión…"):
-                try:
-                    asientos_importados = _cargar_asientos_desde_excel(uploaded_file)
-                    # La validación vive en el motor principal y se ejecuta DESPUÉS
-                    # de cargar el Excel. Esto evita depender de parches/funciones
-                    # externas que puedan provocar NameError.
-                    valid, errors, warnings = validate_asientos({"asientos": asientos_importados}, pcge_map)
-                    st.session_state["asientos_contables"] = asientos_importados
-                    st.session_state["asientos_validos"] = valid
-                    st.session_state["errores_asientos"] = errors
-                    st.session_state["alertas_asientos"] = warnings
-                    st.session_state["tana_excel_origen_bytes"] = uploaded_file.getvalue()
-                    st.session_state["archivo_excel_origen"] = uploaded_file.name
-                    st.session_state["monografia_nombre"] = uploaded_file.name
-                    st.session_state["monografia_texto"] = (
-                        "Excel generado previamente por TANA. Se conserva como base "
-                        "para revisión, diagnóstico y corrección."
-                    )
-                    st.session_state["tana_diagnostico_excel"] = _diagnosticar_asientos(
-                        asientos_importados, pcge_map
-                    )
-                    st.session_state["tana_file_signature"] = file_signature
-                    st.session_state["tana_correccion_version"] = 1
-                    st.session_state["tana_modo_trabajo"] = "completo"
-                    st.session_state["tana_excel_buffer"] = uploaded_file.getvalue()
+if uploaded_file is not None and enviar_top and st.session_state.get("tana_file_signature") != file_signature:
+    for _key in (
+        "monografia_json", "monografia_texto", "monografia_nombre", "archivo_excel_origen",
+        "asientos_contables", "asientos_validos", "errores_asientos",
+        "alertas_asientos", "respuesta_tana", "respuesta_tana_ruta", "audio_tana_processed",
+        "tana_modo_trabajo", "tana_correcciones", "tana_correccion_version",
+        "tana_excel_origen_bytes", "tana_diagnostico_excel",
+        "tana_excel_buffer", "tana_resuelto_signature",
+    ):
+        st.session_state.pop(_key, None)
+    if _es_excel_tana(uploaded_file.name):
+        with st.spinner("TANA está leyendo el Excel para revisión…"):
+            try:
+                asientos_importados = _cargar_asientos_desde_excel(uploaded_file)
+                # La validación vive en el motor principal y se ejecuta DESPUÉS
+                # de cargar el Excel. Esto evita depender de parches/funciones
+                # externas que puedan provocar NameError.
+                valid, errors, warnings = validate_asientos({"asientos": asientos_importados}, pcge_map)
+                st.session_state["asientos_contables"] = asientos_importados
+                st.session_state["asientos_validos"] = valid
+                st.session_state["errores_asientos"] = errors
+                st.session_state["alertas_asientos"] = warnings
+                st.session_state["tana_excel_origen_bytes"] = uploaded_file.getvalue()
+                st.session_state["archivo_excel_origen"] = uploaded_file.name
+                st.session_state["monografia_nombre"] = uploaded_file.name
+                st.session_state["monografia_texto"] = (
+                    "Excel generado previamente por TANA. Se conserva como base "
+                    "para revisión, diagnóstico y corrección."
+                )
+                st.session_state["tana_diagnostico_excel"] = _diagnosticar_asientos(
+                    asientos_importados, pcge_map
+                )
+                st.session_state["tana_file_signature"] = file_signature
+                st.session_state["tana_correccion_version"] = 1
+                st.session_state["tana_modo_trabajo"] = "completo"
+                st.session_state["tana_excel_buffer"] = uploaded_file.getvalue()
+                _tana_chat_add(
+                    "user",
+                    f"📊 Cargó un Excel para revisión: <b>{uploaded_file.name}</b>"
+                )
+                if errors:
                     _tana_chat_add(
-                        "user",
-                        f"📊 Cargó un Excel para revisión: <b>{uploaded_file.name}</b>"
+                        "assistant",
+                        "<b>TANA revisó el Excel.</b><br>"
+                        + st.session_state["tana_diagnostico_excel"].replace("\n", "<br>")
+                        + "<br><br>"
+                        "Puedo indicarte exactamente qué asiento o cuenta necesita revisión y, "
+                        "si me lo pides, generar un nuevo Excel corregido."
                     )
-                    if errors:
-                        _tana_chat_add(
-                            "assistant",
-                            "<b>TANA revisó el Excel.</b><br>"
-                            + st.session_state["tana_diagnostico_excel"].replace("\n", "<br>")
-                            + "<br><br>"
-                            "Puedo indicarte exactamente qué asiento o cuenta necesita revisión y, "
-                            "si me lo pides, generar un nuevo Excel corregido."
-                        )
-                    else:
-                        _tana_chat_add(
-                            "assistant",
-                            "<b>TANA leyó el Excel correctamente.</b><br>"
-                            + st.session_state["tana_diagnostico_excel"].replace("\n", "<br>")
-                            + "<br><br>"
-                            "Soy una inteligencia artificial y puedo cometer errores. "
-                            "Revisa siempre el resultado antes de utilizarlo."
-                        )
-                    st.rerun()
-                except Exception as exc:
-                    st.error(f"No se pudo cargar el Excel para revisión: {exc}")
-                    st.stop()
-        else:
-            with st.spinner("TANA está leyendo y procesando la monografía…"):
-                try:
-                    extracted = extract_with_gemini(uploaded_file)
-                    st.session_state["monografia_json"] = extracted
-                    st.session_state["monografia_texto"] = extraction_to_text(extracted)
-                    st.session_state["monografia_nombre"] = uploaded_file.name
-                    st.session_state["tana_file_signature"] = file_signature
-                    st.rerun()
-                except json.JSONDecodeError:
-                    st.error("Gemini respondió con un formato que no pudo convertirse a JSON. Vuelve a intentarlo.")
-                    st.stop()
-                except Exception as exc:
-                    st.error(f"No se pudo procesar el archivo con Gemini: {exc}")
-                    st.stop()
+                else:
+                    _tana_chat_add(
+                        "assistant",
+                        "<b>TANA leyó el Excel correctamente.</b><br>"
+                        + st.session_state["tana_diagnostico_excel"].replace("\n", "<br>")
+                        + "<br><br>"
+                        "Soy una inteligencia artificial y puedo cometer errores. "
+                        "Revisa siempre el resultado antes de utilizarlo."
+                    )
+            except Exception as exc:
+                st.error(f"No se pudo cargar el Excel para revisión: {exc}")
+                st.stop()
+    else:
+        with st.spinner("TANA está leyendo y procesando la monografía…"):
+            try:
+                extracted = extract_with_gemini(uploaded_file)
+                st.session_state["monografia_json"] = extracted
+                st.session_state["monografia_texto"] = extraction_to_text(extracted)
+                st.session_state["monografia_nombre"] = uploaded_file.name
+                st.session_state["tana_file_signature"] = file_signature
+            except json.JSONDecodeError:
+                st.error("Gemini respondió con un formato que no pudo convertirse a JSON. Vuelve a intentarlo.")
+                st.stop()
+            except Exception as exc:
+                st.error(f"No se pudo procesar el archivo con Gemini: {exc}")
+                st.stop()
 
 if "monografia_json" in st.session_state:
     data = st.session_state["monografia_json"]
@@ -950,7 +948,7 @@ if "monografia_json" in st.session_state:
         _tana_chat_add("assistant", f"Monografía recibida: <b>{_nombre_mono}</b>. Estoy desarrollando los asientos…")
         if _nombre_mono not in st.session_state.get("tana_historial", []):
             st.session_state.setdefault("tana_historial", []).append(_nombre_mono)
-        st.rerun()
+
 
 
 
@@ -1682,7 +1680,7 @@ PREGUNTA:
 
 # La consulta y el audio se capturan arriba. Aquí solo se procesa la acción,
 # una vez que las funciones del tutor ya están definidas.
-if (enviar_top or audio_top is not None) and (pregunta_top.strip() or audio_top is not None) and st.session_state.get("asientos_contables"):
+if enviar_top and (pregunta_top.strip() or audio_top is not None) and st.session_state.get("asientos_contables"):
     if enviar_top and pregunta_top.strip():
         _tana_chat_add("user", pregunta_top.strip())
         _modo = _detectar_modo_trabajo(pregunta_top.strip())
