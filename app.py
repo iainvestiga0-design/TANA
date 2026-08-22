@@ -1553,7 +1553,8 @@ def _corregir_asientos_con_gemini(instruccion):
     mono = st.session_state.get("monografia_texto", "")
     pcge_5 = [[str(c).strip(), str(d)] for c, d in PCGE_DATA if re.fullmatch(r"\d{5}", str(c).strip())]
     diagnostico_actual = st.session_state.get("tana_diagnostico_excel", "")
-    prompt = f"""Eres TANA, motor contable peruano.
+    excel_contexto = _resumen_excel_para_tutor(None) if st.session_state.get("tana_excel_origen_bytes") else ""
+    prompt = f"""Eres TANA, motor contable peruano, y estás corrigiendo un Excel que tú misma generaste.
 El estudiante está revisando un Excel que TANA ya generó y solicita una corrección.
 El conjunto "ASIENTOS ACTUALES" fue reconstruido directamente desde ese Excel.
 Debes tratarlo como la versión que el estudiante está corrigiendo.
@@ -1571,9 +1572,13 @@ REGLAS DE CORRECCIÓN:
 2. Conserva todos los demás asientos, fechas, glosas, documentos, cuentas e importes que no sean afectados.
 3. Si la corrección cambia un importe, recalcula las líneas del mismo asiento para que Debe = Haber.
 4. Usa únicamente cuentas PCGE de 5 dígitos del catálogo proporcionado.
-5. No inventes información. Si la solicitud no permite determinar una corrección segura, devuelve una lista vacía y explica el motivo en 'observacion'.
-6. Devuelve SIEMPRE el conjunto COMPLETO de asientos, no solo el asiento modificado.
-7. La respuesta debe ser JSON válido.
+5. Intenta corregir a partir de TRES fuentes, en este orden: (a) instrucción del estudiante, (b) diagnóstico determinista, (c) contenido del Excel. Si el Excel contiene una cuenta inválida, busca en el contexto del asiento, denominación, operación y demás hojas la cuenta válida más coherente del PCGE.
+6. No hagas una corrección arbitraria solo para cuadrar. Si no existe evidencia suficiente para escoger una cuenta, conserva esa línea y explica exactamente qué dato falta.
+7. Si el estudiante pide expresamente "corrige", "corrígelo", "corrige los errores" o "genera un nuevo Excel", debes INTENTAR una corrección; no respondas únicamente que no puedes.
+8. Si existe un descuadre, identifica primero qué asiento y qué líneas lo producen y modifica solo las líneas justificadas por la evidencia.
+9. Después de modificar, comprueba mentalmente Debe = Haber y que las cuentas propuestas estén en el PCGE.
+10. Devuelve SIEMPRE el conjunto COMPLETO de asientos, no solo el asiento modificado.
+11. La respuesta debe ser JSON válido.
 
 ESTRUCTURA OBLIGATORIA:
 {{
@@ -1589,6 +1594,9 @@ ASIENTOS ACTUALES:
 
 PCGE DE 5 DÍGITOS:
 {json.dumps(pcge_5, ensure_ascii=False)}
+
+CONTENIDO DEL EXCEL CARGADO:
+{excel_contexto[:30000]}
 
 SOLICITUD DEL ESTUDIANTE:
 {instruccion}
