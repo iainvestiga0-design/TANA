@@ -503,6 +503,7 @@ with st.sidebar:
             "asientos_contables", "asientos_validos", "errores_asientos", "alertas_asientos",
             "respuesta_tana", "respuesta_tana_ruta", "audio_tana_processed",
             "tana_modo_trabajo", "tana_correcciones", "tana_correccion_version",
+            "tana_excel_origen_bytes", "tana_diagnostico_excel",
             "tana_excel_buffer", "tana_resuelto_signature",
         ):
             st.session_state.pop(_key, None)
@@ -576,55 +577,194 @@ with inputbar_container:
 if uploaded_file:
     st.caption(f"📄 {uploaded_file.name}")
 
+def _normalizar_nombre_hoja(nombre):
+    return re.sub(r"[^a-z0-9]", "", str(nombre or "").lower())
+
 def _cargar_asientos_desde_excel(uploaded):
-    """Carga un Excel generado por TANA y reconstruye sus asientos para revisión/corrección.
-    No recalcula ni altera importes: conserva exactamente los valores del archivo recibido.
+    """Lee un Excel generado por TANA y reconstruye sus asientos.
+    Conserva los importes recibidos y no los recalcula durante la importación.
     """
     data = uploaded.getvalue()
-    wb_in = openpyxl.load_workbook(io.BytesIO(data), data_only=False)
-    if "Asientos_Contables" not in wb_in.sheetnames:
-        raise ValueError("El Excel no contiene la hoja 'Asientos_Contables' generada por TANA.")
-    ws = wb_in["Asientos_Contables"]
-    headers = {str(ws.cell(1, c).value or "").strip(): c for c in range(1, ws.max_column + 1)}
-    required = ["N° Asiento", "Fecha", "Glosa", "Documento", "Operación", "Código", "Denominación", "Concepto", "Debe S/", "Haber S/"]
-    missing = [h for h in required if h not in headers]
+    try:
+        wb_in = openpyxl.load_workbook(io.BytesIO(data), data_only=False, read_only=False)
+    except Exception as exc:
+        raise ValueError(f"No se pudo abrir el archivo Excel: {exc}")
+
+    # Admitimos pequeñas variaciones del nombre de la hoja.
+    sheet_name = None
+    for name in wb_in.sheetnames:
+        norm = _normalizar_nombre_hoja(name)
+        if norm in ("asientoscontables", "asientos", "librodiario"):
+            sheet_name = name
+            break
+    if not sheet_name:
+        raise ValueError(
+            "No encontré la hoja de asientos. El Excel debe contener "
+            "'Asientos_Contables' (o una hoja equivalente de Libro Diario)."
+        )
+
+    ws = wb_in[sheet_name]
+    headers = {}
+    for c in range(1, ws.max_column + 1):
+        value = str(ws.cell(1, c).value or "").strip()
+        if value:
+            headers[value] = c
+
+    aliases = {
+        "N° Asiento": ["N° Asiento", "Nº Asiento", "No. Asiento", "Asiento", "N°"],
+        "Fecha": ["Fecha"],
+        "Glosa": ["Glosa", "Descripción"],
+        "Documento": ["Documento", "Documento Ref.", "Documento Ref"],
+        "Operación": ["Operación", "Operacion", "N° Operación", "N° Operacion"],
+        "Código": ["Código", "Codigo", "Cuenta", "Código Cuenta"],
+        "Denominación": ["Denominación", "Denominacion", "Nombre Cuenta", "Descripción Cuenta"],
+        "Concepto": ["Concepto", "Detalle"],
+        "Debe S/": ["Debe S/", "Debe", "Debe S/.","DEBE"],
+        "Haber S/": ["Haber S/", "Haber", "Haber S/.","HABER"],
+    }
+    resolved = {}
+    for canonical, names in aliases.items():
+        for candidate in names:
+            if candidate in headers:
+                resolved[canonical] = headers[candidate]
+                break
+
+    required = ["N° Asiento", "Código", "Debe S/", "Haber S/"]
+    missing = [h for h in required if h not in resolved]
     if missing:
-        raise ValueError("El Excel no tiene la estructura de asientos esperada. Faltan: " + ", ".join(missing))
+        raise ValueError(
+            "El Excel no tiene la estructura de asientos esperada. "
+            "Faltan columnas: " + ", ".join(missing)
+        )
 
     asientos = []
     actual = None
+
+    def cell(row, key, default=""):
+        col = resolved.get(key)
+        if not col:
+            return default
+        return ws.cell(row, col).value if ws.cell(row, col).value is not None else default
+
     for r in range(2, ws.max_row + 1):
-        numero = ws.cell(r, headers["N° Asiento"]).value
-        codigo = ws.cell(r, headers["Código"]).value
-        if numero in (None, "") and codigo in (None, ""):
+        numero = cell(r, "N° Asiento", "")
+        codigo = str(cell(r, "Código", "") or "").strip()
+
+        if numero in ("", None) and not codigo:
             continue
-        if numero not in (None, ""):
+
+        # En el Excel de TANA, fecha/glosa/número aparecen solo en la primera
+        # línea de cada asiento.
+        if numero not in ("", None):
+            try:
+                if isinstance(numero, float) and numero.is_integer():
+                    numero = int(numero)
+                elif isinstance(numero, str) and numero.strip().isdigit():
+                    numero = int(numero.strip())
+            except Exception:
+                pass
+
             actual = {
-                "numero": int(numero) if isinstance(numero, (int, float)) and float(numero).is_integer() else numero,
-                "fecha": ws.cell(r, headers["Fecha"]).value or "",
-                "glosa": ws.cell(r, headers["Glosa"]).value or "",
-                "documento": ws.cell(r, headers["Documento"]).value or "",
-                "operacion_numero": ws.cell(r, headers["Operación"]).value or "",
+                "numero": numero,
+                "fecha": cell(r, "Fecha", ""),
+                "glosa": cell(r, "Glosa", ""),
+                "documento": cell(r, "Documento", ""),
+                "operacion_numero": cell(r, "Operación", ""),
                 "lineas": [],
             }
             asientos.append(actual)
-        if actual is None:
+
+        if actual is None or not codigo:
             continue
-        code = str(codigo or "").strip()
-        if not code:
-            continue
-        debe = _to_float(ws.cell(r, headers["Debe S/"]).value)
-        haber = _to_float(ws.cell(r, headers["Haber S/"]).value)
+
+        debe = _to_float(cell(r, "Debe S/", 0), 0.0)
+        haber = _to_float(cell(r, "Haber S/", 0), 0.0)
         actual["lineas"].append({
-            "codigo": code,
-            "denominacion": ws.cell(r, headers["Denominación"]).value or "",
-            "concepto": ws.cell(r, headers["Concepto"]).value or "",
+            "codigo": codigo,
+            "denominacion": cell(r, "Denominación", ""),
+            "concepto": cell(r, "Concepto", ""),
             "debe": debe,
             "haber": haber,
         })
+
     if not asientos:
         raise ValueError("No se encontraron asientos contables en el Excel.")
+
     return asientos
+
+
+def _diagnosticar_asientos(asientos, pcge_map):
+    """Diagnóstico determinista y explícito para que TANA señale dónde está el error."""
+    diagnostico = []
+    total_d = Decimal("0")
+    total_h = Decimal("0")
+
+    for idx, asiento in enumerate(asientos or [], start=1):
+        numero = asiento.get("numero", idx)
+        td = Decimal("0")
+        th = Decimal("0")
+        line_errors = []
+
+        for li, line in enumerate(asiento.get("lineas", []) or [], start=1):
+            code = str(line.get("codigo", "")).strip()
+            debe = _money(line.get("debe")) or Decimal("0")
+            haber = _money(line.get("haber")) or Decimal("0")
+            td += debe
+            th += haber
+
+            if not re.fullmatch(r"\d{5}", code):
+                line_errors.append(f"línea {li}: la cuenta '{code}' no tiene 5 dígitos")
+            elif code not in pcge_map:
+                line_errors.append(f"línea {li}: la cuenta {code} no existe en el PCGE")
+            if debe > 0 and haber > 0:
+                line_errors.append(f"línea {li}: {code} tiene Debe y Haber simultáneamente")
+
+        diff = td - th
+        total_d += td
+        total_h += th
+
+        if abs(diff) > Decimal("0.01") or line_errors:
+            detalle = [f"Asiento {numero}: Debe S/ {td:.2f} vs Haber S/ {th:.2f}."]
+            if abs(diff) > Decimal("0.01"):
+                detalle.append(f"Diferencia: S/ {abs(diff):.2f}.")
+            detalle.extend(line_errors)
+            diagnostico.append(" ".join(detalle))
+
+    if not diagnostico:
+        diagnostico.append(
+            f"No encontré asientos descuadrados. Total Debe S/ {total_d:.2f} = "
+            f"Total Haber S/ {total_h:.2f}."
+        )
+    else:
+        diagnostico.insert(
+            0,
+            f"Se detectaron {len(diagnostico)} asiento(s) que requieren revisión."
+        )
+
+    return "\n".join(diagnostico)
+
+
+def _resumen_excel_para_tutor(uploaded):
+    """Extrae nombres de hojas y datos visibles para que TANA pueda localizar el problema."""
+    try:
+        raw = uploaded.getvalue() if uploaded is not None else st.session_state.get("tana_excel_origen_bytes")
+        if not raw:
+            return ""
+        wbv = openpyxl.load_workbook(io.BytesIO(raw), data_only=False, read_only=True)
+        partes = ["HOJAS DEL EXCEL: " + ", ".join(wbv.sheetnames)]
+        for nombre in wbv.sheetnames:
+            ws = wbv[nombre]
+            if nombre in ("Asientos_Contables", "HT", "ERF", "ERN", "ESF", "LM"):
+                partes.append(f"\n--- HOJA {nombre} ---")
+                max_rows = min(ws.max_row, 120)
+                max_cols = min(ws.max_column, 12)
+                for r in ws.iter_rows(min_row=1, max_row=max_rows, max_col=max_cols, values_only=True):
+                    vals = [str(v) for v in r if v not in (None, "")]
+                    if vals:
+                        partes.append(" | ".join(vals))
+        return "\n".join(partes)[:30000]
+    except Exception as exc:
+        return f"No fue posible resumir el Excel: {exc}"
 
 
 def _es_excel_tana(nombre):
@@ -673,6 +813,7 @@ if uploaded_file:
             "asientos_contables", "asientos_validos", "errores_asientos",
             "alertas_asientos", "respuesta_tana", "respuesta_tana_ruta", "audio_tana_processed",
             "tana_modo_trabajo", "tana_correcciones", "tana_correccion_version",
+            "tana_excel_origen_bytes", "tana_diagnostico_excel",
             "tana_excel_buffer", "tana_resuelto_signature",
         ):
             st.session_state.pop(_key, None)
@@ -680,17 +821,50 @@ if uploaded_file:
             with st.spinner("TANA está leyendo el Excel para revisión…"):
                 try:
                     asientos_importados = _cargar_asientos_desde_excel(uploaded_file)
+                    # La validación vive en el motor principal y se ejecuta DESPUÉS
+                    # de cargar el Excel. Esto evita depender de parches/funciones
+                    # externas que puedan provocar NameError.
                     valid, errors, warnings = validate_asientos({"asientos": asientos_importados}, pcge_map)
                     st.session_state["asientos_contables"] = asientos_importados
                     st.session_state["asientos_validos"] = valid
                     st.session_state["errores_asientos"] = errors
                     st.session_state["alertas_asientos"] = warnings
+                    st.session_state["tana_excel_origen_bytes"] = uploaded_file.getvalue()
                     st.session_state["archivo_excel_origen"] = uploaded_file.name
                     st.session_state["monografia_nombre"] = uploaded_file.name
-                    st.session_state["monografia_texto"] = "Excel generado previamente por TANA. Se conserva como base para revisión y corrección."
+                    st.session_state["monografia_texto"] = (
+                        "Excel generado previamente por TANA. Se conserva como base "
+                        "para revisión, diagnóstico y corrección."
+                    )
+                    st.session_state["tana_diagnostico_excel"] = _diagnosticar_asientos(
+                        asientos_importados, pcge_map
+                    )
                     st.session_state["tana_file_signature"] = file_signature
                     st.session_state["tana_correccion_version"] = 1
                     st.session_state["tana_modo_trabajo"] = "completo"
+                    st.session_state["tana_excel_buffer"] = uploaded_file.getvalue()
+                    _tana_chat_add(
+                        "user",
+                        f"📊 Cargó un Excel para revisión: <b>{uploaded_file.name}</b>"
+                    )
+                    if errors:
+                        _tana_chat_add(
+                            "assistant",
+                            "<b>TANA revisó el Excel.</b><br>"
+                            + st.session_state["tana_diagnostico_excel"].replace("\n", "<br>")
+                            + "<br><br>"
+                            "Puedo indicarte exactamente qué asiento o cuenta necesita revisión y, "
+                            "si me lo pides, generar un nuevo Excel corregido."
+                        )
+                    else:
+                        _tana_chat_add(
+                            "assistant",
+                            "<b>TANA leyó el Excel correctamente.</b><br>"
+                            + st.session_state["tana_diagnostico_excel"].replace("\n", "<br>")
+                            + "<br><br>"
+                            "Soy una inteligencia artificial y puedo cometer errores. "
+                            "Revisa siempre el resultado antes de utilizarlo."
+                        )
                     st.rerun()
                 except Exception as exc:
                     st.error(f"No se pudo cargar el Excel para revisión: {exc}")
@@ -1381,6 +1555,8 @@ def _corregir_asientos_con_gemini(instruccion):
     pcge_5 = [[str(c).strip(), str(d)] for c, d in PCGE_DATA if re.fullmatch(r"\d{5}", str(c).strip())]
     prompt = f"""Eres TANA, motor contable peruano.
 El estudiante está revisando un Excel que TANA ya generó y solicita una corrección.
+El conjunto "ASIENTOS ACTUALES" fue reconstruido directamente desde ese Excel.
+Debes tratarlo como la versión que el estudiante está corrigiendo.
 
 REGLAS DE CORRECCIÓN:
 1. Modifica únicamente lo que el estudiante señala.
@@ -1446,7 +1622,7 @@ def _aplicar_correccion_si_corresponde(pregunta):
             st.session_state["tana_correccion_version"] = st.session_state.get("tana_correccion_version", 1) + 1
             st.session_state["tana_resuelto_signature"] = None
             st.session_state["tana_excel_buffer"] = None
-            _tana_chat_add("assistant", f"<b>TANA corrigió el trabajo.</b><br>{observacion}<br><br>Se validaron nuevamente los asientos y preparé una nueva versión del Excel para descargar.")
+            _tana_chat_add("assistant", f"<b>TANA corrigió el trabajo.</b><br>{observacion}<br><br>Se validaron nuevamente los asientos y preparé una nueva versión del Excel para descargar.<br><br><small>Soy una inteligencia artificial y puedo cometer errores. Revisa siempre el resultado antes de utilizarlo.</small>")
             return True
         except Exception as exc:
             st.error(f"No se pudo aplicar la corrección: {_gemini_error_message(exc)}")
@@ -1459,9 +1635,13 @@ def _tana_contexto_tutor():
     mono = st.session_state.get("monografia_texto", "")
     asientos = st.session_state.get("asientos_contables", [])
     asientos_txt = json.dumps(asientos, ensure_ascii=False, indent=2)
+    diagnostico = st.session_state.get("tana_diagnostico_excel", "")
+    excel_contexto = _resumen_excel_para_tutor(None) if st.session_state.get("tana_excel_origen_bytes") else ""
     return (
-        "MONOGRAFÍA:\n" + mono[:14000]
-        + "\n\nASIENTOS GENERADOS POR TANA:\n" + asientos_txt[:18000]
+        "MONOGRAFÍA / FUENTE:\n" + mono[:12000]
+        + "\n\nASIENTOS ACTUALES:\n" + asientos_txt[:22000]
+        + "\n\nDIAGNÓSTICO DETERMINISTA:\n" + diagnostico[:8000]
+        + "\n\nCONTENIDO DEL EXCEL:\n" + excel_contexto[:26000]
     )
 
 def _preguntar_a_tana(pregunta):
@@ -1472,11 +1652,20 @@ Explica con claridad por qué se hizo el asiento, cómo se obtuvo el importe, po
 una cuenta va al Debe o Haber y, cuando corresponda, cómo se relaciona con la HT,
 la distribución y ajustes, ERN, ERF o ESF.
 No inventes información que no aparezca en el contexto.
+Si el estudiante pregunta dónde está el error, responde de forma exacta y prioriza
+el diagnóstico determinista: número de asiento, número de línea, código de cuenta,
+Debe, Haber y diferencia. Si el problema está en una cuenta, menciona el código y
+su denominación. No digas "algún destino está mal" si el contexto permite identificar
+el punto concreto. Si no puedes identificarlo con seguridad, dilo expresamente.
+Si el usuario pide corregir, no afirmes que lo corregiste hasta que la validación haya
+pasado y se haya generado una nueva versión del Excel.
  En los estados financieros respeta estrictamente estas reglas:
  ERF: 70 y 69 se detectan por prefijo; 94 y 95 son obligatorias; 78 se incluye solo si existe; 65 y 67 solo si existen sin destino a 94/95. No incluyas 79 ni agregues automáticamente otras cuentas del elemento 6 al ERF.
  ERN: presenta las cuentas por naturaleza y su resultado.
  ESF: presenta activo, pasivo y patrimonio; resultados acumulados 59 con saldo deudor reducen el patrimonio. El resultado del ejercicio debe ser consistente con ERN y ERF y el ESF debe cumplir Activo = Pasivo + Patrimonio.
  Si falta un dato, dilo.
+Al final de una explicación de revisión agrega, cuando sea pertinente:
+"Soy una inteligencia artificial y puedo cometer errores. Revisa siempre el resultado antes de utilizarlo."
 
 CONTEXTO:
 {contexto}
@@ -1500,6 +1689,19 @@ if (enviar_top or audio_top is not None) and (pregunta_top.strip() or audio_top 
             st.session_state["tana_modo_trabajo"] = _modo
         if _es_peticion_correccion(pregunta_top.strip()):
             _aplicar_correccion_si_corresponde(pregunta_top.strip())
+        elif st.session_state.get("tana_excel_origen_bytes") and any(
+            k in pregunta_top.lower()
+            for k in ("no cuadra", "no cuadran", "diferencia", "dónde está el error", "donde esta el error",
+                      "qué está mal", "que esta mal", "revisa el excel", "revisa este excel")
+        ):
+            diagnostico = st.session_state.get("tana_diagnostico_excel", "")
+            _tana_chat_add(
+                "assistant",
+                "<b>Revisión exacta del Excel:</b><br>" +
+                diagnostico.replace("\n", "<br>") +
+                "<br><br><small>Soy una inteligencia artificial y puedo cometer errores. "
+                "Revisa siempre el resultado antes de utilizarlo.</small>"
+            )
         else:
             with st.spinner("TANA está preparando la explicación…"):
                 try:
