@@ -515,18 +515,42 @@ def _mostrar_landing_tana():
     st.markdown('</div>', unsafe_allow_html=True)
 
 
-if not st.session_state.get("tana_workspace", False):
-    _mostrar_landing_tana()
-    st.stop()
+# TANA entra directamente al área de trabajo: un solo flujo, sin pasos intermedios.
+st.session_state["tana_workspace"] = True
 
-# Barra mínima de navegación dentro del área de trabajo.
-nav_left, nav_right = st.columns([1, 8])
-with nav_left:
-    if st.button("← Inicio", key="btn_inicio_tana"):
-        st.session_state["tana_workspace"] = False
-        st.rerun()
-with nav_right:
-    st.markdown("### TANA · Área de trabajo")
+# Encabezado compacto: logo + carga + consulta + micrófono + enviar.
+st.markdown("""
+<style>
+.tana-mini {font-size:13px;color:#5B6B78;margin-bottom:8px;}
+.tana-logo-mini img {border-radius:50%; object-fit:cover;}
+</style>
+""", unsafe_allow_html=True)
+head = st.columns([0.65, 2.0, 6.2, 1.25, 0.8], gap="small")
+with head[0]:
+    logo_path = os.path.join(os.path.dirname(__file__), "LOGO TANA.jpg")
+    if os.path.exists(logo_path):
+        st.image(logo_path, width=68)
+with head[1]:
+    st.markdown("**Cargar monografía**")
+    uploaded_file = st.file_uploader(
+        "Archivo", type=SUPPORTED_TYPES, label_visibility="collapsed",
+        help="PDF, DOC, DOCX, XLS, XLSX, JPG, JPEG y PNG."
+    )
+with head[2]:
+    st.markdown("<div class='tana-mini'>Consulta contable</div>", unsafe_allow_html=True)
+    pregunta_top = st.text_input(
+        "Consulta", placeholder="Escribe una consulta contable para TANA…",
+        key="pregunta_tana_top", label_visibility="collapsed"
+    )
+with head[3]:
+    st.markdown("<div class='tana-mini'>Hablar</div>", unsafe_allow_html=True)
+    audio_top = st.audio_input("Hablar", key="audio_tana_top") if hasattr(st, "audio_input") else None
+with head[4]:
+    st.markdown("<div style='height:21px'></div>", unsafe_allow_html=True)
+    enviar_top = st.button("➤", type="primary", key="btn_enviar_tana_top", use_container_width=True)
+
+if uploaded_file:
+    st.caption(f"📄 {uploaded_file.name}")
 
 def extraction_to_text(data):
     parts = []
@@ -559,76 +583,38 @@ def extraction_to_text(data):
     return "\n".join(parts)
 
 profiles_status = get_gemini_profiles()
-if profiles_status:
-    st.caption(
-        "🤖 Gemini: " + " → ".join(
-            f"{p['label']} ({p['model']})" for p in profiles_status
-        )
-        + ". TANA cambiará automáticamente de ruta si una cuota se agota."
-    )
 
-with st.expander("📥 1. Subir monografía", expanded=True):
-    uploaded_file = st.file_uploader(
-        "Arrastra aquí tu monografía o selecciónala desde tu equipo",
-        type=SUPPORTED_TYPES,
-        help="PDF, DOC, DOCX, XLS, XLSX, JPG, JPEG y PNG.",
-    )
-
+# El archivo se procesa automáticamente al cargarse. No se muestra un botón
+# intermedio: la lógica contable original permanece intacta.
 if uploaded_file:
-    if st.button("🤖 Analizar monografía con Gemini", type="primary"):
-        with st.spinner(
-            "Gemini está leyendo la monografía y estructurando sus operaciones..."
+    file_signature = f"{uploaded_file.name}|{getattr(uploaded_file, 'size', 0)}"
+    if st.session_state.get("tana_file_signature") != file_signature:
+        for _key in (
+            "monografia_json", "monografia_texto", "monografia_nombre",
+            "asientos_contables", "asientos_validos", "errores_asientos",
+            "alertas_asientos", "respuesta_tana", "respuesta_tana_ruta", "audio_tana_processed",
         ):
+            st.session_state.pop(_key, None)
+        with st.spinner("TANA está leyendo y procesando la monografía…"):
             try:
                 extracted = extract_with_gemini(uploaded_file)
-
                 st.session_state["monografia_json"] = extracted
                 st.session_state["monografia_texto"] = extraction_to_text(extracted)
                 st.session_state["monografia_nombre"] = uploaded_file.name
-
+                st.session_state["tana_file_signature"] = file_signature
+                # Fuerza una nueva ejecución para continuar con el desarrollo.
+                st.rerun()
             except json.JSONDecodeError:
-                st.error(
-                    "Gemini respondió con un formato que no pudo convertirse "
-                    "a JSON. Vuelve a intentarlo."
-                )
+                st.error("Gemini respondió con un formato que no pudo convertirse a JSON. Vuelve a intentarlo.")
+                st.stop()
             except Exception as exc:
                 st.error(f"No se pudo procesar el archivo con Gemini: {exc}")
+                st.stop()
 
 if "monografia_json" in st.session_state:
     data = st.session_state["monografia_json"]
+    st.success(f"Monografía recibida: {st.session_state.get('monografia_nombre', 'archivo')}")
 
-    st.success(
-        f"Monografía analizada: {st.session_state['monografia_nombre']}"
-    )
-
-    operaciones = data.get("operaciones", [])
-    st.metric("Operaciones detectadas", len(operaciones))
-
-    with st.expander("📋 Operaciones detectadas", expanded=True):
-        if operaciones:
-            rows = []
-            for op in operaciones:
-                rows.append(
-                    {
-                        "N.º": op.get("numero"),
-                        "Fecha": op.get("fecha"),
-                        "Descripción": op.get("descripcion"),
-                        "Importe": op.get("importe"),
-                        "Documento": op.get("documento"),
-                        "Forma de pago": op.get("forma_pago"),
-                    }
-                )
-            st.dataframe(rows, use_container_width=True, hide_index=True)
-        else:
-            st.warning("No se detectaron operaciones.")
-
-    with st.expander("📄 Datos extraídos completos", expanded=False):
-        st.json(data)
-
-    st.info(
-        "Esta primera etapa usa Gemini para leer y estructurar la monografía. "
-        "Los asientos contables todavía deben pasar por el motor contable de TANA."
-    )
 
 
 # ============================================================
@@ -1230,102 +1216,30 @@ def resolve_asientos_with_gemini():
     data.setdefault("_tana_gemini_model", profile["model"])
     return data, pcge_map
 
-if "monografia_json" in st.session_state:
-    st.divider()
-    st.subheader("🧮 2. Desarrollo de asientos contables")
-    st.write(
-        "TANA utilizará las operaciones detectadas y su PCGE de 5 dígitos. "
-        "Antes de aceptar un asiento, verifica que la cuenta exista y que Debe = Haber."
-    )
-
-    if st.button("🧮 Resolver asientos contables", type="primary"):
-        with st.spinner("Desarrollando y validando los asientos contables..."):
-            try:
-                resolved, pcge_map = resolve_asientos_with_gemini()
-
-                # Gemini devuelve {"asientos": [...], "alertas": [...]}
-                # La interfaz necesita trabajar con la lista de asientos.
-                if isinstance(resolved, dict):
-                    asientos_generados = resolved.get("asientos", [])
-                    alertas_gemini = resolved.get("alertas", [])
-                elif isinstance(resolved, list):
-                    asientos_generados = resolved
-                    alertas_gemini = []
-                else:
-                    raise ValueError("La respuesta de Gemini no tiene una estructura de asientos válida.")
-
-                if not isinstance(asientos_generados, list):
-                    raise ValueError("La clave 'asientos' de Gemini no contiene una lista.")
-
-                # Regla determinista: toda cuenta de destino del Elemento 9
-                # debe tener su contrapartida 79 en el Haber. Esto corrige el
-                # caso en que Gemini desarrolle el destino pero omita la 79111.
-                asientos_generados = asegurar_cuenta_79_en_destinos(
-                    asientos_generados,
-                    pcge_map,
-                )
-
-                # Corrección determinista de la Operación 3/4 de retiro de socio:
-                # la venta privada no se contabiliza en la sociedad y el reparto
-                # de utilidades usa 59111/48185/44191 y luego 44191/10411.
-                asientos_generados = corregir_retiro_socio(
-                    asientos_generados,
-                    st.session_state.get("monografia_json", {}),
-                )
-
-                valid, errors, warnings = validate_asientos(
-                    {"asientos": asientos_generados},
-                    pcge_map,
-                )
-
-                st.session_state["asientos_contables"] = asientos_generados
-                st.session_state["asientos_validos"] = valid
-                st.session_state["errores_asientos"] = errors
-                st.session_state["alertas_asientos"] = list(alertas_gemini) + list(warnings)
-            except json.JSONDecodeError:
-                st.error("Gemini devolvió una respuesta que no es JSON válido. Vuelve a intentarlo.")
-            except Exception as exc:
-                st.error(f"No se pudieron desarrollar los asientos: {exc}")
-
-    if "asientos_contables" in st.session_state:
-        asientos = st.session_state["asientos_contables"]
-        validos = st.session_state.get("asientos_validos", [])
-        errores = st.session_state.get("errores_asientos", [])
-        alertas = st.session_state.get("alertas_asientos", [])
-
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Asientos generados", len(asientos))
-        c2.metric("Asientos validados", len(validos))
-        c3.metric("Errores", len(errores))
-
-        if errores:
-            st.error("Hay asientos que TANA NO acepta todavía:")
-            for e in errores:
-                st.write(f"- {e}")
-        else:
-            st.success("Todos los asientos generados cuadran y utilizan cuentas existentes de 5 dígitos.")
-
-        for asiento in asientos:
-            numero = asiento.get("numero", "")
-            with st.expander(
-                f"Asiento {numero} — {asiento.get('fecha', '')} — {asiento.get('glosa', '')}",
-                expanded=False,
-            ):
-                rows = []
-                for line in asiento.get("lineas", []):
-                    rows.append({
-                        "Código": line.get("codigo", ""),
-                        "Cuenta": pcge_map.get(str(line.get("codigo", "")).strip(), line.get("denominacion", "")),
-                        "Concepto": line.get("concepto", ""),
-                        "Debe": line.get("debe", 0),
-                        "Haber": line.get("haber", 0),
-                    })
-                st.dataframe(rows, use_container_width=True, hide_index=True)
-                if asiento.get("requiere_revision"):
-                    st.warning(asiento.get("observacion", "Requiere revisión."))
-
-        if alertas:
-            st.warning("\n".join(f"- {x}" for x in alertas))
+if "monografia_json" in st.session_state and "asientos_contables" not in st.session_state:
+    with st.spinner("TANA está desarrollando y validando los asientos contables…"):
+        try:
+            resolved, pcge_map = resolve_asientos_with_gemini()
+            if isinstance(resolved, dict):
+                asientos_generados = resolved.get("asientos", [])
+                alertas_gemini = resolved.get("alertas", [])
+            elif isinstance(resolved, list):
+                asientos_generados = resolved
+                alertas_gemini = []
+            else:
+                raise ValueError("La respuesta de Gemini no tiene una estructura de asientos válida.")
+            if not isinstance(asientos_generados, list):
+                raise ValueError("La clave 'asientos' de Gemini no contiene una lista.")
+            asientos_generados = asegurar_cuenta_79_en_destinos(asientos_generados, pcge_map)
+            asientos_generados = corregir_retiro_socio(asientos_generados, st.session_state.get("monografia_json", {}))
+            valid, errors, warnings = validate_asientos({"asientos": asientos_generados}, pcge_map)
+            st.session_state["asientos_contables"] = asientos_generados
+            st.session_state["asientos_validos"] = valid
+            st.session_state["errores_asientos"] = errors
+            st.session_state["alertas_asientos"] = list(alertas_gemini) + list(warnings)
+        except Exception as exc:
+            st.error(f"No se pudieron desarrollar los asientos: {exc}")
+            st.stop()
 
 # ============================================================
 # TUTOR INTERACTIVO TANA
@@ -1365,70 +1279,48 @@ PREGUNTA:
     )
     return response.text or "No pude generar una respuesta.", profile["label"]
 
-if "monografia_json" in st.session_state or "asientos_contables" in st.session_state:
-    st.divider()
-    st.subheader("🤖 Pregúntale a TANA")
-    st.caption("Pregunta por qué se hizo un asiento, cómo se calculó o por qué una cuenta va al Debe o al Haber.")
-
-    pregunta = st.text_input(
-        "Escribe tu pregunta",
-        placeholder="Ej.: ¿Por qué se utilizó la cuenta 79111 en este asiento?",
-        key="pregunta_tana",
-    )
-    c1, c2 = st.columns([4, 1])
-    with c1:
-        preguntar = st.button("💬 Preguntar a TANA", type="primary", key="btn_preguntar_tana")
-    with c2:
-        audio = st.audio_input("🎙️ Hablar", key="audio_tana") if hasattr(st, "audio_input") else None
-
-    if preguntar and pregunta.strip():
-        with st.spinner("TANA está preparando la explicación..."):
+# La consulta y el audio se capturan arriba. Aquí solo se procesa la acción,
+# una vez que las funciones del tutor ya están definidas.
+if (enviar_top or audio_top is not None) and (pregunta_top.strip() or audio_top is not None) and st.session_state.get("asientos_contables"):
+    if enviar_top and pregunta_top.strip():
+        with st.spinner("TANA está preparando la explicación…"):
             try:
-                respuesta, ruta = _preguntar_a_tana(pregunta.strip())
+                respuesta, ruta = _preguntar_a_tana(pregunta_top.strip())
                 st.session_state["respuesta_tana"] = respuesta
                 st.session_state["respuesta_tana_ruta"] = ruta
             except Exception as exc:
                 st.error(f"No se pudo responder: {_gemini_error_message(exc)}")
+    elif audio_top is not None:
+        import hashlib
+        _audio_sig = hashlib.sha1(audio_top.getvalue()).hexdigest()
+        if st.session_state.get("audio_tana_processed") == _audio_sig:
+            audio_top = None
+        else:
+            st.session_state["audio_tana_processed"] = _audio_sig
+        if audio_top is not None:
+            with st.spinner("TANA está escuchando y preparando la respuesta…"):
+                temp_audio = None
+                try:
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+                        tmp.write(audio_top.getvalue())
+                        temp_audio = tmp.name
+                    def audio_contents(client):
+                        audio_file = client.files.upload(file=temp_audio)
+                        return [audio_file, "Escucha el audio del estudiante, transcribe su pregunta y luego respóndela. No inventes datos. Usa el siguiente contexto:\n" + _tana_contexto_tutor()]
+                    response, profile = _generate_with_fallback(audio_contents, types.GenerateContentConfig())
+                    st.session_state["respuesta_tana"] = response.text or "No pude interpretar el audio."
+                    st.session_state["respuesta_tana_ruta"] = profile["label"]
+                except Exception as exc:
+                    st.error(f"No se pudo procesar el audio: {_gemini_error_message(exc)}")
+                finally:
+                    if temp_audio and os.path.exists(temp_audio):
+                        os.remove(temp_audio)
 
-    if audio is not None:
-        with st.spinner("TANA está escuchando y preparando la respuesta..."):
-            temp_audio = None
-            try:
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
-                    tmp.write(audio.getvalue())
-                    temp_audio = tmp.name
-
-                def audio_contents(client):
-                    audio_file = client.files.upload(file=temp_audio)
-                    return [
-                        audio_file,
-                        "Escucha el audio del estudiante, transcribe su pregunta y luego respóndela. "
-                        "No inventes datos. Usa el siguiente contexto:\n" + _tana_contexto_tutor(),
-                    ]
-
-                response, profile = _generate_with_fallback(
-                    audio_contents,
-                    types.GenerateContentConfig()
-                )
-                st.session_state["respuesta_tana"] = response.text or "No pude interpretar el audio."
-                st.session_state["respuesta_tana_ruta"] = profile["label"]
-            except Exception as exc:
-                st.error(f"No se pudo procesar el audio: {_gemini_error_message(exc)}")
-            finally:
-                if temp_audio and os.path.exists(temp_audio):
-                    os.remove(temp_audio)
-
-    if st.session_state.get("respuesta_tana"):
-        st.markdown("**Respuesta de TANA:**")
-        st.info(st.session_state["respuesta_tana"])
-        if st.session_state.get("respuesta_tana_ruta"):
-            st.caption(f"Procesado por {st.session_state['respuesta_tana_ruta']}.")
+if st.session_state.get("respuesta_tana"):
+    st.info("**Respuesta de TANA:**\n\n" + st.session_state["respuesta_tana"])
 
 st.divider()
-
-if not st.button("📊 Generar Excel contable", type="primary"):
-    st.stop()
-
+st.success("TANA terminó el desarrollo contable. Tu Excel está listo para descargar.")
 
 FONT = "Arial"
 wb = Workbook()
@@ -2513,7 +2405,8 @@ for code in patrimonio:
     r2 += 1
 
 ws9.cell(r2,7,'Resultado del ejercicio').font=BLACK
-_set_report_value(ws9,r2,10,f'=ERN!E{resultado_ern_row}')
+# El ESF toma el mismo resultado final del ERF; ERN mantiene un control cruzado.
+_set_report_value(ws9,r2,10,f'=ERF!E{resultado_erf_row}')
 pat_rows.append(r2)
 r2 += 1
 
