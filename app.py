@@ -425,135 +425,147 @@ def extract_with_gemini(uploaded):
 
 
 # ============================================================
-# SIDEBAR + LAYOUT TIPO CHAT
+# PÁGINA PÚBLICA DE TANA
 # ============================================================
-# Nota de diseño: esta sección solo cambia PRESENTACIÓN (sidebar,
-# burbujas de chat, barra de entrada). No toca extracción, motor de
-# asientos, HT, ERN, ERF, ESF ni la generación del Excel.
+def _mostrar_landing_tana():
+    """Landing pública integrada en Streamlit; no altera el motor contable."""
+    st.markdown("""
+    <style>
+    .tana-wrap {max-width: 1180px; margin: 0 auto;}
+    .tana-hero {padding: 28px 8px 18px 8px;}
+    .tana-badge {display:inline-block; padding:7px 13px; border-radius:999px;
+                 background:#E8F4F8; color:#087EA4; font-weight:700; font-size:13px;}
+    .tana-title {font-size:52px; line-height:1.03; font-weight:800; color:#12304A;
+                 margin:14px 0 12px 0;}
+    .tana-subtitle {font-size:21px; line-height:1.5; color:#4D6172; max-width:760px;}
+    .tana-card {background:#FFFFFF; border:1px solid #DDE8EF; border-radius:18px;
+                padding:22px; min-height:150px; box-shadow:0 5px 18px rgba(18,48,74,.06);}
+    .tana-card h3 {margin-top:0; color:#12304A;}
+    .tana-card p {color:#5B6B78; line-height:1.45;}
+    .tana-flow {background:#F5FAFC; border:1px solid #DDE8EF; border-radius:20px;
+                padding:24px; margin:26px 0;}
+    .tana-small {color:#6B7B87; font-size:13px;}
+    </style>
+    """, unsafe_allow_html=True)
+
+    st.markdown('<div class="tana-wrap">', unsafe_allow_html=True)
+    hero_left, hero_right = st.columns([1.55, 1], gap="large")
+    with hero_left:
+        st.markdown('<div class="tana-hero">', unsafe_allow_html=True)
+        st.markdown('<span class="tana-badge">INTELIGENCIA ARTIFICIAL CONTABLE</span>', unsafe_allow_html=True)
+        st.markdown('<div class="tana-title">TANA</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="tana-subtitle">Convierte tus monografías y operaciones contables '
+            'en asientos, hoja de trabajo y estados financieros de forma automática.</div>',
+            unsafe_allow_html=True,
+        )
+        st.write("")
+        if st.button("🚀 Probar TANA", type="primary", use_container_width=False):
+            st.session_state["tana_workspace"] = True
+            st.rerun()
+        st.markdown('<div class="tana-small">Procesamiento contable asistido por IA + reglas deterministas.</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+    with hero_right:
+        logo_path = os.path.join(os.path.dirname(__file__), "LOGO TANA.jpg")
+        if os.path.exists(logo_path):
+            st.image(logo_path, use_container_width=True)
+
+    st.markdown("### ¿Qué hace TANA?")
+    cards = [
+        ("📄", "Lee la monografía", "Extrae operaciones, fechas, importes, documentos y condiciones sin resolverlas todavía."),
+        ("🧮", "Desarrolla los asientos", "Utiliza el PCGE de 5 dígitos y valida que cada asiento cumpla Debe = Haber."),
+        ("📊", "Genera los reportes", "Prepara HT, Estado de Resultados por Naturaleza, Estado de Resultados por Función y ESF."),
+        ("🤖", "Explica el resultado", "Puedes preguntarle a TANA por qué se hizo un asiento, cómo se calculó o por qué una cuenta va al Debe o Haber."),
+    ]
+    cols = st.columns(4, gap="medium")
+    for col, (icon, title, text) in zip(cols, cards):
+        with col:
+            st.markdown(
+                f'<div class="tana-card"><div style="font-size:30px">{icon}</div>'
+                f'<h3>{title}</h3><p>{text}</p></div>',
+                unsafe_allow_html=True,
+            )
+
+    st.markdown('<div class="tana-flow">', unsafe_allow_html=True)
+    st.markdown("### De la monografía al resultado contable")
+    fcols = st.columns(7, gap="small")
+    pasos = ["Monografía", "Detección", "Asientos", "HT", "ERN", "ERF", "ESF"]
+    for i, (col, paso) in enumerate(zip(fcols, pasos)):
+        with col:
+            st.markdown(f"**{i+1}.** {paso}")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown("### Pensado para estudiantes y profesionales")
+    c1, c2 = st.columns(2, gap="large")
+    with c1:
+        st.markdown(
+            '<div class="tana-card"><h3>🎓 Aprende mientras resuelves</h3>'
+            '<p>Pregunta a TANA cómo se desarrolló una operación y recibe una explicación contextualizada.</p></div>',
+            unsafe_allow_html=True,
+        )
+    with c2:
+        st.markdown(
+            '<div class="tana-card"><h3>✅ Verificación contable</h3>'
+            '<p>TANA valida las cuentas, la partida doble y la consistencia entre los estados financieros.</p></div>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("")
+    st.caption("TANA · Inteligencia Artificial Contable")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+# TANA entra directamente al área de trabajo: un solo flujo, sin pasos intermedios.
+st.session_state["tana_workspace"] = True
+
+# ============================================================
+# ÁREA SIMPLE DE TRABAJO
+# La respuesta de TANA se reserva arriba de la barra de consulta.
+# Esto mantiene la interfaz limpia y evita desplegar pasos intermedios.
+# ============================================================
+respuesta_slot = st.empty()
+
 st.markdown("""
 <style>
-/* Oculta el header/menú default de Streamlit para look de app */
-#MainMenu, header[data-testid="stHeader"] {visibility: hidden; height: 0;}
-.block-container {padding-top: 1.2rem; padding-bottom: 8rem; max-width: 980px;}
-
-/* ---- Sidebar tipo ChatGPT/Claude ---- */
-section[data-testid="stSidebar"] {background: #F7F9FB; border-right: 1px solid #E3E9EE;}
-section[data-testid="stSidebar"] .block-container {padding-top: 1rem;}
-.tana-side-logo {display:flex; align-items:center; gap:10px; margin-bottom:14px;}
-.tana-side-logo img {border-radius:10px;}
-.tana-side-logo span {font-weight:800; font-size:19px; color:#12304A;}
-.tana-side-section {font-size:12px; font-weight:700; color:#8B98A3; text-transform:uppercase;
-                     letter-spacing:.04em; margin:18px 0 6px 2px;}
-.tana-side-item {font-size:14px; color:#334452; padding:6px 8px; border-radius:8px; cursor:default;}
-.tana-side-item:hover {background:#EDF2F5;}
-.tana-side-empty {font-size:12.5px; color:#A6B0B8; padding:2px 8px;}
-.tana-side-account {display:flex; align-items:center; gap:10px; margin-top:26px;
-                     padding:10px 8px; border-top:1px solid #E3E9EE;}
-.tana-avatar {width:30px; height:30px; border-radius:50%; background:#087EA4; color:#fff;
-              display:flex; align-items:center; justify-content:center; font-weight:700; font-size:13px;}
-.tana-side-account span {font-size:13px; color:#4D6172;}
-
-/* ---- Burbujas de chat ---- */
-.tana-bubble-user {background:#087EA4; color:#fff; padding:10px 15px; border-radius:16px 16px 4px 16px;
-                    max-width:78%; margin-left:auto; margin-bottom:14px; font-size:14.5px;}
-.tana-bubble-assistant {background:#F5FAFC; border:1px solid #DDE8EF; color:#22333F; padding:14px 18px;
-                         border-radius:16px 16px 16px 4px; max-width:88%; margin-bottom:14px; font-size:14.5px;
-                         line-height:1.55;}
-.tana-result-card {background:#fff; border:1px solid #DDE8EF; border-radius:12px; padding:12px 16px;
-                    margin-top:10px; display:flex; align-items:center; gap:10px;}
-.tana-result-card .name {font-weight:700; color:#12304A; font-size:13.5px;}
-
-/* ---- Barra de entrada inferior, fija ---- */
-.tana-inputbar-wrap {position:fixed; bottom:0; left:0; right:0; background:linear-gradient(transparent, #fff 30%);
-                      padding:14px 0 18px 0; z-index:999;}
-.tana-inputbar {max-width:900px; margin:0 auto; background:#fff; border:1px solid #DDE8EF; border-radius:22px;
-                 padding:8px 14px; box-shadow:0 6px 22px rgba(18,48,74,.09);}
+.tana-mini {font-size:13px;color:#5B6B78;margin-bottom:8px;}
+.tana-logo-mini img {border-radius:50%; object-fit:cover;}
+.tana-answer {
+    border: 1px solid #D9E4EC;
+    border-radius: 14px;
+    background: #F8FBFD;
+    padding: 16px 20px;
+    margin: 0 auto 18px auto;
+    max-width: 980px;
+    color: #17324D;
+    line-height: 1.55;
+    box-shadow: 0 2px 8px rgba(20,50,75,.05);
+}
+.tana-answer-title {font-weight:700;font-size:15px;margin-bottom:7px;}
 </style>
 """, unsafe_allow_html=True)
-
-LOGO_PATH = os.path.join(os.path.dirname(__file__), "LOGO TANA.jpg")
-
-with st.sidebar:
-    logo_col, title_col = st.columns([0.35, 1])
-    with logo_col:
-        if os.path.exists(LOGO_PATH):
-            st.image(LOGO_PATH, width=42)
-    with title_col:
-        st.markdown('<div style="font-weight:800;font-size:19px;color:#12304A;padding-top:6px;">TANA</div>',
-                     unsafe_allow_html=True)
-
-    if st.button("➕  Nuevo chat", use_container_width=True):
-        for _key in (
-            "monografia_json", "monografia_texto", "monografia_nombre", "tana_file_signature",
-            "asientos_contables", "asientos_validos", "errores_asientos", "alertas_asientos",
-            "respuesta_tana", "respuesta_tana_ruta", "audio_tana_processed",
-        ):
-            st.session_state.pop(_key, None)
-        st.rerun()
-
-    st.markdown('<div class="tana-side-section">Historial</div>', unsafe_allow_html=True)
-    historial = st.session_state.get("tana_historial", [])
-    if historial:
-        st.markdown('<div class="tana-side-section" style="margin-top:4px;">Hoy</div>', unsafe_allow_html=True)
-        for item in reversed(historial[-15:]):
-            st.markdown(f'<div class="tana-side-item">📄 {item}</div>', unsafe_allow_html=True)
-    else:
-        st.markdown('<div class="tana-side-empty">Aún no hay monografías resueltas en esta sesión.</div>',
-                     unsafe_allow_html=True)
-
-    st.markdown(
-        '<div class="tana-side-account">'
-        '<div class="tana-avatar">T</div><span>Cuenta del suscriptor de TANA</span></div>',
-        unsafe_allow_html=True,
-    )
-
-# ============================================================
-# HISTORIAL DE CONVERSACIÓN (área principal)
-# ============================================================
-if "tana_chat" not in st.session_state:
-    st.session_state["tana_chat"] = []  # lista de dicts: {"role": "user"/"assistant", "content": str}
-
-def _tana_chat_add(role, content):
-    st.session_state["tana_chat"].append({"role": role, "content": content})
-
-if not st.session_state["tana_chat"]:
-    st.markdown(
-        '<div style="text-align:center; padding:70px 0 20px 0;">'
-        f'{"<img src=\'data:image/jpeg;base64," + __import__("base64").b64encode(open(LOGO_PATH,"rb").read()).decode() + "\' width=64 style=\'border-radius:14px;\'>" if os.path.exists(LOGO_PATH) else ""}'
-        '<div style="font-size:26px;font-weight:800;color:#12304A;margin-top:14px;">¿Qué monografía resolvemos hoy?</div>'
-        '<div style="color:#6B7B87;font-size:14.5px;margin-top:6px;">'
-        'Sube tu monografía abajo y TANA desarrolla los asientos, la HT y los estados financieros.</div>'
-        '</div>',
-        unsafe_allow_html=True,
-    )
-
-for msg in st.session_state["tana_chat"]:
-    css_class = "tana-bubble-user" if msg["role"] == "user" else "tana-bubble-assistant"
-    st.markdown(f'<div class="{css_class}">{msg["content"]}</div>', unsafe_allow_html=True)
-
-# ============================================================
-# BARRA DE ENTRADA (carga de monografía + consulta + voz + enviar)
-# ============================================================
-st.markdown('<div class="tana-inputbar-wrap"><div class="tana-inputbar">', unsafe_allow_html=True)
-bar = st.columns([0.9, 5.4, 1.3, 0.7], gap="small")
-with bar[0]:
+head = st.columns([0.65, 2.0, 6.2, 1.25, 0.8], gap="small")
+with head[0]:
+    logo_path = os.path.join(os.path.dirname(__file__), "LOGO TANA.jpg")
+    if os.path.exists(logo_path):
+        st.image(logo_path, width=68)
+with head[1]:
+    st.markdown("**Cargar monografía**")
     uploaded_file = st.file_uploader(
         "Archivo", type=SUPPORTED_TYPES, label_visibility="collapsed",
         help="PDF, DOC, DOCX, XLS, XLSX, JPG, JPEG y PNG."
     )
-with bar[1]:
+with head[2]:
+    st.markdown("<div class='tana-mini'>Consulta contable</div>", unsafe_allow_html=True)
     pregunta_top = st.text_input(
-        "Consulta", placeholder="Pregunta a TANA…",
+        "Consulta", placeholder="Escribe una consulta contable para TANA…",
         key="pregunta_tana_top", label_visibility="collapsed"
     )
-with bar[2]:
-    audio_top = st.audio_input("Hablar", key="audio_tana_top", label_visibility="collapsed") if hasattr(st, "audio_input") else None
-with bar[3]:
+with head[3]:
+    st.markdown("<div class='tana-mini'>Hablar</div>", unsafe_allow_html=True)
+    audio_top = st.audio_input("Hablar", key="audio_tana_top") if hasattr(st, "audio_input") else None
+with head[4]:
+    st.markdown("<div style='height:21px'></div>", unsafe_allow_html=True)
     enviar_top = st.button("➤", type="primary", key="btn_enviar_tana_top", use_container_width=True)
-st.markdown('</div></div>', unsafe_allow_html=True)
-
-if uploaded_file:
-    st.caption(f"📄 {uploaded_file.name}")
 
 def extraction_to_text(data):
     parts = []
@@ -616,13 +628,7 @@ if uploaded_file:
 
 if "monografia_json" in st.session_state:
     data = st.session_state["monografia_json"]
-    _nombre_mono = st.session_state.get('monografia_nombre', 'archivo')
-    if not any(m["role"] == "user" and _nombre_mono in m["content"] for m in st.session_state["tana_chat"]):
-        _tana_chat_add("user", f"📄 Cargó la monografía: <b>{_nombre_mono}</b>")
-        _tana_chat_add("assistant", f"Monografía recibida: <b>{_nombre_mono}</b>. Estoy desarrollando los asientos…")
-        if _nombre_mono not in st.session_state.get("tana_historial", []):
-            st.session_state.setdefault("tana_historial", []).append(_nombre_mono)
-        st.rerun()
+    st.success(f"Monografía recibida: {st.session_state.get('monografia_nombre', 'archivo')}")
 
 
 
@@ -1292,13 +1298,11 @@ PREGUNTA:
 # una vez que las funciones del tutor ya están definidas.
 if (enviar_top or audio_top is not None) and (pregunta_top.strip() or audio_top is not None) and st.session_state.get("asientos_contables"):
     if enviar_top and pregunta_top.strip():
-        _tana_chat_add("user", pregunta_top.strip())
         with st.spinner("TANA está preparando la explicación…"):
             try:
                 respuesta, ruta = _preguntar_a_tana(pregunta_top.strip())
                 st.session_state["respuesta_tana"] = respuesta
                 st.session_state["respuesta_tana_ruta"] = ruta
-                _tana_chat_add("assistant", respuesta)
             except Exception as exc:
                 st.error(f"No se pudo responder: {_gemini_error_message(exc)}")
     elif audio_top is not None:
@@ -1309,7 +1313,6 @@ if (enviar_top or audio_top is not None) and (pregunta_top.strip() or audio_top 
         else:
             st.session_state["audio_tana_processed"] = _audio_sig
         if audio_top is not None:
-            _tana_chat_add("user", "🎤 Pregunta enviada por voz")
             with st.spinner("TANA está escuchando y preparando la respuesta…"):
                 temp_audio = None
                 try:
@@ -1320,16 +1323,24 @@ if (enviar_top or audio_top is not None) and (pregunta_top.strip() or audio_top 
                         audio_file = client.files.upload(file=temp_audio)
                         return [audio_file, "Escucha el audio del estudiante, transcribe su pregunta y luego respóndela. No inventes datos. Usa el siguiente contexto:\n" + _tana_contexto_tutor()]
                     response, profile = _generate_with_fallback(audio_contents, types.GenerateContentConfig())
-                    respuesta_audio = response.text or "No pude interpretar el audio."
-                    st.session_state["respuesta_tana"] = respuesta_audio
+                    st.session_state["respuesta_tana"] = response.text or "No pude interpretar el audio."
                     st.session_state["respuesta_tana_ruta"] = profile["label"]
-                    _tana_chat_add("assistant", respuesta_audio)
                 except Exception as exc:
                     st.error(f"No se pudo procesar el audio: {_gemini_error_message(exc)}")
                 finally:
                     if temp_audio and os.path.exists(temp_audio):
                         os.remove(temp_audio)
-    st.rerun()
+
+# Mostrar la respuesta en el espacio reservado SOBRE la barra de consulta.
+# No se crea un bloque adicional debajo del área de trabajo.
+if st.session_state.get("respuesta_tana"):
+    _respuesta_html = st.session_state["respuesta_tana"].replace("\n", "<br>")
+    respuesta_slot.markdown(
+        f'<div class="tana-answer"><div class="tana-answer-title">TANA</div>{_respuesta_html}</div>',
+        unsafe_allow_html=True,
+    )
+
+st.divider()
 st.success("TANA terminó el desarrollo contable. Tu Excel está listo para descargar.")
 
 FONT = "Arial"
@@ -2545,29 +2556,12 @@ buffer = io.BytesIO()
 wb.save(buffer)
 buffer.seek(0)
 
-_sig = st.session_state.get("tana_file_signature")
-if _sig and st.session_state.get("tana_resuelto_signature") != _sig:
-    _tana_chat_add(
-        "assistant",
-        "TANA ha resuelto tu monografía:<br>"
-        "&nbsp;&nbsp;• Asientos<br>&nbsp;&nbsp;• HT<br>&nbsp;&nbsp;• ERN<br>&nbsp;&nbsp;• ERF<br>&nbsp;&nbsp;• ESF",
-    )
-    st.session_state["tana_resuelto_signature"] = _sig
-    st.session_state["tana_excel_buffer"] = buffer.getvalue()
-    st.rerun()
-
-if st.session_state.get("tana_excel_buffer"):
-    st.markdown(
-        '<div class="tana-bubble-assistant" style="max-width:340px;">'
-        '<div class="tana-result-card"><span style="font-size:22px;">📊</span>'
-        '<span class="name">TANA · Excel · Desarrollo</span></div></div>',
-        unsafe_allow_html=True,
-    )
-    st.download_button(
-        label="⬇️  Descargar Excel",
-        data=st.session_state["tana_excel_buffer"],
-        file_name="TANA_Contabilidad.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-    if "monografia_nombre" in st.session_state:
-        st.caption("La hoja Monografia conserva el texto extraído para revisión.")
+st.success("Workbook generado correctamente.")
+if "monografia_nombre" in st.session_state:
+    st.caption("La hoja Monografia conserva el texto extraído para revisión.")
+st.download_button(
+    label="Descargar Excel",
+    data=buffer,
+    file_name="TANA_Contabilidad.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+)
