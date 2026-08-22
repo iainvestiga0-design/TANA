@@ -425,108 +425,211 @@ def extract_with_gemini(uploaded):
 
 
 # ============================================================
-# PÁGINA PÚBLICA DE TANA
+# SIDEBAR + LAYOUT TIPO CHAT
 # ============================================================
-def _mostrar_landing_tana():
-    """Landing pública integrada en Streamlit; no altera el motor contable."""
-    st.markdown("""
-    <style>
-    .tana-wrap {max-width: 1180px; margin: 0 auto;}
-    .tana-hero {padding: 28px 8px 18px 8px;}
-    .tana-badge {display:inline-block; padding:7px 13px; border-radius:999px;
-                 background:#E8F4F8; color:#087EA4; font-weight:700; font-size:13px;}
-    .tana-title {font-size:52px; line-height:1.03; font-weight:800; color:#12304A;
-                 margin:14px 0 12px 0;}
-    .tana-subtitle {font-size:21px; line-height:1.5; color:#4D6172; max-width:760px;}
-    .tana-card {background:#FFFFFF; border:1px solid #DDE8EF; border-radius:18px;
-                padding:22px; min-height:150px; box-shadow:0 5px 18px rgba(18,48,74,.06);}
-    .tana-card h3 {margin-top:0; color:#12304A;}
-    .tana-card p {color:#5B6B78; line-height:1.45;}
-    .tana-flow {background:#F5FAFC; border:1px solid #DDE8EF; border-radius:20px;
-                padding:24px; margin:26px 0;}
-    .tana-small {color:#6B7B87; font-size:13px;}
-    </style>
-    """, unsafe_allow_html=True)
+# Nota de diseño: esta sección solo cambia PRESENTACIÓN (sidebar,
+# burbujas de chat, barra de entrada). No toca extracción, motor de
+# asientos, HT, ERN, ERF, ESF ni la generación del Excel.
+st.markdown("""
+<style>
+/* Oculta el header/menú default de Streamlit para look de app */
+#MainMenu, header[data-testid="stHeader"] {visibility: hidden; height: 0;}
+.block-container {padding-top: 1.2rem; padding-bottom: 8rem; max-width: 980px;}
 
-    st.markdown('<div class="tana-wrap">', unsafe_allow_html=True)
-    hero_left, hero_right = st.columns([1.55, 1], gap="large")
-    with hero_left:
-        st.markdown('<div class="tana-hero">', unsafe_allow_html=True)
-        st.markdown('<span class="tana-badge">INTELIGENCIA ARTIFICIAL CONTABLE</span>', unsafe_allow_html=True)
-        st.markdown('<div class="tana-title">TANA</div>', unsafe_allow_html=True)
-        st.markdown(
-            '<div class="tana-subtitle">Convierte tus monografías y operaciones contables '
-            'en asientos, hoja de trabajo y estados financieros de forma automática.</div>',
-            unsafe_allow_html=True,
-        )
-        st.write("")
-        if st.button("🚀 Probar TANA", type="primary", use_container_width=False):
-            st.session_state["tana_workspace"] = True
-            st.rerun()
-        st.markdown('<div class="tana-small">Procesamiento contable asistido por IA + reglas deterministas.</div>', unsafe_allow_html=True)
-        st.markdown('</div>', unsafe_allow_html=True)
-    with hero_right:
-        logo_path = os.path.join(os.path.dirname(__file__), "LOGO TANA.jpg")
-        if os.path.exists(logo_path):
-            st.image(logo_path, use_container_width=True)
+/* ---- Sidebar tipo ChatGPT/Claude ---- */
+section[data-testid="stSidebar"] {background: #F7F9FB; border-right: 1px solid #E3E9EE;}
+section[data-testid="stSidebar"] .block-container {padding-top: 1rem;}
+.tana-side-logo {display:flex; align-items:center; gap:10px; margin-bottom:14px;}
+.tana-side-logo img {border-radius:10px;}
+.tana-side-logo span {font-weight:800; font-size:19px; color:#12304A;}
+.tana-side-section {font-size:12px; font-weight:700; color:#8B98A3; text-transform:uppercase;
+                     letter-spacing:.04em; margin:18px 0 6px 2px;}
+.tana-side-item {font-size:14px; color:#334452; padding:6px 8px; border-radius:8px; cursor:default;}
+.tana-side-item:hover {background:#EDF2F5;}
+.tana-side-empty {font-size:12.5px; color:#A6B0B8; padding:2px 8px;}
+.tana-side-account {display:flex; align-items:center; gap:10px; margin-top:26px;
+                     padding:10px 8px; border-top:1px solid #E3E9EE;}
+.tana-avatar {width:30px; height:30px; border-radius:50%; background:#087EA4; color:#fff;
+              display:flex; align-items:center; justify-content:center; font-weight:700; font-size:13px;}
+.tana-side-account span {font-size:13px; color:#4D6172;}
 
-    st.markdown("### ¿Qué hace TANA?")
-    cards = [
-        ("📄", "Lee la monografía", "Extrae operaciones, fechas, importes, documentos y condiciones sin resolverlas todavía."),
-        ("🧮", "Desarrolla los asientos", "Utiliza el PCGE de 5 dígitos y valida que cada asiento cumpla Debe = Haber."),
-        ("📊", "Genera los reportes", "Prepara HT, Estado de Resultados por Naturaleza, Estado de Resultados por Función y ESF."),
-        ("🤖", "Explica el resultado", "Puedes preguntarle a TANA por qué se hizo un asiento, cómo se calculó o por qué una cuenta va al Debe o Haber."),
-    ]
-    cols = st.columns(4, gap="medium")
-    for col, (icon, title, text) in zip(cols, cards):
-        with col:
-            st.markdown(
-                f'<div class="tana-card"><div style="font-size:30px">{icon}</div>'
-                f'<h3>{title}</h3><p>{text}</p></div>',
-                unsafe_allow_html=True,
-            )
+/* ---- Burbujas de chat ---- */
+.tana-bubble-user {background:#087EA4; color:#fff; padding:10px 15px; border-radius:16px 16px 4px 16px;
+                    max-width:78%; margin-left:auto; margin-bottom:14px; font-size:14.5px;}
+.tana-bubble-assistant {background:#F5FAFC; border:1px solid #DDE8EF; color:#22333F; padding:14px 18px;
+                         border-radius:16px 16px 16px 4px; max-width:88%; margin-bottom:14px; font-size:14.5px;
+                         line-height:1.55;}
+.tana-result-card {background:#fff; border:1px solid #DDE8EF; border-radius:12px; padding:12px 16px;
+                    margin-top:10px; display:flex; align-items:center; gap:10px;}
+.tana-result-card .name {font-weight:700; color:#12304A; font-size:13.5px;}
 
-    st.markdown('<div class="tana-flow">', unsafe_allow_html=True)
-    st.markdown("### De la monografía al resultado contable")
-    fcols = st.columns(7, gap="small")
-    pasos = ["Monografía", "Detección", "Asientos", "HT", "ERN", "ERF", "ESF"]
-    for i, (col, paso) in enumerate(zip(fcols, pasos)):
-        with col:
-            st.markdown(f"**{i+1}.** {paso}")
-    st.markdown('</div>', unsafe_allow_html=True)
+/* ---- Barra de entrada inferior, FIJA de verdad ----
+   Streamlit no deja "envolver" columnas con un <div> de markdown (quedan
+   como hermanos, no hijos, en el DOM). Por eso anclamos un marcador
+   invisible dentro de un st.container() real y usamos :has() para
+   fijar exactamente ESE contenedor (y solo ese), sin afectar el resto
+   de la página, que sigue haciendo scroll normal. */
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) {
+    position: fixed !important;
+    bottom: 0; left: 50%; transform: translateX(-50%);
+    width: min(940px, 94vw);
+    z-index: 999;
+    background: #fff;
+    border: 1px solid #DDE8EF;
+    border-radius: 22px;
+    padding: 10px 16px 14px 16px;
+    box-shadow: 0 6px 22px rgba(18,48,74,.09);
+    margin-bottom: 16px;
+}
+</style>
+""", unsafe_allow_html=True)
 
-    st.markdown("### Pensado para estudiantes y profesionales")
-    c1, c2 = st.columns(2, gap="large")
-    with c1:
-        st.markdown(
-            '<div class="tana-card"><h3>🎓 Aprende mientras resuelves</h3>'
-            '<p>Pregunta a TANA cómo se desarrolló una operación y recibe una explicación contextualizada.</p></div>',
-            unsafe_allow_html=True,
-        )
-    with c2:
-        st.markdown(
-            '<div class="tana-card"><h3>✅ Verificación contable</h3>'
-            '<p>TANA valida las cuentas, la partida doble y la consistencia entre los estados financieros.</p></div>',
-            unsafe_allow_html=True,
-        )
+LOGO_PATH = os.path.join(os.path.dirname(__file__), "LOGO TANA.png")
+if not os.path.exists(LOGO_PATH):
+    LOGO_PATH = os.path.join(os.path.dirname(__file__), "LOGO TANA.jpg")
 
-    st.markdown("")
-    st.caption("TANA · Inteligencia Artificial Contable")
-    st.markdown('</div>', unsafe_allow_html=True)
+with st.sidebar:
+    logo_col, title_col = st.columns([0.35, 1])
+    with logo_col:
+        if os.path.exists(LOGO_PATH):
+            st.image(LOGO_PATH, width=42)
+    with title_col:
+        st.markdown('<div style="font-weight:800;font-size:19px;color:#12304A;padding-top:6px;">TANA</div>',
+                     unsafe_allow_html=True)
 
-
-if not st.session_state.get("tana_workspace", False):
-    _mostrar_landing_tana()
-    st.stop()
-
-# Barra mínima de navegación dentro del área de trabajo.
-nav_left, nav_right = st.columns([1, 8])
-with nav_left:
-    if st.button("← Inicio", key="btn_inicio_tana"):
-        st.session_state["tana_workspace"] = False
+    if st.button("➕  Nuevo chat", use_container_width=True):
+        for _key in (
+            "monografia_json", "monografia_texto", "monografia_nombre", "tana_file_signature",
+            "asientos_contables", "asientos_validos", "errores_asientos", "alertas_asientos",
+            "respuesta_tana", "respuesta_tana_ruta", "audio_tana_processed",
+            "tana_modo_trabajo", "tana_correcciones", "tana_correccion_version",
+            "tana_excel_buffer", "tana_resuelto_signature",
+        ):
+            st.session_state.pop(_key, None)
         st.rerun()
-with nav_right:
-    st.markdown("### TANA · Área de trabajo")
+
+    st.markdown('<div class="tana-side-section">Historial</div>', unsafe_allow_html=True)
+    historial = st.session_state.get("tana_historial", [])
+    if historial:
+        st.markdown('<div class="tana-side-section" style="margin-top:4px;">Hoy</div>', unsafe_allow_html=True)
+        for item in reversed(historial[-15:]):
+            st.markdown(f'<div class="tana-side-item">📄 {item}</div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="tana-side-empty">Aún no hay monografías resueltas en esta sesión.</div>',
+                     unsafe_allow_html=True)
+
+    st.markdown(
+        '<div class="tana-side-account">'
+        '<div class="tana-avatar">T</div><span>Cuenta del suscriptor de TANA</span></div>',
+        unsafe_allow_html=True,
+    )
+
+# ============================================================
+# HISTORIAL DE CONVERSACIÓN (área principal)
+# ============================================================
+if "tana_chat" not in st.session_state:
+    st.session_state["tana_chat"] = []  # lista de dicts: {"role": "user"/"assistant", "content": str}
+
+def _tana_chat_add(role, content):
+    st.session_state["tana_chat"].append({"role": role, "content": content})
+
+if not st.session_state["tana_chat"]:
+    st.markdown(
+        '<div style="text-align:center; padding:70px 0 20px 0;">'
+        f'{"<img src=\'data:image/png;base64," + __import__("base64").b64encode(open(LOGO_PATH,"rb").read()).decode() + "\' width=64 style=\'border-radius:14px;\'>" if os.path.exists(LOGO_PATH) else ""}'
+        '<div style="font-size:26px;font-weight:800;color:#12304A;margin-top:14px;">¿Qué monografía resolvemos hoy?</div>'
+        '<div style="color:#6B7B87;font-size:14.5px;margin-top:6px;">'
+        'Sube tu monografía abajo y TANA desarrolla los asientos, la HT y los estados financieros.</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+for msg in st.session_state["tana_chat"]:
+    css_class = "tana-bubble-user" if msg["role"] == "user" else "tana-bubble-assistant"
+    st.markdown(f'<div class="{css_class}">{msg["content"]}</div>', unsafe_allow_html=True)
+
+# ============================================================
+# BARRA DE ENTRADA (carga de monografía + consulta + voz + enviar)
+# Fija de verdad: vive dentro de su propio st.container(), con un
+# marcador invisible que el CSS de arriba usa para anclarla. El resto
+# del contenido (burbujas de chat) sigue con scroll normal.
+# ============================================================
+inputbar_container = st.container()
+with inputbar_container:
+    st.markdown('<span class="tana-inputbar-anchor"></span>', unsafe_allow_html=True)
+    bar = st.columns([0.9, 5.4, 1.3, 0.7], gap="small")
+    with bar[0]:
+        uploaded_file = st.file_uploader(
+            "Archivo", type=SUPPORTED_TYPES, label_visibility="collapsed",
+            help="PDF, DOC, DOCX, XLS, XLSX, JPG, JPEG y PNG."
+        )
+    with bar[1]:
+        pregunta_top = st.text_input(
+            "Consulta", placeholder="Pregunta a TANA…",
+            key="pregunta_tana_top", label_visibility="collapsed"
+        )
+    with bar[2]:
+        audio_top = st.audio_input("Hablar", key="audio_tana_top", label_visibility="collapsed") if hasattr(st, "audio_input") else None
+    with bar[3]:
+        enviar_top = st.button("➤", type="primary", key="btn_enviar_tana_top", use_container_width=True)
+
+if uploaded_file:
+    st.caption(f"📄 {uploaded_file.name}")
+
+def _cargar_asientos_desde_excel(uploaded):
+    """Carga un Excel generado por TANA y reconstruye sus asientos para revisión/corrección.
+    No recalcula ni altera importes: conserva exactamente los valores del archivo recibido.
+    """
+    data = uploaded.getvalue()
+    wb_in = openpyxl.load_workbook(io.BytesIO(data), data_only=False)
+    if "Asientos_Contables" not in wb_in.sheetnames:
+        raise ValueError("El Excel no contiene la hoja 'Asientos_Contables' generada por TANA.")
+    ws = wb_in["Asientos_Contables"]
+    headers = {str(ws.cell(1, c).value or "").strip(): c for c in range(1, ws.max_column + 1)}
+    required = ["N° Asiento", "Fecha", "Glosa", "Documento", "Operación", "Código", "Denominación", "Concepto", "Debe S/", "Haber S/"]
+    missing = [h for h in required if h not in headers]
+    if missing:
+        raise ValueError("El Excel no tiene la estructura de asientos esperada. Faltan: " + ", ".join(missing))
+
+    asientos = []
+    actual = None
+    for r in range(2, ws.max_row + 1):
+        numero = ws.cell(r, headers["N° Asiento"]).value
+        codigo = ws.cell(r, headers["Código"]).value
+        if numero in (None, "") and codigo in (None, ""):
+            continue
+        if numero not in (None, ""):
+            actual = {
+                "numero": int(numero) if isinstance(numero, (int, float)) and float(numero).is_integer() else numero,
+                "fecha": ws.cell(r, headers["Fecha"]).value or "",
+                "glosa": ws.cell(r, headers["Glosa"]).value or "",
+                "documento": ws.cell(r, headers["Documento"]).value or "",
+                "operacion_numero": ws.cell(r, headers["Operación"]).value or "",
+                "lineas": [],
+            }
+            asientos.append(actual)
+        if actual is None:
+            continue
+        code = str(codigo or "").strip()
+        if not code:
+            continue
+        debe = _to_float(ws.cell(r, headers["Debe S/"]).value)
+        haber = _to_float(ws.cell(r, headers["Haber S/"]).value)
+        actual["lineas"].append({
+            "codigo": code,
+            "denominacion": ws.cell(r, headers["Denominación"]).value or "",
+            "concepto": ws.cell(r, headers["Concepto"]).value or "",
+            "debe": debe,
+            "haber": haber,
+        })
+    if not asientos:
+        raise ValueError("No se encontraron asientos contables en el Excel.")
+    return asientos
+
+
+def _es_excel_tana(nombre):
+    return str(nombre or "").lower().endswith((".xlsx", ".xls"))
+
 
 def extraction_to_text(data):
     parts = []
@@ -559,76 +662,65 @@ def extraction_to_text(data):
     return "\n".join(parts)
 
 profiles_status = get_gemini_profiles()
-if profiles_status:
-    st.caption(
-        "🤖 Gemini: " + " → ".join(
-            f"{p['label']} ({p['model']})" for p in profiles_status
-        )
-        + ". TANA cambiará automáticamente de ruta si una cuota se agota."
-    )
 
-with st.expander("📥 1. Subir monografía", expanded=True):
-    uploaded_file = st.file_uploader(
-        "Arrastra aquí tu monografía o selecciónala desde tu equipo",
-        type=SUPPORTED_TYPES,
-        help="PDF, DOC, DOCX, XLS, XLSX, JPG, JPEG y PNG.",
-    )
-
+# El archivo se procesa automáticamente al cargarse. No se muestra un botón
+# intermedio: la lógica contable original permanece intacta.
 if uploaded_file:
-    if st.button("🤖 Analizar monografía con Gemini", type="primary"):
-        with st.spinner(
-            "Gemini está leyendo la monografía y estructurando sus operaciones..."
+    file_signature = f"{uploaded_file.name}|{getattr(uploaded_file, 'size', 0)}"
+    if st.session_state.get("tana_file_signature") != file_signature:
+        for _key in (
+            "monografia_json", "monografia_texto", "monografia_nombre", "archivo_excel_origen",
+            "asientos_contables", "asientos_validos", "errores_asientos",
+            "alertas_asientos", "respuesta_tana", "respuesta_tana_ruta", "audio_tana_processed",
+            "tana_modo_trabajo", "tana_correcciones", "tana_correccion_version",
+            "tana_excel_buffer", "tana_resuelto_signature",
         ):
-            try:
-                extracted = extract_with_gemini(uploaded_file)
-
-                st.session_state["monografia_json"] = extracted
-                st.session_state["monografia_texto"] = extraction_to_text(extracted)
-                st.session_state["monografia_nombre"] = uploaded_file.name
-
-            except json.JSONDecodeError:
-                st.error(
-                    "Gemini respondió con un formato que no pudo convertirse "
-                    "a JSON. Vuelve a intentarlo."
-                )
-            except Exception as exc:
-                st.error(f"No se pudo procesar el archivo con Gemini: {exc}")
+            st.session_state.pop(_key, None)
+        if _es_excel_tana(uploaded_file.name):
+            with st.spinner("TANA está leyendo el Excel para revisión…"):
+                try:
+                    asientos_importados = _cargar_asientos_desde_excel(uploaded_file)
+                    valid, errors, warnings = validate_asientos({"asientos": asientos_importados}, pcge_map)
+                    st.session_state["asientos_contables"] = asientos_importados
+                    st.session_state["asientos_validos"] = valid
+                    st.session_state["errores_asientos"] = errors
+                    st.session_state["alertas_asientos"] = warnings
+                    st.session_state["archivo_excel_origen"] = uploaded_file.name
+                    st.session_state["monografia_nombre"] = uploaded_file.name
+                    st.session_state["monografia_texto"] = "Excel generado previamente por TANA. Se conserva como base para revisión y corrección."
+                    st.session_state["tana_file_signature"] = file_signature
+                    st.session_state["tana_correccion_version"] = 1
+                    st.session_state["tana_modo_trabajo"] = "completo"
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"No se pudo cargar el Excel para revisión: {exc}")
+                    st.stop()
+        else:
+            with st.spinner("TANA está leyendo y procesando la monografía…"):
+                try:
+                    extracted = extract_with_gemini(uploaded_file)
+                    st.session_state["monografia_json"] = extracted
+                    st.session_state["monografia_texto"] = extraction_to_text(extracted)
+                    st.session_state["monografia_nombre"] = uploaded_file.name
+                    st.session_state["tana_file_signature"] = file_signature
+                    st.rerun()
+                except json.JSONDecodeError:
+                    st.error("Gemini respondió con un formato que no pudo convertirse a JSON. Vuelve a intentarlo.")
+                    st.stop()
+                except Exception as exc:
+                    st.error(f"No se pudo procesar el archivo con Gemini: {exc}")
+                    st.stop()
 
 if "monografia_json" in st.session_state:
     data = st.session_state["monografia_json"]
+    _nombre_mono = st.session_state.get('monografia_nombre', 'archivo')
+    if not any(m["role"] == "user" and _nombre_mono in m["content"] for m in st.session_state["tana_chat"]):
+        _tana_chat_add("user", f"📄 Cargó la monografía: <b>{_nombre_mono}</b>")
+        _tana_chat_add("assistant", f"Monografía recibida: <b>{_nombre_mono}</b>. Estoy desarrollando los asientos…")
+        if _nombre_mono not in st.session_state.get("tana_historial", []):
+            st.session_state.setdefault("tana_historial", []).append(_nombre_mono)
+        st.rerun()
 
-    st.success(
-        f"Monografía analizada: {st.session_state['monografia_nombre']}"
-    )
-
-    operaciones = data.get("operaciones", [])
-    st.metric("Operaciones detectadas", len(operaciones))
-
-    with st.expander("📋 Operaciones detectadas", expanded=True):
-        if operaciones:
-            rows = []
-            for op in operaciones:
-                rows.append(
-                    {
-                        "N.º": op.get("numero"),
-                        "Fecha": op.get("fecha"),
-                        "Descripción": op.get("descripcion"),
-                        "Importe": op.get("importe"),
-                        "Documento": op.get("documento"),
-                        "Forma de pago": op.get("forma_pago"),
-                    }
-                )
-            st.dataframe(rows, use_container_width=True, hide_index=True)
-        else:
-            st.warning("No se detectaron operaciones.")
-
-    with st.expander("📄 Datos extraídos completos", expanded=False):
-        st.json(data)
-
-    st.info(
-        "Esta primera etapa usa Gemini para leer y estructurar la monografía. "
-        "Los asientos contables todavía deben pasar por el motor contable de TANA."
-    )
 
 
 # ============================================================
@@ -753,94 +845,6 @@ def validate_asientos(data, pcge_map):
             valid.append(asiento)
 
     return valid, errors, warnings
-
-# ============================================================
-# REVISIÓN Y CORRECCIÓN DE EXCEL GENERADO POR TANA
-# ============================================================
-def extraer_asientos_desde_excel(uploaded_excel):
-    try:
-        wb_in = openpyxl.load_workbook(io.BytesIO(uploaded_excel.getvalue()), data_only=False)
-    except Exception as exc:
-        raise ValueError(f"No se pudo abrir el archivo Excel: {exc}")
-    if "Asientos_Contables" not in wb_in.sheetnames:
-        raise ValueError("El Excel no contiene la hoja 'Asientos_Contables'.")
-    ws = wb_in["Asientos_Contables"]
-    headers = {}
-    for cell in ws[1]:
-        if cell.value is not None:
-            headers[str(cell.value).strip().lower()] = cell.column
-    requeridas = {"asiento", "fecha", "glosa", "codigo", "debe", "haber"}
-    faltantes = requeridas - set(headers)
-    if faltantes:
-        raise ValueError("Faltan columnas en Asientos_Contables: " + ", ".join(sorted(faltantes)))
-    def val(row, key, default=""):
-        col = headers.get(key)
-        return ws.cell(row=row, column=col).value if col else default
-    agrupados = {}
-    for r in range(2, ws.max_row + 1):
-        numero = val(r, "asiento")
-        codigo = str(val(r, "codigo") or "").strip()
-        if numero in ("", None) or codigo == "":
-            continue
-        key = str(numero).strip()
-        a = agrupados.setdefault(key, {
-            "numero": numero, "fecha": val(r, "fecha"), "glosa": val(r, "glosa"),
-            "documento": val(r, "documento"), "operacion": val(r, "operacion"), "lineas": []
-        })
-        a["lineas"].append({
-            "codigo": codigo, "denominacion": val(r, "cuenta"), "concepto": val(r, "concepto"),
-            "debe": float(_money(val(r, "debe")) or 0), "haber": float(_money(val(r, "haber")) or 0)
-        })
-    if not agrupados:
-        raise ValueError("No encontré asientos contables en la hoja Asientos_Contables.")
-    return list(agrupados.values())
-
-def diagnosticar_asientos(asientos):
-    hallazgos = []
-    for asiento in asientos:
-        debe = sum(_to_float(x.get("debe")) for x in asiento.get("lineas", []))
-        haber = sum(_to_float(x.get("haber")) for x in asiento.get("lineas", []))
-        if abs(debe - haber) > 0.01:
-            hallazgos.append(f"Asiento {asiento.get('numero')}: Debe S/ {debe:,.2f} vs Haber S/ {haber:,.2f}; diferencia S/ {abs(debe-haber):,.2f}.")
-        for linea in asiento.get("lineas", []):
-            codigo = str(linea.get("codigo", "")).strip()
-            if not re.fullmatch(r"\d{5}", codigo):
-                hallazgos.append(f"Asiento {asiento.get('numero')}: la cuenta {codigo or '[vacía]'} no tiene 5 dígitos.")
-            elif codigo not in pcge_map:
-                hallazgos.append(f"Asiento {asiento.get('numero')}: la cuenta {codigo} no existe en el PCGE cargado por TANA.")
-    return hallazgos
-
-def _corregir_excel_con_gemini(asientos, instruccion, excel_bytes):
-    client = get_gemini_client()
-    if client is None:
-        raise RuntimeError("No está configurada GEMINI_API_KEY en Streamlit Secrets.")
-    temp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".xlsx") as tmp:
-            tmp.write(excel_bytes)
-            temp_path = tmp.name
-        archivo_gemini = client.files.upload(file=temp_path)
-        prompt = f"""
-Eres TANA, especialista en contabilidad peruana y revisión de trabajos contables.
-El estudiante pide esta corrección:
-{instruccion}
-
-Devuelve SOLO JSON válido con: {{"asientos": [...], "explicacion": "", "cambios": []}}.
-Conserva todos los asientos, líneas, fechas, glosas, documentos e importes que NO se pidieron cambiar.
-Cambia solo lo necesario. Usa únicamente cuentas de 5 dígitos del PCGE. Cada asiento debe cumplir Debe = Haber.
-No inventes operaciones. Si la corrección es ambigua, conserva los asientos y explica qué dato falta.
-
-ASIENTOS ACTUALES:
-{json.dumps(asientos, ensure_ascii=False, indent=2)}
-"""
-        response = client.models.generate_content(
-            model=GEMINI_MODEL, contents=[archivo_gemini, prompt],
-            config=types.GenerateContentConfig(response_mime_type="application/json")
-        )
-        return json.loads(response.text or "{}")
-    finally:
-        if temp_path and os.path.exists(temp_path):
-            os.remove(temp_path)
 
 def _numeric_from_obj(obj, keys):
     """Busca de forma tolerante un importe asociado a alguna clave."""
@@ -1318,142 +1322,135 @@ def resolve_asientos_with_gemini():
     data.setdefault("_tana_gemini_model", profile["model"])
     return data, pcge_map
 
-if "monografia_json" in st.session_state:
-    st.divider()
-    st.subheader("🧮 2. Desarrollo de asientos contables")
-    st.write(
-        "TANA utilizará las operaciones detectadas y su PCGE de 5 dígitos. "
-        "Antes de aceptar un asiento, verifica que la cuenta exista y que Debe = Haber."
+if "monografia_json" in st.session_state and "asientos_contables" not in st.session_state:
+    with st.spinner("TANA está desarrollando y validando los asientos contables…"):
+        try:
+            resolved, pcge_map = resolve_asientos_with_gemini()
+            if isinstance(resolved, dict):
+                asientos_generados = resolved.get("asientos", [])
+                alertas_gemini = resolved.get("alertas", [])
+            elif isinstance(resolved, list):
+                asientos_generados = resolved
+                alertas_gemini = []
+            else:
+                raise ValueError("La respuesta de Gemini no tiene una estructura de asientos válida.")
+            if not isinstance(asientos_generados, list):
+                raise ValueError("La clave 'asientos' de Gemini no contiene una lista.")
+            asientos_generados = asegurar_cuenta_79_en_destinos(asientos_generados, pcge_map)
+            asientos_generados = corregir_retiro_socio(asientos_generados, st.session_state.get("monografia_json", {}))
+            valid, errors, warnings = validate_asientos({"asientos": asientos_generados}, pcge_map)
+            st.session_state["asientos_contables"] = asientos_generados
+            st.session_state["asientos_validos"] = valid
+            st.session_state["errores_asientos"] = errors
+            st.session_state["alertas_asientos"] = list(alertas_gemini) + list(warnings)
+        except Exception as exc:
+            st.error(f"No se pudieron desarrollar los asientos: {exc}")
+            st.stop()
+
+# ============================================================
+# MODO DE TRABAJO + CORRECCIÓN DEL EXCEL
+# ============================================================
+def _detectar_modo_trabajo(texto):
+    """Interpreta instrucciones simples del estudiante sin cambiar el motor contable."""
+    t = (texto or "").lower()
+    if any(k in t for k in ("solo estados", "solo estado", "estado de resultados", "estados financieros")):
+        return "completo"
+    if any(k in t for k in ("libro diario", "solo diario", "diario contable")):
+        return "asientos"
+    if any(k in t for k in ("solo asientos", "solo los asientos", "asientos contables", "desarrolla los asientos")):
+        return "asientos"
+    if any(k in t for k in ("toda la contabilidad", "todo completo", "todo el proceso", "todos los estados", "hoja de trabajo")):
+        return "completo"
+    return None
+
+
+def _es_peticion_correccion(texto):
+    t = (texto or "").lower()
+    return any(k in t for k in (
+        "corrige", "corregir", "corrección", "correccion", "te equivocaste",
+        "está mal", "esta mal", "error", "modifica", "modificar", "cambia",
+        "cambiar", "reemplaza", "reemplazar", "debería ser", "debe ser",
+        "no corresponde", "incorrecto", "incorrecta", "ajusta", "ajustar"
+    ))
+
+
+def _corregir_asientos_con_gemini(instruccion):
+    """Pide una corrección controlada y devuelve TODOS los asientos corregidos."""
+    actuales = st.session_state.get("asientos_contables", [])
+    mono = st.session_state.get("monografia_texto", "")
+    pcge_5 = [[str(c).strip(), str(d)] for c, d in PCGE_DATA if re.fullmatch(r"\d{5}", str(c).strip())]
+    prompt = f"""Eres TANA, motor contable peruano.
+El estudiante está revisando un Excel que TANA ya generó y solicita una corrección.
+
+REGLAS DE CORRECCIÓN:
+1. Modifica únicamente lo que el estudiante señala.
+2. Conserva todos los demás asientos, fechas, glosas, documentos, cuentas e importes que no sean afectados.
+3. Si la corrección cambia un importe, recalcula las líneas del mismo asiento para que Debe = Haber.
+4. Usa únicamente cuentas PCGE de 5 dígitos del catálogo proporcionado.
+5. No inventes información. Si la solicitud no permite determinar una corrección segura, devuelve una lista vacía y explica el motivo en 'observacion'.
+6. Devuelve SIEMPRE el conjunto COMPLETO de asientos, no solo el asiento modificado.
+7. La respuesta debe ser JSON válido.
+
+ESTRUCTURA OBLIGATORIA:
+{{
+  "asientos": [ ... todos los asientos completos ... ],
+  "observacion": "explicación breve de lo corregido"
+}}
+
+DOCUMENTO FUENTE / CONTEXTO ORIGINAL:
+{mono[:14000]}
+
+ASIENTOS ACTUALES:
+{json.dumps(actuales, ensure_ascii=False, indent=2)[:30000]}
+
+PCGE DE 5 DÍGITOS:
+{json.dumps(pcge_5, ensure_ascii=False)}
+
+SOLICITUD DEL ESTUDIANTE:
+{instruccion}
+"""
+    response, profile = _generate_with_fallback(
+        lambda client: [prompt],
+        types.GenerateContentConfig(response_mime_type="application/json"),
     )
+    data = json.loads(response.text or "{}")
+    return data, profile
 
-    if st.button("🧮 Resolver asientos contables", type="primary"):
-        with st.spinner("Desarrollando y validando los asientos contables..."):
-            try:
-                resolved, pcge_map = resolve_asientos_with_gemini()
 
-                # Gemini devuelve {"asientos": [...], "alertas": [...]}
-                # La interfaz necesita trabajar con la lista de asientos.
-                if isinstance(resolved, dict):
-                    asientos_generados = resolved.get("asientos", [])
-                    alertas_gemini = resolved.get("alertas", [])
-                elif isinstance(resolved, list):
-                    asientos_generados = resolved
-                    alertas_gemini = []
-                else:
-                    raise ValueError("La respuesta de Gemini no tiene una estructura de asientos válida.")
-
-                if not isinstance(asientos_generados, list):
-                    raise ValueError("La clave 'asientos' de Gemini no contiene una lista.")
-
-                # Regla determinista: toda cuenta de destino del Elemento 9
-                # debe tener su contrapartida 79 en el Haber. Esto corrige el
-                # caso en que Gemini desarrolle el destino pero omita la 79111.
-                asientos_generados = asegurar_cuenta_79_en_destinos(
-                    asientos_generados,
-                    pcge_map,
-                )
-
-                # Corrección determinista de la Operación 3/4 de retiro de socio:
-                # la venta privada no se contabiliza en la sociedad y el reparto
-                # de utilidades usa 59111/48185/44191 y luego 44191/10411.
-                asientos_generados = corregir_retiro_socio(
-                    asientos_generados,
-                    st.session_state.get("monografia_json", {}),
-                )
-
-                valid, errors, warnings = validate_asientos(
-                    {"asientos": asientos_generados},
-                    pcge_map,
-                )
-
-                st.session_state["asientos_contables"] = asientos_generados
-                st.session_state["asientos_validos"] = valid
-                st.session_state["errores_asientos"] = errors
-                st.session_state["alertas_asientos"] = list(alertas_gemini) + list(warnings)
-            except json.JSONDecodeError:
-                st.error("Gemini devolvió una respuesta que no es JSON válido. Vuelve a intentarlo.")
-            except Exception as exc:
-                st.error(f"No se pudieron desarrollar los asientos: {exc}")
-
-    if "asientos_contables" in st.session_state:
-        asientos = st.session_state["asientos_contables"]
-        validos = st.session_state.get("asientos_validos", [])
-        errores = st.session_state.get("errores_asientos", [])
-        alertas = st.session_state.get("alertas_asientos", [])
-
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Asientos generados", len(asientos))
-        c2.metric("Asientos validados", len(validos))
-        c3.metric("Errores", len(errores))
-
-        if errores:
-            st.error("Hay asientos que TANA NO acepta todavía:")
-            for e in errores:
-                st.write(f"- {e}")
-        else:
-            st.success("Todos los asientos generados cuadran y utilizan cuentas existentes de 5 dígitos.")
-
-        for asiento in asientos:
-            numero = asiento.get("numero", "")
-            with st.expander(
-                f"Asiento {numero} — {asiento.get('fecha', '')} — {asiento.get('glosa', '')}",
-                expanded=False,
-            ):
-                rows = []
-                for line in asiento.get("lineas", []):
-                    rows.append({
-                        "Código": line.get("codigo", ""),
-                        "Cuenta": pcge_map.get(str(line.get("codigo", "")).strip(), line.get("denominacion", "")),
-                        "Concepto": line.get("concepto", ""),
-                        "Debe": line.get("debe", 0),
-                        "Haber": line.get("haber", 0),
-                    })
-                st.dataframe(rows, use_container_width=True, hide_index=True)
-                if asiento.get("requiere_revision"):
-                    st.warning(asiento.get("observacion", "Requiere revisión."))
-
-        if alertas:
-            st.warning("\n".join(f"- {x}" for x in alertas))
-
-# ============================================================
-# REVISAR / CORREGIR UN EXCEL YA GENERADO
-# ============================================================
-if "asientos_contables" in st.session_state:
-    with st.expander("🔧 Revisar o corregir un Excel generado por TANA", expanded=False):
-        excel_revision = st.file_uploader("Sube aquí el Excel que TANA generó anteriormente", type=["xlsx", "xls"], key="excel_revision_tana")
-        instruccion_revision = st.text_input("¿Qué debe corregir TANA?", placeholder="Ej.: En el asiento 8, la cuenta 60121 debe ser 61111.", key="instruccion_revision_excel")
-        if excel_revision is not None:
-            try:
-                asientos_excel = extraer_asientos_desde_excel(excel_revision)
-                st.session_state["excel_revision_asientos"] = asientos_excel
-                diagnostico = diagnosticar_asientos(asientos_excel)
-                if diagnostico:
-                    st.warning("Revisión detectada: " + " | ".join(diagnostico[:8]))
-                else:
-                    st.success("Excel leído correctamente. Los asientos están cuadrados.")
-            except Exception as exc:
-                st.error(f"No se pudo cargar el Excel para revisión: {exc}")
-        if excel_revision is not None and instruccion_revision.strip():
-            if st.button("🛠️ Corregir Excel y generar nueva versión", type="primary", key="btn_corregir_excel"):
-                try:
-                    base = st.session_state.get("excel_revision_asientos", [])
-                    resultado = _corregir_excel_con_gemini(base, instruccion_revision.strip(), excel_revision.getvalue())
-                    corregidos = resultado.get("asientos", []) if isinstance(resultado, dict) else []
-                    if not corregidos:
-                        raise ValueError("TANA no devolvió asientos corregidos.")
-                    validos, errores, advertencias = validate_asientos({"asientos": corregidos}, pcge_map)
-                    if errores:
-                        raise ValueError("La corrección no pasó la validación contable:\n" + "\n".join("- " + e for e in errores[:12]))
-                    st.session_state["asientos_contables"] = corregidos
-                    st.session_state["asientos_validos"] = validos
-                    st.session_state["errores_asientos"] = []
-                    st.session_state["alertas_asientos"] = advertencias
-                    st.session_state["generar_excel_auto"] = True
-                    st.success("TANA corrigió el trabajo y lo validó. Se generará un nuevo Excel completo.")
-                    if resultado.get("explicacion"): st.info(resultado["explicacion"])
-                    for cambio in resultado.get("cambios", []): st.write("- " + str(cambio))
-                except Exception as exc:
-                    st.error(f"No se pudo corregir el Excel: {exc}")
+def _aplicar_correccion_si_corresponde(pregunta):
+    if not _es_peticion_correccion(pregunta):
+        return False
+    with st.spinner("TANA está revisando la corrección y regenerando el trabajo…"):
+        try:
+            data, profile = _corregir_asientos_con_gemini(pregunta)
+            nuevos = data.get("asientos", []) if isinstance(data, dict) else []
+            observacion = data.get("observacion", "Corrección procesada.") if isinstance(data, dict) else "Corrección procesada."
+            if not isinstance(nuevos, list) or not nuevos:
+                _tana_chat_add("assistant", f"No apliqué cambios porque no pude determinar una corrección segura. {observacion}")
+                return True
+            valid, errors, warnings = validate_asientos({"asientos": nuevos}, pcge_map)
+            if errors:
+                _tana_chat_add("assistant", "Revisé la corrección, pero la nueva versión no pasó la validación contable. No reemplacé tu Excel anterior.")
+                return True
+            nuevos = asegurar_cuenta_79_en_destinos(nuevos, pcge_map)
+            nuevos = corregir_retiro_socio(nuevos, st.session_state.get("monografia_json", {}))
+            valid, errors, warnings = validate_asientos({"asientos": nuevos}, pcge_map)
+            if errors:
+                _tana_chat_add("assistant", "La corrección propuesta no pasó la validación final. Conservé la versión anterior para no dañar el trabajo.")
+                return True
+            st.session_state["asientos_contables"] = nuevos
+            st.session_state["asientos_validos"] = valid
+            st.session_state["errores_asientos"] = errors
+            st.session_state["alertas_asientos"] = warnings
+            st.session_state["tana_correcciones"] = st.session_state.get("tana_correcciones", 0) + 1
+            st.session_state["tana_correccion_version"] = st.session_state.get("tana_correccion_version", 1) + 1
+            st.session_state["tana_resuelto_signature"] = None
+            st.session_state["tana_excel_buffer"] = None
+            _tana_chat_add("assistant", f"<b>TANA corrigió el trabajo.</b><br>{observacion}<br><br>Se validaron nuevamente los asientos y preparé una nueva versión del Excel para descargar.")
+            return True
+        except Exception as exc:
+            st.error(f"No se pudo aplicar la corrección: {_gemini_error_message(exc)}")
+            return True
 
 # ============================================================
 # TUTOR INTERACTIVO TANA
@@ -1462,12 +1459,9 @@ def _tana_contexto_tutor():
     mono = st.session_state.get("monografia_texto", "")
     asientos = st.session_state.get("asientos_contables", [])
     asientos_txt = json.dumps(asientos, ensure_ascii=False, indent=2)
-    diagnostico = diagnosticar_asientos(asientos)
-    diagnostico_txt = "\n".join("- " + x for x in diagnostico) if diagnostico else "No hay descuadres básicos en los asientos."
     return (
         "MONOGRAFÍA:\n" + mono[:14000]
         + "\n\nASIENTOS GENERADOS POR TANA:\n" + asientos_txt[:18000]
-        + "\n\nDIAGNÓSTICO DETERMINISTA DE TANA:\n" + diagnostico_txt
     )
 
 def _preguntar_a_tana(pregunta):
@@ -1477,7 +1471,7 @@ Responde la pregunta del estudiante usando únicamente el contexto proporcionado
 Explica con claridad por qué se hizo el asiento, cómo se obtuvo el importe, por qué
 una cuenta va al Debe o Haber y, cuando corresponda, cómo se relaciona con la HT,
 la distribución y ajustes, ERN, ERF o ESF.
-No inventes información que no aparezca en el contexto. Si existe un diagnóstico determinista, úsalo para señalar exactamente el número de asiento, cuenta o línea afectada; no respondas con una explicación genérica. Si no puedes identificar el punto exacto, dilo expresamente.
+No inventes información que no aparezca en el contexto.
  En los estados financieros respeta estrictamente estas reglas:
  ERF: 70 y 69 se detectan por prefijo; 94 y 95 son obligatorias; 78 se incluye solo si existe; 65 y 67 solo si existen sin destino a 94/95. No incluyas 79 ni agregues automáticamente otras cuentas del elemento 6 al ERF.
  ERN: presenta las cuentas por naturaleza y su resultado.
@@ -1496,71 +1490,55 @@ PREGUNTA:
     )
     return response.text or "No pude generar una respuesta.", profile["label"]
 
-if "monografia_json" in st.session_state or "asientos_contables" in st.session_state:
-    st.divider()
-    st.subheader("🤖 Pregúntale a TANA")
-    st.caption("Pregunta por qué se hizo un asiento, cómo se calculó o por qué una cuenta va al Debe o al Haber.")
-
-    pregunta = st.text_input(
-        "Escribe tu pregunta",
-        placeholder="Ej.: ¿Por qué se utilizó la cuenta 79111 en este asiento?",
-        key="pregunta_tana",
-    )
-    c1, c2 = st.columns([4, 1])
-    with c1:
-        preguntar = st.button("💬 Preguntar a TANA", type="primary", key="btn_preguntar_tana")
-    with c2:
-        audio = st.audio_input("🎙️ Hablar", key="audio_tana") if hasattr(st, "audio_input") else None
-
-    if preguntar and pregunta.strip():
-        with st.spinner("TANA está preparando la explicación..."):
-            try:
-                respuesta, ruta = _preguntar_a_tana(pregunta.strip())
-                st.session_state["respuesta_tana"] = respuesta
-                st.session_state["respuesta_tana_ruta"] = ruta
-            except Exception as exc:
-                st.error(f"No se pudo responder: {_gemini_error_message(exc)}")
-
-    if audio is not None:
-        with st.spinner("TANA está escuchando y preparando la respuesta..."):
-            temp_audio = None
-            try:
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
-                    tmp.write(audio.getvalue())
-                    temp_audio = tmp.name
-
-                def audio_contents(client):
-                    audio_file = client.files.upload(file=temp_audio)
-                    return [
-                        audio_file,
-                        "Escucha el audio del estudiante, transcribe su pregunta y luego respóndela. "
-                        "No inventes datos. Usa el siguiente contexto:\n" + _tana_contexto_tutor(),
-                    ]
-
-                response, profile = _generate_with_fallback(
-                    audio_contents,
-                    types.GenerateContentConfig()
-                )
-                st.session_state["respuesta_tana"] = response.text or "No pude interpretar el audio."
-                st.session_state["respuesta_tana_ruta"] = profile["label"]
-            except Exception as exc:
-                st.error(f"No se pudo procesar el audio: {_gemini_error_message(exc)}")
-            finally:
-                if temp_audio and os.path.exists(temp_audio):
-                    os.remove(temp_audio)
-
-    if st.session_state.get("respuesta_tana"):
-        st.markdown("**Respuesta de TANA:**")
-        st.info(st.session_state["respuesta_tana"])
-        if st.session_state.get("respuesta_tana_ruta"):
-            st.caption(f"Procesado por {st.session_state['respuesta_tana_ruta']}.")
-
-st.divider()
-
-generar_excel_auto = st.session_state.pop("generar_excel_auto", False)
-if not generar_excel_auto and not st.button("📊 Generar Excel contable", type="primary"):
-    st.stop()
-
+# La consulta y el audio se capturan arriba. Aquí solo se procesa la acción,
+# una vez que las funciones del tutor ya están definidas.
+if (enviar_top or audio_top is not None) and (pregunta_top.strip() or audio_top is not None) and st.session_state.get("asientos_contables"):
+    if enviar_top and pregunta_top.strip():
+        _tana_chat_add("user", pregunta_top.strip())
+        _modo = _detectar_modo_trabajo(pregunta_top.strip())
+        if _modo:
+            st.session_state["tana_modo_trabajo"] = _modo
+        if _es_peticion_correccion(pregunta_top.strip()):
+            _aplicar_correccion_si_corresponde(pregunta_top.strip())
+        else:
+            with st.spinner("TANA está preparando la explicación…"):
+                try:
+                    respuesta, ruta = _preguntar_a_tana(pregunta_top.strip())
+                    st.session_state["respuesta_tana"] = respuesta
+                    st.session_state["respuesta_tana_ruta"] = ruta
+                    _tana_chat_add("assistant", respuesta)
+                except Exception as exc:
+                    st.error(f"No se pudo responder: {_gemini_error_message(exc)}")
+    elif audio_top is not None:
+        import hashlib
+        _audio_sig = hashlib.sha1(audio_top.getvalue()).hexdigest()
+        if st.session_state.get("audio_tana_processed") == _audio_sig:
+            audio_top = None
+        else:
+            st.session_state["audio_tana_processed"] = _audio_sig
+        if audio_top is not None:
+            _tana_chat_add("user", "🎤 Pregunta enviada por voz")
+            with st.spinner("TANA está escuchando y preparando la respuesta…"):
+                temp_audio = None
+                try:
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+                        tmp.write(audio_top.getvalue())
+                        temp_audio = tmp.name
+                    def audio_contents(client):
+                        audio_file = client.files.upload(file=temp_audio)
+                        return [audio_file, "Escucha el audio del estudiante, transcribe su pregunta y luego respóndela. No inventes datos. Usa el siguiente contexto:\n" + _tana_contexto_tutor()]
+                    response, profile = _generate_with_fallback(audio_contents, types.GenerateContentConfig())
+                    respuesta_audio = response.text or "No pude interpretar el audio."
+                    st.session_state["respuesta_tana"] = respuesta_audio
+                    st.session_state["respuesta_tana_ruta"] = profile["label"]
+                    _tana_chat_add("assistant", respuesta_audio)
+                except Exception as exc:
+                    st.error(f"No se pudo procesar el audio: {_gemini_error_message(exc)}")
+                finally:
+                    if temp_audio and os.path.exists(temp_audio):
+                        os.remove(temp_audio)
+    st.rerun()
+st.success("TANA terminó el desarrollo contable. Tu Excel está listo para descargar.")
 
 FONT = "Arial"
 wb = Workbook()
@@ -2645,7 +2623,8 @@ for code in patrimonio:
     r2 += 1
 
 ws9.cell(r2,7,'Resultado del ejercicio').font=BLACK
-_set_report_value(ws9,r2,10,f'=ERN!E{resultado_ern_row}')
+# El ESF toma el mismo resultado final del ERF; ERN mantiene un control cruzado.
+_set_report_value(ws9,r2,10,f'=ERF!E{resultado_erf_row}')
 pat_rows.append(r2)
 r2 += 1
 
@@ -2738,14 +2717,18 @@ if "monografia_texto" in st.session_state:
 # Las hojas auxiliares siguen existiendo durante la construcción porque
 # alimentan las fórmulas de los estados financieros, pero no se entregan
 # al usuario. El archivo final muestra únicamente los reportes solicitados.
-HOJAS_PUBLICAS = [
-    "Asientos_Contables",
-    "LM",
-    "HT",
-    "ESF",
-    "ERF",
-    "ERN",
-]
+if st.session_state.get("tana_modo_trabajo") == "asientos":
+    # Modo básico: el estudiante pidió únicamente asientos / libro diario.
+    HOJAS_PUBLICAS = ["Asientos_Contables"]
+else:
+    HOJAS_PUBLICAS = [
+        "Asientos_Contables",
+        "LM",
+        "HT",
+        "ESF",
+        "ERF",
+        "ERN",
+    ]
 
 for ws in wb.worksheets:
     if ws.title not in HOJAS_PUBLICAS:
@@ -2774,12 +2757,35 @@ buffer = io.BytesIO()
 wb.save(buffer)
 buffer.seek(0)
 
-st.success("Workbook generado correctamente.")
-if "monografia_nombre" in st.session_state:
-    st.caption("La hoja Monografia conserva el texto extraído para revisión.")
-st.download_button(
-    label="Descargar Excel",
-    data=buffer,
-    file_name="TANA_Contabilidad.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-)
+_sig = st.session_state.get("tana_file_signature")
+if _sig and st.session_state.get("tana_resuelto_signature") != _sig:
+    _tana_chat_add(
+        "assistant",
+        "TANA ha resuelto tu monografía:<br>" + (
+            "&nbsp;&nbsp;• Solo asientos / Libro Diario" if st.session_state.get("tana_modo_trabajo") == "asientos" else
+            "&nbsp;&nbsp;• Asientos<br>&nbsp;&nbsp;• HT<br>&nbsp;&nbsp;• ERN<br>&nbsp;&nbsp;• ERF<br>&nbsp;&nbsp;• ESF"
+        ),
+    )
+    st.session_state["tana_resuelto_signature"] = _sig
+    st.session_state["tana_excel_buffer"] = buffer.getvalue()
+    st.rerun()
+
+if st.session_state.get("tana_excel_buffer"):
+    st.markdown(
+        '<div class="tana-bubble-assistant" style="max-width:340px;">'
+        '<div class="tana-result-card"><span style="font-size:22px;">📊</span>'
+        '<span class="name">TANA · Excel · Desarrollo</span></div></div>',
+        unsafe_allow_html=True,
+    )
+    st.download_button(
+        label="⬇️  Descargar Excel",
+        data=st.session_state["tana_excel_buffer"],
+        file_name=(
+            f"TANA_Contabilidad_corregido_v{st.session_state.get('tana_correccion_version', 1)}.xlsx"
+            if st.session_state.get("tana_correcciones", 0) else
+            ("TANA_Asientos.xlsx" if st.session_state.get("tana_modo_trabajo") == "asientos" else "TANA_Contabilidad.xlsx")
+        ),
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+    if "monografia_nombre" in st.session_state:
+        st.caption("La hoja Monografia conserva el texto extraído para revisión.")
