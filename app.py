@@ -63,20 +63,22 @@ st.markdown("""
         font-size: .92rem;
     }
 </style>
-<div class="tana-header">
-    <div class="tana-title">TANA</div>
-    <div class="tana-subtitle">Inteligencia Artificial Contable · carga tu monografía, pregunta y descarga tu Excel.</div>
-</div>
 """, unsafe_allow_html=True)
 
-# Logo TANA pequeño: conserva la identidad visual sin ocupar el espacio de la barra principal.
-for _logo_name in ("LOGO TANA.jpg", "logo_tana.jpg", "LOGO_TANA.jpg"):
-    _logo_path = os.path.join(os.path.dirname(__file__), _logo_name)
-    if os.path.exists(_logo_path):
-        _lc1, _lc2 = st.columns([0.22, 7.0])
-        with _lc1:
-            st.image(_logo_path, width=82)
-        break
+# Encabezado: el logo queda pequeño a la derecha, sin desplazar la barra principal.
+_hdr_left, _hdr_right = st.columns([9.1, 0.9], gap="small")
+with _hdr_left:
+    st.markdown(
+        '<div class="tana-title">TANA</div>'
+        '<div class="tana-subtitle">Inteligencia Artificial Contable · carga tu monografía, pregunta y descarga tu Excel.</div>',
+        unsafe_allow_html=True,
+    )
+with _hdr_right:
+    for _logo_name in ("LOGO TANA.jpg", "logo_tana.jpg", "LOGO_TANA.jpg"):
+        _logo_path = os.path.join(os.path.dirname(__file__), _logo_name)
+        if os.path.exists(_logo_path):
+            st.image(_logo_path, width=58)
+            break
 
 # ============================================================
 # GEMINI: lectura multimodal de monografías
@@ -1728,25 +1730,13 @@ CUENTAS_6_CON_DESTINO = detectar_cuentas_6_con_destino(
 )
 
 def es_funcion(code):
-    """
-    Base del Estado de Resultado por Función en la HT:
-
-    - 70: ventas (se presenta específicamente 70121 en el ERF).
-    - 69: costo de ventas (específicamente 69121 en el ERF).
-    - 94 y 95: gastos por función.
-    - Elemento 6: solo las cuentas que NO tienen destino a 94/95.
-      Ej.: 67 se mantiene si no tiene destino; 65 solo se mantiene
-      cuando la operación no le asignó destino.
-    - 79 NO pertenece al ERF: es cuenta puente de distribución.
-    """
-    if code[:2] == "70":
+    """Clasificación exacta del Resultado por Función de TANA."""
+    if code[:2] in {"70", "69", "94", "95", "78"}:
         return True
-    if es_costo_ventas(code):
-        return True
-    if code[:2] in {"94", "95"}:
-        return True
-    if code[:1] == "6" and len(code) == 5:
+    # Excepciones del elemento 6: solo 65 y 67 sin destino a 94/95.
+    if code[:2] in {"65", "67"} and len(code) == 5:
         return code not in CUENTAS_6_CON_DESTINO
+    # 60, 61, 62, 63, 64, 66, 68 y 79 no entran automáticamente al ERF.
     return False
 
 def es_balance(code):
@@ -2020,13 +2010,11 @@ r += 1
 gv_row = erf_exact("Gastos de venta (95)", "95", "deudor", -1)
 ga_row = erf_exact("Gastos de administración (94)", "94", "deudor", -1)
 
-# Las cuentas del Elemento 6 sin destino a 94/95 permanecen en el ERF.
-# Esto incluye, por ejemplo, 67 cuando no tiene destino; 65 es opcional
-# y solo se incluye cuando TANA no le asignó destino.
+# Solo 65 y 67 pueden aparecer desde el elemento 6, y únicamente
+# cuando no tienen un destino explícito a 94/95.
 cuentas_6_sin_destino = sorted(
     c for c in cuentas_reporte
-    if c[:1] == "6" and len(c) == 5 and c not in CUENTAS_6_CON_DESTINO
-    and c not in {"69121"}
+    if c[:2] in {"65", "67"} and len(c) == 5 and c not in CUENTAS_6_CON_DESTINO
 )
 
 elemento6_rows = []
@@ -2035,13 +2023,13 @@ for code6 in cuentas_6_sin_destino:
     rr = erf_exact(f"{code6} - {desc6}", code6, "deudor", -1)
     elemento6_rows.append(rr)
 
-# Ingresos de otros elementos (71-78), sin introducir la 79.
+# La 78 se incorpora únicamente cuando realmente existe en la práctica.
 extra_income_rows = []
-for _pfx in ["71","72","73","74","75","76","77","78"]:
-    ws8.cell(r, 2, f"Ingresos / resultados ({_pfx})").font = BLACK
+if any(c.startswith("78") for c in cuentas_reporte):
+    ws8.cell(r, 2, "OTROS INGRESOS (78)").font = BLACK
     ws8.cell(
         r, 4,
-        f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{_pfx}")*HT!$N$4:$N${HT_LAST_ROW})'
+        f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="78")*HT!$N$4:$N${HT_LAST_ROW})'
     ).font = BLACK
     ws8.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
     extra_income_rows.append(r)
@@ -2065,9 +2053,9 @@ ERF_CONTROL_ROW = r
 r += 2
 ws8.cell(r, 2, "NOTA DE CONTROL").font = BOLD
 ws8.cell(r, 2).comment = Comment(
-    "ERF: incluye 70121, 69121, 94, 95 y las cuentas del Elemento 6 "
-    "que no tienen destino a 94/95. La 79 es cuenta puente y NO forma "
-    "parte del Estado de Resultado por Función.",
+    "ERF: incluye 70/70121, 69/69121, 94 y 95. La 65 y 67 solo "
+    "si existen y no tienen destino a 94/95; la 78 solo si existe. "
+    "La 79 es cuenta puente y NO forma parte del Estado de Resultado por Función.",
     "TANA"
 )
 
@@ -2081,128 +2069,157 @@ ws9["B2"] = "ESTADO DE SITUACIÓN FINANCIERA"
 ws9["B2"].font = TITLE_FONT
 ws9["B3"] = "Expresado en soles"
 ws9["B3"].font = SUBTITLE_FONT
+for cell, value in [("B4","ACTIVO"),("D4","Notas"),("E4","AÑO 2026"),("G4","PASIVO Y PATRIMONIO"),("I4","Notas"),("J4","AÑO 2026")]:
+    ws9[cell] = value
+for c in (2,4,5,7,9,10):
+    ws9.cell(4,c).fill = PatternFill("solid", fgColor="D9E1F2")
+    ws9.cell(4,c).font = BOLD
+    ws9.cell(4,c).alignment = Alignment(horizontal="center")
 
+# Ninguna cuenta de balance utilizada por TANA desaparece. La ubicación se
+# decide por su saldo real y se conserva una sola vez.
+def _saldo_python(code):
+    rec = movimientos.get(code, {"debe": 0.0, "haber": 0.0})
+    return float(rec.get("debe", 0) or 0) - float(rec.get("haber", 0) or 0)
+
+cuentas_balance = [c for c in cuentas_reporte if c[:1] in {"1","2","3","4","5"}]
+activos_corrientes, activos_no_corrientes = [], []
+pasivos_corrientes, pasivos_no_corrientes = [], []
+patrimonio = []
+
+for code in cuentas_balance:
+    saldo = _saldo_python(code)
+    if code.startswith("5"):
+        patrimonio.append(code)
+    elif code.startswith(("36", "39")):
+        # Contra-activos: aunque su saldo sea acreedor, permanecen dentro del
+        # activo no corriente y se restan del costo del activo.
+        activos_no_corrientes.append(code)
+    elif saldo >= 0:
+        # Activo normal: 1-2 corriente; 3 no corriente. Una cuenta 4 con
+        # saldo deudor es una excepción y se conserva en activo no corriente.
+        if code.startswith(("3", "4")):
+            activos_no_corrientes.append(code)
+        else:
+            activos_corrientes.append(code)
+    else:
+        # Pasivo normal: 4 corriente. Si una cuenta 1-3 queda acreedora,
+        # se conserva en pasivo no corriente, como excepción.
+        if code.startswith("4"):
+            pasivos_corrientes.append(code)
+        else:
+            pasivos_no_corrientes.append(code)
+
+def _write_esf_balance_line(row, col, code, formula, negative=False):
+    desc = pcge_map.get(code, "") or f"Cuenta {code}"
+    ws9.cell(row, 2 if col == 5 else 7, desc).font = BLACK
+    ws9.cell(row, col, formula if not negative else f"=-({formula[1:]})").font = BLACK
+    ws9.cell(row, col).number_format = '#,##0.00;(#,##0.00);"-"'
+
+# --------------------------- ACTIVO ---------------------------
 r = 5
 ws9.cell(r, 2, "ACTIVO CORRIENTE").font = BOLD
 r += 1
-
-# Activos: elemento 1 y 2; cuentas 3 son no corrientes.
-activo_corriente = [
-    ("10", "Efectivo y equivalentes de efectivo"),
-    ("12", "Cuentas por cobrar comerciales"),
-    ("14", "Cuentas por cobrar al personal / accionistas"),
-    ("16", "Cuentas por cobrar diversas"),
-    ("18", "Servicios y otros contratados por anticipado"),
-    ("20", "Mercaderías"),
-    ("25", "Materiales y suministros"),
-]
 ac_rows = []
-for prefix, label in activo_corriente:
-    ws9.cell(r, 2, label).font = BLACK
-    ws9.cell(r, 4, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*HT!$O$4:$O${HT_LAST_ROW})').font = BLACK
-    ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
+for code in activos_corrientes:
+    _write_esf_balance_line(r, 5, code, f'=SUMIF(HT!$A:$A,"{code}",HT!$O:$O)')
     ac_rows.append(r); r += 1
-
-# Tributos a favor: solo el saldo deudor de elemento 40.
-ws9.cell(r, 2, "Tributos a favor / crédito fiscal").font = BLACK
-ws9.cell(r, 4, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="40")*HT!$O$4:$O${HT_LAST_ROW})').font = BLACK
-ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-ac_rows.append(r); r += 1
-
 ws9.cell(r, 2, "TOTAL ACTIVO CORRIENTE").font = BOLD
-ws9.cell(r, 4, "=" + "+".join(f'D{x}' for x in ac_rows)).font = BOLD
-ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-TOTAL_AC_ROW = r; r += 2
+ws9.cell(r, 5, "=" + "+".join(f"E{x}" for x in ac_rows) if ac_rows else "=0").font = BOLD
+ws9.cell(r, 5).number_format = '#,##0.00;(#,##0.00);"-"'
+TOTAL_AC_ROW = r
+r += 2
 
 ws9.cell(r, 2, "ACTIVO NO CORRIENTE").font = BOLD
 r += 1
 anc_rows = []
-for prefix, label in [
-    ("33", "Propiedad, planta y equipo - costo"),
-    ("37", "Activos no corrientes / intangibles"),
-]:
-    ws9.cell(r, 2, label).font = BLACK
-    ws9.cell(r, 4, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*HT!$O$4:$O${HT_LAST_ROW})').font = BLACK
-    ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
+for code in activos_no_corrientes:
+    if code.startswith(("36", "39")):
+        _write_esf_balance_line(r, 5, code, f'=SUMIF(HT!$A:$A,"{code}",HT!$P:$P)', negative=True)
+    else:
+        _write_esf_balance_line(r, 5, code, f'=SUMIF(HT!$A:$A,"{code}",HT!$O:$O)')
     anc_rows.append(r); r += 1
-
-# Contra-activos 36 y 39: saldo acreedor resta del activo.
-for prefix, label in [("36", "Desvalorización / deterioro acumulado"), ("39", "Depreciación y amortización acumulada")]:
-    ws9.cell(r, 2, label).font = BLACK
-    ws9.cell(r, 4, f'=-SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*HT!$P$4:$P${HT_LAST_ROW})').font = BLACK
-    ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-    anc_rows.append(r); r += 1
-
 ws9.cell(r, 2, "TOTAL ACTIVO NO CORRIENTE").font = BOLD
-ws9.cell(r, 4, "=" + "+".join(f'D{x}' for x in anc_rows)).font = BOLD
-ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-TOTAL_ANC_ROW = r; r += 1
+ws9.cell(r, 5, "=" + "+".join(f"E{x}" for x in anc_rows) if anc_rows else "=0").font = BOLD
+ws9.cell(r, 5).number_format = '#,##0.00;(#,##0.00);"-"'
+TOTAL_ANC_ROW = r
+r += 1
 
 ws9.cell(r, 2, "TOTAL ACTIVO").font = BOLD
-ws9.cell(r, 4, f'=D{TOTAL_AC_ROW}+D{TOTAL_ANC_ROW}').font = BOLD
-ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-TOTAL_ACTIVO_ROW = r; r += 2
+ws9.cell(r, 5, f'=E{TOTAL_AC_ROW}+E{TOTAL_ANC_ROW}').font = BOLD
+ws9.cell(r, 5).number_format = '#,##0.00;(#,##0.00);"-"'
+TOTAL_ACTIVO_ROW = r
 
-ws9.cell(r, 2, "PASIVO CORRIENTE").font = BOLD
-r += 1
+# ---------------------- PASIVO / PATRIMONIO ----------------------
+r2 = 5
+ws9.cell(r2, 7, "PASIVO").font = BOLD
+r2 += 1
+ws9.cell(r2, 7, "PASIVO CORRIENTE").font = BOLD
+r2 += 1
 pc_rows = []
-for prefix, label in [
-    ("40", "Tributos por pagar"),
-    ("41", "Remuneraciones y participaciones por pagar"),
-    ("42", "Cuentas por pagar comerciales"),
-    ("43", "Cuentas por pagar diversas"),
-    ("44", "Cuentas por pagar a socios / dividendos"),
-    ("46", "Cuentas por pagar diversas / terceros"),
-    ("47", "Cuentas por pagar relacionadas"),
-    ("48", "Provisiones y obligaciones"),
-]:
-    ws9.cell(r, 2, label).font = BLACK
-    ws9.cell(r, 4, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*HT!$P$4:$P${HT_LAST_ROW})').font = BLACK
-    ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-    pc_rows.append(r); r += 1
+for code in pasivos_corrientes:
+    _write_esf_balance_line(r2, 10, code, f'=SUMIF(HT!$A:$A,"{code}",HT!$P:$P)')
+    pc_rows.append(r2); r2 += 1
+ws9.cell(r2, 7, "TOTAL PASIVO CORRIENTE").font = BOLD
+ws9.cell(r2, 10, "=" + "+".join(f"J{x}" for x in pc_rows) if pc_rows else "=0").font = BOLD
+ws9.cell(r2, 10).number_format = '#,##0.00;(#,##0.00);"-"'
+TOTAL_PC_ROW = r2
+r2 += 2
 
-# Obligaciones financieras, si aparecen.
-ws9.cell(r, 2, "Obligaciones financieras").font = BLACK
-ws9.cell(r, 4, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="45")*HT!$P$4:$P${HT_LAST_ROW})').font = BLACK
-ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-pc_rows.append(r); r += 1
+ws9.cell(r2, 7, "PASIVO NO CORRIENTE").font = BOLD
+r2 += 1
+pnc_rows = []
+for code in pasivos_no_corrientes:
+    _write_esf_balance_line(r2, 10, code, f'=SUMIF(HT!$A:$A,"{code}",HT!$P:$P)')
+    pnc_rows.append(r2); r2 += 1
+ws9.cell(r2, 7, "TOTAL PASIVO NO CORRIENTE").font = BOLD
+ws9.cell(r2, 10, "=" + "+".join(f"J{x}" for x in pnc_rows) if pnc_rows else "=0").font = BOLD
+ws9.cell(r2, 10).number_format = '#,##0.00;(#,##0.00);"-"'
+TOTAL_PNC_ROW = r2
+r2 += 1
 
-ws9.cell(r, 2, "TOTAL PASIVO").font = BOLD
-ws9.cell(r, 4, "=" + "+".join(f'D{x}' for x in pc_rows)).font = BOLD
-ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-TOTAL_PASIVO_ROW = r; r += 2
+ws9.cell(r2, 7, "TOTAL PASIVO").font = BOLD
+ws9.cell(r2, 10, f'=J{TOTAL_PC_ROW}+J{TOTAL_PNC_ROW}').font = BOLD
+ws9.cell(r2, 10).number_format = '#,##0.00;(#,##0.00);"-"'
+TOTAL_PASIVO_ROW = r2
+r2 += 2
 
-ws9.cell(r, 2, "PATRIMONIO").font = BOLD
-r += 1
+ws9.cell(r2, 7, "PATRIMONIO NETO").font = BOLD
+r2 += 1
 pat_rows = []
-for prefix, label in [("50", "Capital social"), ("51", "Acciones de inversión / capital adicional"), ("52", "Capital adicional"), ("56", "Resultados no realizados"), ("57", "Excedente de revaluación"), ("58", "Reservas"), ("59", "Resultados acumulados")]:
-    ws9.cell(r, 2, label).font = BLACK
-    ws9.cell(r, 4, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*HT!$P$4:$P${HT_LAST_ROW})').font = BLACK
-    ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-    pat_rows.append(r); r += 1
+for code in patrimonio:
+    desc = pcge_map.get(code, "") or f"Cuenta {code}"
+    ws9.cell(r2, 7, desc).font = BLACK
+    ws9.cell(r2, 10, f'=SUMIF(HT!$A:$A,"{code}",HT!$P:$P)-SUMIF(HT!$A:$A,"{code}",HT!$O:$O)').font = BLACK
+    ws9.cell(r2, 10).number_format = '#,##0.00;(#,##0.00);"-"'
+    pat_rows.append(r2); r2 += 1
 
-ws9.cell(r, 2, "Resultado del ejercicio").font = BLACK
-ws9.cell(r, 4, f'=ERN!D{ERN_RESULTADO_ROW}').font = BLACK
-ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-pat_rows.append(r); r += 1
+ws9.cell(r2, 7, "Resultado del ejercicio").font = BLACK
+ws9.cell(r2, 10, f'=ERN!D{ERN_RESULTADO_ROW}').font = BLACK
+ws9.cell(r2, 10).number_format = '#,##0.00;(#,##0.00);"-"'
+pat_rows.append(r2); r2 += 1
 
-ws9.cell(r, 2, "TOTAL PATRIMONIO").font = BOLD
-ws9.cell(r, 4, "=" + "+".join(f'D{x}' for x in pat_rows)).font = BOLD
-ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-TOTAL_PATRIMONIO_ROW = r; r += 2
+ws9.cell(r2, 7, "TOTAL PATRIMONIO NETO").font = BOLD
+ws9.cell(r2, 10, "=" + "+".join(f"J{x}" for x in pat_rows) if pat_rows else "=0").font = BOLD
+ws9.cell(r2, 10).number_format = '#,##0.00;(#,##0.00);"-"'
+TOTAL_PATRIMONIO_ROW = r2
+r2 += 1
 
-ws9.cell(r, 2, "TOTAL PASIVO Y PATRIMONIO").font = BOLD
-ws9.cell(r, 4, f'=D{TOTAL_PASIVO_ROW}+D{TOTAL_PATRIMONIO_ROW}').font = BOLD
-ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-TOTAL_PYPN_ROW = r; r += 1
+ws9.cell(r2, 7, "TOTAL PASIVO Y PATRIMONIO NETO").font = BOLD
+ws9.cell(r2, 10, f'=J{TOTAL_PASIVO_ROW}+J{TOTAL_PATRIMONIO_ROW}').font = BOLD
+ws9.cell(r2, 10).number_format = '#,##0.00;(#,##0.00);"-"'
+TOTAL_PYPN_ROW = r2
+r2 += 1
 
-ws9.cell(r, 2, "DIFERENCIA (debe ser 0)").font = BOLD
-ws9.cell(r, 4, f'=D{TOTAL_ACTIVO_ROW}-D{TOTAL_PYPN_ROW}').font = BOLD
-ws9.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-ws9.cell(r, 5, f'=IF(ABS(D{r})<0.01,"CUADRADO","REVISAR")').font = BOLD
-ESF_CONTROL_ROW = r
+ws9.cell(r2, 7, "DIFERENCIA: ACTIVO - (PASIVO + PATRIMONIO)").font = BOLD
+ws9.cell(r2, 10, f'=E{TOTAL_ACTIVO_ROW}-J{TOTAL_PYPN_ROW}').font = BOLD
+ws9.cell(r2, 10).number_format = '#,##0.00;(#,##0.00);"-"'
+ws9.cell(r2, 11, f'=IF(ABS(J{r2})<0.01,"CUADRADO","REVISAR")').font = BOLD
+ESF_CONTROL_ROW = r2
 
-autofit(ws9, [3, 56, 5, 18, 16])
+for col, width in {'B':56,'C':3,'D':18,'G':56,'H':3,'I':9,'J':18,'K':14}.items():
+    ws9.column_dimensions[col].width = width
+ws9.freeze_panes = "B5"
 
 # HOJA: ASIENTOS_CONTABLES (resueltos y validados por TANA)
 # ============================================================
