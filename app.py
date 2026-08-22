@@ -807,6 +807,63 @@ profiles_status = get_gemini_profiles()
 # intermedio: la lógica contable original permanece intacta.
 if uploaded_file:
     file_signature = f"{uploaded_file.name}|{getattr(uploaded_file, 'size', 0)}"
+def _money(value):
+    try:
+        if value is None or value == "":
+            return Decimal("0")
+        return Decimal(str(value).replace(",", ""))
+    except (InvalidOperation, ValueError):
+        return None
+
+def validate_asientos(data, pcge_map):
+    errors = []
+    warnings = []
+    valid = []
+
+    for a_idx, asiento in enumerate(data.get("asientos", []), start=1):
+        lines = asiento.get("lineas", []) or []
+        total_d = Decimal("0")
+        total_h = Decimal("0")
+        asiento_errors = []
+
+        for l_idx, line in enumerate(lines, start=1):
+            code = str(line.get("codigo", "")).strip()
+            if not re.fullmatch(r"\d{5}", code):
+                asiento_errors.append(f"Línea {l_idx}: código '{code}' no tiene 5 dígitos.")
+            elif code not in pcge_map:
+                asiento_errors.append(f"Línea {l_idx}: código {code} no existe en el PCGE de TANA.")
+
+            debe = _money(line.get("debe"))
+            haber = _money(line.get("haber"))
+            if debe is None or haber is None:
+                asiento_errors.append(f"Línea {l_idx}: importe inválido.")
+                continue
+            if debe < 0 or haber < 0:
+                asiento_errors.append(f"Línea {l_idx}: los importes no pueden ser negativos.")
+            if debe > 0 and haber > 0:
+                asiento_errors.append(f"Línea {l_idx}: una línea no puede tener Debe y Haber simultáneamente.")
+            total_d += debe
+            total_h += haber
+
+        diff = total_d - total_h
+        if abs(diff) > Decimal("0.01"):
+            asiento_errors.append(
+                f"Asiento {asiento.get('numero', a_idx)} descuadra: Debe {total_d:.2f} / Haber {total_h:.2f}."
+            )
+
+        if asiento.get("requiere_revision"):
+            warnings.append(
+                f"Asiento {asiento.get('numero', a_idx)} requiere revisión: {asiento.get('observacion', '')}"
+            )
+
+        if asiento_errors:
+            errors.extend(asiento_errors)
+        else:
+            valid.append(asiento)
+
+    return valid, errors, warnings
+
+
     if st.session_state.get("tana_file_signature") != file_signature:
         for _key in (
             "monografia_json", "monografia_texto", "monografia_nombre", "archivo_excel_origen",
@@ -963,62 +1020,6 @@ PCGE DE TANA:
 OPERACIONES DE LA MONOGRAFÍA:
 {operaciones}
 """
-
-def _money(value):
-    try:
-        if value is None or value == "":
-            return Decimal("0")
-        return Decimal(str(value).replace(",", ""))
-    except (InvalidOperation, ValueError):
-        return None
-
-def validate_asientos(data, pcge_map):
-    errors = []
-    warnings = []
-    valid = []
-
-    for a_idx, asiento in enumerate(data.get("asientos", []), start=1):
-        lines = asiento.get("lineas", []) or []
-        total_d = Decimal("0")
-        total_h = Decimal("0")
-        asiento_errors = []
-
-        for l_idx, line in enumerate(lines, start=1):
-            code = str(line.get("codigo", "")).strip()
-            if not re.fullmatch(r"\d{5}", code):
-                asiento_errors.append(f"Línea {l_idx}: código '{code}' no tiene 5 dígitos.")
-            elif code not in pcge_map:
-                asiento_errors.append(f"Línea {l_idx}: código {code} no existe en el PCGE de TANA.")
-
-            debe = _money(line.get("debe"))
-            haber = _money(line.get("haber"))
-            if debe is None or haber is None:
-                asiento_errors.append(f"Línea {l_idx}: importe inválido.")
-                continue
-            if debe < 0 or haber < 0:
-                asiento_errors.append(f"Línea {l_idx}: los importes no pueden ser negativos.")
-            if debe > 0 and haber > 0:
-                asiento_errors.append(f"Línea {l_idx}: una línea no puede tener Debe y Haber simultáneamente.")
-            total_d += debe
-            total_h += haber
-
-        diff = total_d - total_h
-        if abs(diff) > Decimal("0.01"):
-            asiento_errors.append(
-                f"Asiento {asiento.get('numero', a_idx)} descuadra: Debe {total_d:.2f} / Haber {total_h:.2f}."
-            )
-
-        if asiento.get("requiere_revision"):
-            warnings.append(
-                f"Asiento {asiento.get('numero', a_idx)} requiere revisión: {asiento.get('observacion', '')}"
-            )
-
-        if asiento_errors:
-            errors.extend(asiento_errors)
-        else:
-            valid.append(asiento)
-
-    return valid, errors, warnings
 
 def _numeric_from_obj(obj, keys):
     """Busca de forma tolerante un importe asociado a alguna clave."""
