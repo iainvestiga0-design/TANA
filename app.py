@@ -38,14 +38,14 @@ st.set_page_config(
 st.markdown("""
 <style>
     .tana-title {
-        font-size: 2rem;
+        font-size: 1.65rem;
         font-weight: 800;
         color: #123b5d;
         margin: 0 0 .2rem 0;
     }
     .tana-subtitle {
         color: #64748b;
-        margin-bottom: 1rem;
+        margin-bottom: .65rem;
     }
     div[data-testid="stFileUploader"] section {
         padding: .45rem .6rem;
@@ -63,9 +63,20 @@ st.markdown("""
         font-size: .92rem;
     }
 </style>
-<div class="tana-title">TANA</div>
-<div class="tana-subtitle">Inteligencia Artificial Contable · carga tu monografía, pregunta y descarga tu Excel.</div>
+<div class="tana-header">
+    <div class="tana-title">TANA</div>
+    <div class="tana-subtitle">Inteligencia Artificial Contable · carga tu monografía, pregunta y descarga tu Excel.</div>
+</div>
 """, unsafe_allow_html=True)
+
+# Logo TANA pequeño: conserva la identidad visual sin ocupar el espacio de la barra principal.
+for _logo_name in ("LOGO TANA.jpg", "logo_tana.jpg", "LOGO_TANA.jpg"):
+    _logo_path = os.path.join(os.path.dirname(__file__), _logo_name)
+    if os.path.exists(_logo_path):
+        _lc1, _lc2 = st.columns([0.22, 7.0])
+        with _lc1:
+            st.image(_logo_path, width=82)
+        break
 
 # ============================================================
 # GEMINI: lectura multimodal de monografías
@@ -528,89 +539,6 @@ with col_send:
         key="btn_enviar_tana_barra",
         help="Enviar consulta a TANA",
     )
-
-# ============================================================
-# PROCESAMIENTO AUTOMÁTICO DE LA MONOGRAFÍA
-# ============================================================
-if uploaded_file is not None:
-    archivo_hash = hashlib.sha256(uploaded_file.getvalue()).hexdigest()
-    ultimo_hash = st.session_state.get("monografia_hash")
-
-    if archivo_hash != ultimo_hash:
-        # Limpiar resultados anteriores para no mezclar ejercicios.
-        for key in (
-            "monografia_json", "monografia_texto", "monografia_nombre",
-            "asientos_contables", "asientos_validos", "errores_asientos",
-            "alertas_asientos", "excel_listo", "excel_bytes",
-        ):
-            st.session_state.pop(key, None)
-
-        st.session_state["monografia_hash"] = archivo_hash
-
-        with st.status("TANA está procesando tu monografía…", expanded=False) as estado:
-            try:
-                estado.update(label="📖 Leyendo y estructurando la monografía…", state="running")
-                extracted = extract_with_gemini(uploaded_file)
-                st.session_state["monografia_json"] = extracted
-                st.session_state["monografia_texto"] = extraction_to_text(extracted)
-                st.session_state["monografia_nombre"] = uploaded_file.name
-
-                estado.update(label="🧮 Desarrollando y validando los asientos…", state="running")
-                resolved, resolved_pcge_map = resolve_asientos_with_gemini()
-
-                if isinstance(resolved, dict):
-                    asientos_generados = resolved.get("asientos", [])
-                    alertas_gemini = resolved.get("alertas", [])
-                elif isinstance(resolved, list):
-                    asientos_generados = resolved
-                    alertas_gemini = []
-                else:
-                    raise ValueError("La respuesta de Gemini no tiene una estructura de asientos válida.")
-
-                if not isinstance(asientos_generados, list):
-                    raise ValueError("La clave 'asientos' de Gemini no contiene una lista.")
-
-                asientos_generados = asegurar_cuenta_79_en_destinos(
-                    asientos_generados,
-                    resolved_pcge_map,
-                )
-                asientos_generados = corregir_retiro_socio(
-                    asientos_generados,
-                    st.session_state.get("monografia_json", {}),
-                )
-
-                valid, errors, warnings = validate_asientos(
-                    {"asientos": asientos_generados},
-                    resolved_pcge_map,
-                )
-
-                st.session_state["asientos_contables"] = asientos_generados
-                st.session_state["asientos_validos"] = valid
-                st.session_state["errores_asientos"] = errors
-                st.session_state["alertas_asientos"] = list(alertas_gemini) + list(warnings)
-                st.session_state["excel_listo"] = not bool(errors)
-
-                if errors:
-                    estado.update(label="⚠️ TANA terminó con observaciones de validación.", state="error")
-                else:
-                    estado.update(label="✅ TANA terminó: Excel listo para descargar.", state="complete")
-
-            except json.JSONDecodeError:
-                st.session_state["monografia_hash"] = None
-                estado.update(label="❌ Gemini devolvió una respuesta no válida.", state="error")
-                st.error("Gemini respondió con un formato que no pudo convertirse a JSON. Vuelve a intentarlo.")
-            except Exception as exc:
-                st.session_state["monografia_hash"] = None
-                estado.update(label="❌ No se pudo completar el procesamiento.", state="error")
-                st.error(f"No se pudo procesar el archivo: {_gemini_error_message(exc)}")
-
-if "monografia_json" in st.session_state:
-    st.markdown(
-        f'<div class="tana-status">📄 <b>{st.session_state.get("monografia_nombre", "Monografía")}</b> · procesada por TANA.</div>',
-        unsafe_allow_html=True,
-    )
-
-
 
 # ============================================================
 # MOTOR DE ASIENTOS CONTABLES
@@ -1210,6 +1138,89 @@ def resolve_asientos_with_gemini():
     data.setdefault("_tana_gemini_route", profile["label"])
     data.setdefault("_tana_gemini_model", profile["model"])
     return data, pcge_map
+
+# ============================================================
+# PROCESAMIENTO AUTOMÁTICO DE LA MONOGRAFÍA
+# ============================================================
+if uploaded_file is not None:
+    archivo_hash = hashlib.sha256(uploaded_file.getvalue()).hexdigest()
+    ultimo_hash = st.session_state.get("monografia_hash")
+
+    if archivo_hash != ultimo_hash:
+        # Limpiar resultados anteriores para no mezclar ejercicios.
+        for key in (
+            "monografia_json", "monografia_texto", "monografia_nombre",
+            "asientos_contables", "asientos_validos", "errores_asientos",
+            "alertas_asientos", "excel_listo", "excel_bytes",
+        ):
+            st.session_state.pop(key, None)
+
+        st.session_state["monografia_hash"] = archivo_hash
+
+        with st.status("TANA está procesando tu monografía…", expanded=False) as estado:
+            try:
+                estado.update(label="📖 Leyendo y estructurando la monografía…", state="running")
+                extracted = extract_with_gemini(uploaded_file)
+                st.session_state["monografia_json"] = extracted
+                st.session_state["monografia_texto"] = extraction_to_text(extracted)
+                st.session_state["monografia_nombre"] = uploaded_file.name
+
+                estado.update(label="🧮 Desarrollando y validando los asientos…", state="running")
+                resolved, resolved_pcge_map = resolve_asientos_with_gemini()
+
+                if isinstance(resolved, dict):
+                    asientos_generados = resolved.get("asientos", [])
+                    alertas_gemini = resolved.get("alertas", [])
+                elif isinstance(resolved, list):
+                    asientos_generados = resolved
+                    alertas_gemini = []
+                else:
+                    raise ValueError("La respuesta de Gemini no tiene una estructura de asientos válida.")
+
+                if not isinstance(asientos_generados, list):
+                    raise ValueError("La clave 'asientos' de Gemini no contiene una lista.")
+
+                asientos_generados = asegurar_cuenta_79_en_destinos(
+                    asientos_generados,
+                    resolved_pcge_map,
+                )
+                asientos_generados = corregir_retiro_socio(
+                    asientos_generados,
+                    st.session_state.get("monografia_json", {}),
+                )
+
+                valid, errors, warnings = validate_asientos(
+                    {"asientos": asientos_generados},
+                    resolved_pcge_map,
+                )
+
+                st.session_state["asientos_contables"] = asientos_generados
+                st.session_state["asientos_validos"] = valid
+                st.session_state["errores_asientos"] = errors
+                st.session_state["alertas_asientos"] = list(alertas_gemini) + list(warnings)
+                st.session_state["excel_listo"] = not bool(errors)
+
+                if errors:
+                    estado.update(label="⚠️ TANA terminó con observaciones de validación.", state="error")
+                else:
+                    estado.update(label="✅ TANA terminó: Excel listo para descargar.", state="complete")
+
+            except json.JSONDecodeError:
+                st.session_state["monografia_hash"] = None
+                estado.update(label="❌ Gemini devolvió una respuesta no válida.", state="error")
+                st.error("Gemini respondió con un formato que no pudo convertirse a JSON. Vuelve a intentarlo.")
+            except Exception as exc:
+                st.session_state["monografia_hash"] = None
+                estado.update(label="❌ No se pudo completar el procesamiento.", state="error")
+                st.error(f"No se pudo procesar el archivo: {_gemini_error_message(exc)}")
+
+if "monografia_json" in st.session_state:
+    st.markdown(
+        f'<div class="tana-status">📄 <b>{st.session_state.get("monografia_nombre", "Monografía")}</b> · procesada por TANA.</div>',
+        unsafe_allow_html=True,
+    )
+
+
 
 if "asientos_contables" in st.session_state:
     asientos = st.session_state["asientos_contables"]
