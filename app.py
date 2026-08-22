@@ -463,11 +463,24 @@ section[data-testid="stSidebar"] .block-container {padding-top: 1rem;}
                     margin-top:10px; display:flex; align-items:center; gap:10px;}
 .tana-result-card .name {font-weight:700; color:#12304A; font-size:13.5px;}
 
-/* ---- Barra de entrada inferior, fija ---- */
-.tana-inputbar-wrap {position:fixed; bottom:0; left:0; right:0; background:linear-gradient(transparent, #fff 30%);
-                      padding:14px 0 18px 0; z-index:999;}
-.tana-inputbar {max-width:900px; margin:0 auto; background:#fff; border:1px solid #DDE8EF; border-radius:22px;
-                 padding:8px 14px; box-shadow:0 6px 22px rgba(18,48,74,.09);}
+/* ---- Barra de entrada inferior, FIJA de verdad ----
+   Streamlit no deja "envolver" columnas con un <div> de markdown (quedan
+   como hermanos, no hijos, en el DOM). Por eso anclamos un marcador
+   invisible dentro de un st.container() real y usamos :has() para
+   fijar exactamente ESE contenedor (y solo ese), sin afectar el resto
+   de la página, que sigue haciendo scroll normal. */
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) {
+    position: fixed !important;
+    bottom: 0; left: 50%; transform: translateX(-50%);
+    width: min(940px, 94vw);
+    z-index: 999;
+    background: #fff;
+    border: 1px solid #DDE8EF;
+    border-radius: 22px;
+    padding: 10px 16px 14px 16px;
+    box-shadow: 0 6px 22px rgba(18,48,74,.09);
+    margin-bottom: 16px;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -533,24 +546,28 @@ for msg in st.session_state["tana_chat"]:
 
 # ============================================================
 # BARRA DE ENTRADA (carga de monografía + consulta + voz + enviar)
+# Fija de verdad: vive dentro de su propio st.container(), con un
+# marcador invisible que el CSS de arriba usa para anclarla. El resto
+# del contenido (burbujas de chat) sigue con scroll normal.
 # ============================================================
-st.markdown('<div class="tana-inputbar-wrap"><div class="tana-inputbar">', unsafe_allow_html=True)
-bar = st.columns([0.9, 5.4, 1.3, 0.7], gap="small")
-with bar[0]:
-    uploaded_file = st.file_uploader(
-        "Archivo", type=SUPPORTED_TYPES, label_visibility="collapsed",
-        help="PDF, DOC, DOCX, XLS, XLSX, JPG, JPEG y PNG."
-    )
-with bar[1]:
-    pregunta_top = st.text_input(
-        "Consulta", placeholder="Pregunta a TANA…",
-        key="pregunta_tana_top", label_visibility="collapsed"
-    )
-with bar[2]:
-    audio_top = st.audio_input("Hablar", key="audio_tana_top", label_visibility="collapsed") if hasattr(st, "audio_input") else None
-with bar[3]:
-    enviar_top = st.button("➤", type="primary", key="btn_enviar_tana_top", use_container_width=True)
-st.markdown('</div></div>', unsafe_allow_html=True)
+inputbar_container = st.container()
+with inputbar_container:
+    st.markdown('<span class="tana-inputbar-anchor"></span>', unsafe_allow_html=True)
+    bar = st.columns([0.9, 5.4, 1.3, 0.7], gap="small")
+    with bar[0]:
+        uploaded_file = st.file_uploader(
+            "Archivo", type=SUPPORTED_TYPES, label_visibility="collapsed",
+            help="PDF, DOC, DOCX, XLS, XLSX, JPG, JPEG y PNG."
+        )
+    with bar[1]:
+        pregunta_top = st.text_input(
+            "Consulta", placeholder="Pregunta a TANA…",
+            key="pregunta_tana_top", label_visibility="collapsed"
+        )
+    with bar[2]:
+        audio_top = st.audio_input("Hablar", key="audio_tana_top", label_visibility="collapsed") if hasattr(st, "audio_input") else None
+    with bar[3]:
+        enviar_top = st.button("➤", type="primary", key="btn_enviar_tana_top", use_container_width=True)
 
 if uploaded_file:
     st.caption(f"📄 {uploaded_file.name}")
