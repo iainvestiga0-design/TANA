@@ -1552,10 +1552,19 @@ def _corregir_asientos_con_gemini(instruccion):
     actuales = st.session_state.get("asientos_contables", [])
     mono = st.session_state.get("monografia_texto", "")
     pcge_5 = [[str(c).strip(), str(d)] for c, d in PCGE_DATA if re.fullmatch(r"\d{5}", str(c).strip())]
+    diagnostico_actual = st.session_state.get("tana_diagnostico_excel", "")
     prompt = f"""Eres TANA, motor contable peruano.
 El estudiante está revisando un Excel que TANA ya generó y solicita una corrección.
 El conjunto "ASIENTOS ACTUALES" fue reconstruido directamente desde ese Excel.
 Debes tratarlo como la versión que el estudiante está corrigiendo.
+
+DIAGNÓSTICO DETERMINISTA DEL EXCEL: 
+{diagnostico_actual[:12000]}
+
+IMPORTANTE: si el estudiante pide "corrige", "corrígelo" o equivalente, debes intentar
+corregir usando este diagnóstico y la instrucción del estudiante. No rechaces la tarea
+solo porque la versión actual esté descuadrada. La versión actual puede estar precisamente
+mal y el diagnóstico es la evidencia que debes utilizar para proponer la corrección.
 
 REGLAS DE CORRECCIÓN:
 1. Modifica únicamente lo que el estudiante señala.
@@ -1592,6 +1601,78 @@ SOLICITUD DEL ESTUDIANTE:
     return data, profile
 
 
+def _crear_excel_revision_desde_origen(asientos, errores):
+    """Crea un nuevo Excel a partir del Excel que el estudiante cargó.
+    Conserva todas sus hojas/formatos y reemplaza las líneas de Asientos_Contables.
+    Si la propuesta no está validada, deja una hoja/nota de advertencia y fuerza
+    recálculo al abrir el archivo.
+    """
+    origen = st.session_state.get("tana_excel_origen_bytes")
+    if not origen:
+        return None
+    wb_in = openpyxl.load_workbook(io.BytesIO(origen), data_only=False)
+    sheet_name = next((n for n in wb_in.sheetnames if _normalizar_nombre_hoja(n) in ("asientoscontables", "asientos", "librodiario")), None)
+    if not sheet_name:
+        raise ValueError("No encontré la hoja de asientos en el Excel original.")
+    ws = wb_in[sheet_name]
+    headers = {str(ws.cell(1,c).value or "").strip(): c for c in range(1, ws.max_column+1)}
+    aliases = {
+        "N° Asiento":["N° Asiento","Nº Asiento","No. Asiento","Asiento","N°"],
+        "Fecha":["Fecha"], "Glosa":["Glosa","Descripción"],
+        "Documento":["Documento","Documento Ref.","Documento Ref"],
+        "Operación":["Operación","Operacion","N° Operación","N° Operacion"],
+        "Código":["Código","Codigo","Cuenta","Código Cuenta"],
+        "Denominación":["Denominación","Denominacion","Nombre Cuenta","Descripción Cuenta"],
+        "Concepto":["Concepto","Detalle"], "Debe S/":["Debe S/","Debe","Debe S/.","DEBE"],
+        "Haber S/":["Haber S/","Haber","Haber S/.","HABER"]}
+    col={}
+    for canon,names in aliases.items():
+        col[canon]=next((headers[n] for n in names if n in headers), None)
+    if not col.get("Código") or not col.get("Debe S/") or not col.get("Haber S/"):
+        raise ValueError("El Excel original no tiene las columnas de asientos necesarias.")
+
+    rows=[]
+    for a in asientos:
+        first=True
+        for line in a.get("lineas",[]):
+            rows.append((a,line,first))
+            first=False
+    start=2
+    # Para conservar las fórmulas y referencias de las hojas, normalmente las correcciones
+    # tienen el mismo número de líneas. Si cambia, ajustamos filas al final.
+    old_rows=ws.max_row-start+1
+    if len(rows) > old_rows:
+        for _ in range(len(rows)-old_rows): ws.insert_rows(ws.max_row+1)
+    elif len(rows) < old_rows:
+        for _ in range(old_rows-len(rows)): ws.delete_rows(start+len(rows))
+
+    for idx,(a,line,first) in enumerate(rows,start=start):
+        if col.get("N° Asiento"): ws.cell(idx,col["N° Asiento"], a.get("numero", "") if first else "")
+        if col.get("Fecha"): ws.cell(idx,col["Fecha"], a.get("fecha", "") if first else "")
+        if col.get("Glosa"): ws.cell(idx,col["Glosa"], a.get("glosa", "") if first else "")
+        if col.get("Documento"): ws.cell(idx,col["Documento"], a.get("documento", "") if first else "")
+        if col.get("Operación"): ws.cell(idx,col["Operación"], a.get("operacion_numero", "") if first else "")
+        ws.cell(idx,col["Código"], str(line.get("codigo", "")).strip())
+        if col.get("Denominación"): ws.cell(idx,col["Denominación"], line.get("denominacion", ""))
+        if col.get("Concepto"): ws.cell(idx,col["Concepto"], line.get("concepto", ""))
+        ws.cell(idx,col["Debe S/"], float(line.get("debe",0) or 0))
+        ws.cell(idx,col["Haber S/"], float(line.get("haber",0) or 0))
+
+    ws_rev=wb_in.create_sheet("Revision_TANA")
+    ws_rev["A1"]="TANA — PROPUESTA DE CORRECCIÓN"
+    ws_rev["A2"]="Estado"
+    ws_rev["B2"]="NO VALIDADA" if errores else "VALIDADA"
+    ws_rev["A3"]="Advertencia"
+    ws_rev["B3"]="Soy una inteligencia artificial y puedo cometer errores. Revisa siempre el resultado antes de utilizarlo."
+    ws_rev["A5"]="Diagnóstico posterior a la corrección"
+    for i,e in enumerate(errores or ["No se encontraron errores de validación en los asientos."],start=6):
+        ws_rev.cell(i,1,str(e))
+    ws_rev.column_dimensions["A"].width=55; ws_rev.column_dimensions["B"].width=95
+    try:
+        wb_in.calculation.fullCalcOnLoad=True; wb_in.calculation.forceFullCalc=True; wb_in.calculation.calcMode="auto"
+    except Exception: pass
+    out=io.BytesIO(); wb_in.save(out); out.seek(0); return out.getvalue()
+
 def _aplicar_correccion_si_corresponde(pregunta):
     if not _es_peticion_correccion(pregunta):
         return False
@@ -1604,15 +1685,17 @@ def _aplicar_correccion_si_corresponde(pregunta):
                 _tana_chat_add("assistant", f"No apliqué cambios porque no pude determinar una corrección segura. {observacion}")
                 return True
             valid, errors, warnings = validate_asientos({"asientos": nuevos}, pcge_map)
-            if errors:
-                _tana_chat_add("assistant", "Revisé la corrección, pero la nueva versión no pasó la validación contable. No reemplacé tu Excel anterior.")
-                return True
+            # No bloqueamos la entrega de una PROPUESTA si la validación falla.
+            # El estudiante pidió explícitamente que TANA intente corregir a partir
+            # del diagnóstico. La versión anterior se conserva y la nueva se marca
+            # claramente como NO VALIDADA hasta que el usuario la revise.
             nuevos = asegurar_cuenta_79_en_destinos(nuevos, pcge_map)
             nuevos = corregir_retiro_socio(nuevos, st.session_state.get("monografia_json", {}))
             valid, errors, warnings = validate_asientos({"asientos": nuevos}, pcge_map)
-            if errors:
-                _tana_chat_add("assistant", "La corrección propuesta no pasó la validación final. Conservé la versión anterior para no dañar el trabajo.")
-                return True
+
+            if st.session_state.get("tana_excel_origen_bytes"):
+                nuevo_buffer = _crear_excel_revision_desde_origen(nuevos, errors)
+                st.session_state["tana_excel_buffer"] = nuevo_buffer
             st.session_state["asientos_contables"] = nuevos
             st.session_state["asientos_validos"] = valid
             st.session_state["errores_asientos"] = errors
@@ -1620,8 +1703,12 @@ def _aplicar_correccion_si_corresponde(pregunta):
             st.session_state["tana_correcciones"] = st.session_state.get("tana_correcciones", 0) + 1
             st.session_state["tana_correccion_version"] = st.session_state.get("tana_correccion_version", 1) + 1
             st.session_state["tana_resuelto_signature"] = None
-            st.session_state["tana_excel_buffer"] = None
-            _tana_chat_add("assistant", f"<b>TANA corrigió el trabajo.</b><br>{observacion}<br><br>Se validaron nuevamente los asientos y preparé una nueva versión del Excel para descargar.<br><br><small>Soy una inteligencia artificial y puedo cometer errores. Revisa siempre el resultado antes de utilizarlo.</small>")
+
+            if errors:
+                detalle = "<br>".join(str(e) for e in errors[:12])
+                _tana_chat_add("assistant", f"<b>TANA generó una propuesta de corrección.</b><br>{observacion}<br><br><b>Advertencia:</b> la nueva versión todavía NO pasó la validación contable.<br>{detalle}<br><br>Te entrego el nuevo Excel para que puedas revisarlo. Soy una inteligencia artificial y puedo cometer errores; intenta corregir a partir del diagnóstico, pero revisa siempre el resultado antes de utilizarlo.")
+            else:
+                _tana_chat_add("assistant", f"<b>TANA generó una nueva versión corregida.</b><br>{observacion}<br><br>La nueva versión pasó la validación de asientos.<br><br><small>Soy una inteligencia artificial y puedo cometer errores. Revisa siempre el resultado antes de utilizarlo.</small>")
             return True
         except Exception as exc:
             st.error(f"No se pudo aplicar la corrección: {_gemini_error_message(exc)}")
