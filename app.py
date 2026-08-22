@@ -5,7 +5,6 @@ import re
 import shutil
 import subprocess
 import tempfile
-import hashlib
 from decimal import Decimal, InvalidOperation
 
 import streamlit as st
@@ -21,12 +20,8 @@ from pypdf import PdfReader
 from docx import Document
 from PIL import Image
 
-# Gemini
-from google import genai
-from google.genai import types
-
 # ============================================================
-# CONFIGURACIÓN DE INTERFAZ TANA
+# CONFIGURACIÓN GENERAL / PÁGINA PÚBLICA
 # ============================================================
 st.set_page_config(
     page_title="TANA | Inteligencia Artificial Contable",
@@ -35,50 +30,9 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-st.markdown("""
-<style>
-    .tana-title {
-        font-size: 1.65rem;
-        font-weight: 800;
-        color: #123b5d;
-        margin: 0 0 .2rem 0;
-    }
-    .tana-subtitle {
-        color: #64748b;
-        margin-bottom: .65rem;
-    }
-    div[data-testid="stFileUploader"] section {
-        padding: .45rem .6rem;
-        min-height: 70px;
-    }
-    div[data-testid="stFileUploader"] small {
-        display: none;
-    }
-    .tana-status {
-        padding: .55rem .8rem;
-        border-radius: .7rem;
-        background: #eef8f5;
-        border: 1px solid #c9eadf;
-        color: #14532d;
-        font-size: .92rem;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# Encabezado: el logo queda pequeño a la derecha, sin desplazar la barra principal.
-_hdr_left, _hdr_right = st.columns([9.1, 0.9], gap="small")
-with _hdr_left:
-    st.markdown(
-        '<div class="tana-title">TANA</div>'
-        '<div class="tana-subtitle">Inteligencia Artificial Contable · carga tu monografía, pregunta y descarga tu Excel.</div>',
-        unsafe_allow_html=True,
-    )
-with _hdr_right:
-    for _logo_name in ("LOGO TANA.jpg", "logo_tana.jpg", "LOGO_TANA.jpg"):
-        _logo_path = os.path.join(os.path.dirname(__file__), _logo_name)
-        if os.path.exists(_logo_path):
-            st.image(_logo_path, width=58)
-            break
+# Gemini
+from google import genai
+from google.genai import types
 
 # ============================================================
 # GEMINI: lectura multimodal de monografías
@@ -470,6 +424,110 @@ def extract_with_gemini(uploaded):
             os.remove(temp_path)
 
 
+# ============================================================
+# PÁGINA PÚBLICA DE TANA
+# ============================================================
+def _mostrar_landing_tana():
+    """Landing pública integrada en Streamlit; no altera el motor contable."""
+    st.markdown("""
+    <style>
+    .tana-wrap {max-width: 1180px; margin: 0 auto;}
+    .tana-hero {padding: 28px 8px 18px 8px;}
+    .tana-badge {display:inline-block; padding:7px 13px; border-radius:999px;
+                 background:#E8F4F8; color:#087EA4; font-weight:700; font-size:13px;}
+    .tana-title {font-size:52px; line-height:1.03; font-weight:800; color:#12304A;
+                 margin:14px 0 12px 0;}
+    .tana-subtitle {font-size:21px; line-height:1.5; color:#4D6172; max-width:760px;}
+    .tana-card {background:#FFFFFF; border:1px solid #DDE8EF; border-radius:18px;
+                padding:22px; min-height:150px; box-shadow:0 5px 18px rgba(18,48,74,.06);}
+    .tana-card h3 {margin-top:0; color:#12304A;}
+    .tana-card p {color:#5B6B78; line-height:1.45;}
+    .tana-flow {background:#F5FAFC; border:1px solid #DDE8EF; border-radius:20px;
+                padding:24px; margin:26px 0;}
+    .tana-small {color:#6B7B87; font-size:13px;}
+    </style>
+    """, unsafe_allow_html=True)
+
+    st.markdown('<div class="tana-wrap">', unsafe_allow_html=True)
+    hero_left, hero_right = st.columns([1.55, 1], gap="large")
+    with hero_left:
+        st.markdown('<div class="tana-hero">', unsafe_allow_html=True)
+        st.markdown('<span class="tana-badge">INTELIGENCIA ARTIFICIAL CONTABLE</span>', unsafe_allow_html=True)
+        st.markdown('<div class="tana-title">TANA</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="tana-subtitle">Convierte tus monografías y operaciones contables '
+            'en asientos, hoja de trabajo y estados financieros de forma automática.</div>',
+            unsafe_allow_html=True,
+        )
+        st.write("")
+        if st.button("🚀 Probar TANA", type="primary", use_container_width=False):
+            st.session_state["tana_workspace"] = True
+            st.rerun()
+        st.markdown('<div class="tana-small">Procesamiento contable asistido por IA + reglas deterministas.</div>', unsafe_allow_html=True)
+        st.markdown('</div>', unsafe_allow_html=True)
+    with hero_right:
+        logo_path = os.path.join(os.path.dirname(__file__), "LOGO TANA.jpg")
+        if os.path.exists(logo_path):
+            st.image(logo_path, use_container_width=True)
+
+    st.markdown("### ¿Qué hace TANA?")
+    cards = [
+        ("📄", "Lee la monografía", "Extrae operaciones, fechas, importes, documentos y condiciones sin resolverlas todavía."),
+        ("🧮", "Desarrolla los asientos", "Utiliza el PCGE de 5 dígitos y valida que cada asiento cumpla Debe = Haber."),
+        ("📊", "Genera los reportes", "Prepara HT, Estado de Resultados por Naturaleza, Estado de Resultados por Función y ESF."),
+        ("🤖", "Explica el resultado", "Puedes preguntarle a TANA por qué se hizo un asiento, cómo se calculó o por qué una cuenta va al Debe o Haber."),
+    ]
+    cols = st.columns(4, gap="medium")
+    for col, (icon, title, text) in zip(cols, cards):
+        with col:
+            st.markdown(
+                f'<div class="tana-card"><div style="font-size:30px">{icon}</div>'
+                f'<h3>{title}</h3><p>{text}</p></div>',
+                unsafe_allow_html=True,
+            )
+
+    st.markdown('<div class="tana-flow">', unsafe_allow_html=True)
+    st.markdown("### De la monografía al resultado contable")
+    fcols = st.columns(7, gap="small")
+    pasos = ["Monografía", "Detección", "Asientos", "HT", "ERN", "ERF", "ESF"]
+    for i, (col, paso) in enumerate(zip(fcols, pasos)):
+        with col:
+            st.markdown(f"**{i+1}.** {paso}")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    st.markdown("### Pensado para estudiantes y profesionales")
+    c1, c2 = st.columns(2, gap="large")
+    with c1:
+        st.markdown(
+            '<div class="tana-card"><h3>🎓 Aprende mientras resuelves</h3>'
+            '<p>Pregunta a TANA cómo se desarrolló una operación y recibe una explicación contextualizada.</p></div>',
+            unsafe_allow_html=True,
+        )
+    with c2:
+        st.markdown(
+            '<div class="tana-card"><h3>✅ Verificación contable</h3>'
+            '<p>TANA valida las cuentas, la partida doble y la consistencia entre los estados financieros.</p></div>',
+            unsafe_allow_html=True,
+        )
+
+    st.markdown("")
+    st.caption("TANA · Inteligencia Artificial Contable")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+if not st.session_state.get("tana_workspace", False):
+    _mostrar_landing_tana()
+    st.stop()
+
+# Barra mínima de navegación dentro del área de trabajo.
+nav_left, nav_right = st.columns([1, 8])
+with nav_left:
+    if st.button("← Inicio", key="btn_inicio_tana"):
+        st.session_state["tana_workspace"] = False
+        st.rerun()
+with nav_right:
+    st.markdown("### TANA · Área de trabajo")
+
 def extraction_to_text(data):
     parts = []
 
@@ -500,47 +558,78 @@ def extraction_to_text(data):
 
     return "\n".join(parts)
 
-# ============================================================
-# INTERFAZ PRINCIPAL: UNA SOLA BARRA
-# ============================================================
-# El usuario ya no recorre etapas. Carga el archivo y TANA ejecuta
-# automáticamente extracción → asientos → validación → Excel.
-
 profiles_status = get_gemini_profiles()
+if profiles_status:
+    st.caption(
+        "🤖 Gemini: " + " → ".join(
+            f"{p['label']} ({p['model']})" for p in profiles_status
+        )
+        + ". TANA cambiará automáticamente de ruta si una cuota se agota."
+    )
 
-col_upload, col_question, col_audio, col_send = st.columns([1.35, 5.6, 1.25, 1.0], gap="small")
-
-with col_upload:
+with st.expander("📥 1. Subir monografía", expanded=True):
     uploaded_file = st.file_uploader(
-        "📎 Cargar monografía",
+        "Arrastra aquí tu monografía o selecciónala desde tu equipo",
         type=SUPPORTED_TYPES,
         help="PDF, DOC, DOCX, XLS, XLSX, JPG, JPEG y PNG.",
-        label_visibility="visible",
     )
 
-with col_question:
-    pregunta_barra = st.text_input(
-        "Consulta contable",
-        placeholder="Escribe una consulta contable para TANA…",
-        key="pregunta_tana_barra",
-        label_visibility="collapsed",
+if uploaded_file:
+    if st.button("🤖 Analizar monografía con Gemini", type="primary"):
+        with st.spinner(
+            "Gemini está leyendo la monografía y estructurando sus operaciones..."
+        ):
+            try:
+                extracted = extract_with_gemini(uploaded_file)
+
+                st.session_state["monografia_json"] = extracted
+                st.session_state["monografia_texto"] = extraction_to_text(extracted)
+                st.session_state["monografia_nombre"] = uploaded_file.name
+
+            except json.JSONDecodeError:
+                st.error(
+                    "Gemini respondió con un formato que no pudo convertirse "
+                    "a JSON. Vuelve a intentarlo."
+                )
+            except Exception as exc:
+                st.error(f"No se pudo procesar el archivo con Gemini: {exc}")
+
+if "monografia_json" in st.session_state:
+    data = st.session_state["monografia_json"]
+
+    st.success(
+        f"Monografía analizada: {st.session_state['monografia_nombre']}"
     )
 
-with col_audio:
-    audio_barra = st.audio_input(
-        "🎙️",
-        key="audio_tana_barra",
-        label_visibility="collapsed",
-    ) if hasattr(st, "audio_input") else None
+    operaciones = data.get("operaciones", [])
+    st.metric("Operaciones detectadas", len(operaciones))
 
-with col_send:
-    enviar_consulta = st.button(
-        "➤",
-        type="primary",
-        use_container_width=True,
-        key="btn_enviar_tana_barra",
-        help="Enviar consulta a TANA",
+    with st.expander("📋 Operaciones detectadas", expanded=True):
+        if operaciones:
+            rows = []
+            for op in operaciones:
+                rows.append(
+                    {
+                        "N.º": op.get("numero"),
+                        "Fecha": op.get("fecha"),
+                        "Descripción": op.get("descripcion"),
+                        "Importe": op.get("importe"),
+                        "Documento": op.get("documento"),
+                        "Forma de pago": op.get("forma_pago"),
+                    }
+                )
+            st.dataframe(rows, use_container_width=True, hide_index=True)
+        else:
+            st.warning("No se detectaron operaciones.")
+
+    with st.expander("📄 Datos extraídos completos", expanded=False):
+        st.json(data)
+
+    st.info(
+        "Esta primera etapa usa Gemini para leer y estructurar la monografía. "
+        "Los asientos contables todavía deben pasar por el motor contable de TANA."
     )
+
 
 # ============================================================
 # MOTOR DE ASIENTOS CONTABLES
@@ -1141,35 +1230,21 @@ def resolve_asientos_with_gemini():
     data.setdefault("_tana_gemini_model", profile["model"])
     return data, pcge_map
 
-# ============================================================
-# PROCESAMIENTO AUTOMÁTICO DE LA MONOGRAFÍA
-# ============================================================
-if uploaded_file is not None:
-    archivo_hash = hashlib.sha256(uploaded_file.getvalue()).hexdigest()
-    ultimo_hash = st.session_state.get("monografia_hash")
+if "monografia_json" in st.session_state:
+    st.divider()
+    st.subheader("🧮 2. Desarrollo de asientos contables")
+    st.write(
+        "TANA utilizará las operaciones detectadas y su PCGE de 5 dígitos. "
+        "Antes de aceptar un asiento, verifica que la cuenta exista y que Debe = Haber."
+    )
 
-    if archivo_hash != ultimo_hash:
-        # Limpiar resultados anteriores para no mezclar ejercicios.
-        for key in (
-            "monografia_json", "monografia_texto", "monografia_nombre",
-            "asientos_contables", "asientos_validos", "errores_asientos",
-            "alertas_asientos", "excel_listo", "excel_bytes",
-        ):
-            st.session_state.pop(key, None)
-
-        st.session_state["monografia_hash"] = archivo_hash
-
-        with st.status("TANA está procesando tu monografía…", expanded=False) as estado:
+    if st.button("🧮 Resolver asientos contables", type="primary"):
+        with st.spinner("Desarrollando y validando los asientos contables..."):
             try:
-                estado.update(label="📖 Leyendo y estructurando la monografía…", state="running")
-                extracted = extract_with_gemini(uploaded_file)
-                st.session_state["monografia_json"] = extracted
-                st.session_state["monografia_texto"] = extraction_to_text(extracted)
-                st.session_state["monografia_nombre"] = uploaded_file.name
+                resolved, pcge_map = resolve_asientos_with_gemini()
 
-                estado.update(label="🧮 Desarrollando y validando los asientos…", state="running")
-                resolved, resolved_pcge_map = resolve_asientos_with_gemini()
-
+                # Gemini devuelve {"asientos": [...], "alertas": [...]}
+                # La interfaz necesita trabajar con la lista de asientos.
                 if isinstance(resolved, dict):
                     asientos_generados = resolved.get("asientos", [])
                     alertas_gemini = resolved.get("alertas", [])
@@ -1182,10 +1257,17 @@ if uploaded_file is not None:
                 if not isinstance(asientos_generados, list):
                     raise ValueError("La clave 'asientos' de Gemini no contiene una lista.")
 
+                # Regla determinista: toda cuenta de destino del Elemento 9
+                # debe tener su contrapartida 79 en el Haber. Esto corrige el
+                # caso en que Gemini desarrolle el destino pero omita la 79111.
                 asientos_generados = asegurar_cuenta_79_en_destinos(
                     asientos_generados,
-                    resolved_pcge_map,
+                    pcge_map,
                 )
+
+                # Corrección determinista de la Operación 3/4 de retiro de socio:
+                # la venta privada no se contabiliza en la sociedad y el reparto
+                # de utilidades usa 59111/48185/44191 y luego 44191/10411.
                 asientos_generados = corregir_retiro_socio(
                     asientos_generados,
                     st.session_state.get("monografia_json", {}),
@@ -1193,55 +1275,57 @@ if uploaded_file is not None:
 
                 valid, errors, warnings = validate_asientos(
                     {"asientos": asientos_generados},
-                    resolved_pcge_map,
+                    pcge_map,
                 )
 
                 st.session_state["asientos_contables"] = asientos_generados
                 st.session_state["asientos_validos"] = valid
                 st.session_state["errores_asientos"] = errors
                 st.session_state["alertas_asientos"] = list(alertas_gemini) + list(warnings)
-                st.session_state["excel_listo"] = not bool(errors)
-
-                if errors:
-                    estado.update(label="⚠️ TANA terminó con observaciones de validación.", state="error")
-                else:
-                    estado.update(label="✅ TANA terminó: Excel listo para descargar.", state="complete")
-
             except json.JSONDecodeError:
-                st.session_state["monografia_hash"] = None
-                estado.update(label="❌ Gemini devolvió una respuesta no válida.", state="error")
-                st.error("Gemini respondió con un formato que no pudo convertirse a JSON. Vuelve a intentarlo.")
+                st.error("Gemini devolvió una respuesta que no es JSON válido. Vuelve a intentarlo.")
             except Exception as exc:
-                st.session_state["monografia_hash"] = None
-                estado.update(label="❌ No se pudo completar el procesamiento.", state="error")
-                st.error(f"No se pudo procesar el archivo: {_gemini_error_message(exc)}")
+                st.error(f"No se pudieron desarrollar los asientos: {exc}")
 
-if "monografia_json" in st.session_state:
-    st.markdown(
-        f'<div class="tana-status">📄 <b>{st.session_state.get("monografia_nombre", "Monografía")}</b> · procesada por TANA.</div>',
-        unsafe_allow_html=True,
-    )
+    if "asientos_contables" in st.session_state:
+        asientos = st.session_state["asientos_contables"]
+        validos = st.session_state.get("asientos_validos", [])
+        errores = st.session_state.get("errores_asientos", [])
+        alertas = st.session_state.get("alertas_asientos", [])
 
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Asientos generados", len(asientos))
+        c2.metric("Asientos validados", len(validos))
+        c3.metric("Errores", len(errores))
 
+        if errores:
+            st.error("Hay asientos que TANA NO acepta todavía:")
+            for e in errores:
+                st.write(f"- {e}")
+        else:
+            st.success("Todos los asientos generados cuadran y utilizan cuentas existentes de 5 dígitos.")
 
-if "asientos_contables" in st.session_state:
-    asientos = st.session_state["asientos_contables"]
-    validos = st.session_state.get("asientos_validos", [])
-    errores = st.session_state.get("errores_asientos", [])
-    alertas = st.session_state.get("alertas_asientos", [])
+        for asiento in asientos:
+            numero = asiento.get("numero", "")
+            with st.expander(
+                f"Asiento {numero} — {asiento.get('fecha', '')} — {asiento.get('glosa', '')}",
+                expanded=False,
+            ):
+                rows = []
+                for line in asiento.get("lineas", []):
+                    rows.append({
+                        "Código": line.get("codigo", ""),
+                        "Cuenta": pcge_map.get(str(line.get("codigo", "")).strip(), line.get("denominacion", "")),
+                        "Concepto": line.get("concepto", ""),
+                        "Debe": line.get("debe", 0),
+                        "Haber": line.get("haber", 0),
+                    })
+                st.dataframe(rows, use_container_width=True, hide_index=True)
+                if asiento.get("requiere_revision"):
+                    st.warning(asiento.get("observacion", "Requiere revisión."))
 
-    if errores:
-        st.error("TANA terminó, pero hay observaciones que requieren revisión antes de descargar el Excel.")
-        for e in errores:
-            st.write(f"- {e}")
-    else:
-        st.success(f"TANA completó el desarrollo y validación: {len(asientos)} asientos generados y {len(validos)} validados.")
-
-    if alertas:
-        with st.expander("Ver observaciones de TANA", expanded=False):
-            for a in alertas:
-                st.write(f"- {a}")
-
+        if alertas:
+            st.warning("\n".join(f"- {x}" for x in alertas))
 
 # ============================================================
 # TUTOR INTERACTIVO TANA
@@ -1262,7 +1346,12 @@ Responde la pregunta del estudiante usando únicamente el contexto proporcionado
 Explica con claridad por qué se hizo el asiento, cómo se obtuvo el importe, por qué
 una cuenta va al Debe o Haber y, cuando corresponda, cómo se relaciona con la HT,
 la distribución y ajustes, ERN, ERF o ESF.
-No inventes información que no aparezca en el contexto. Si falta un dato, dilo.
+No inventes información que no aparezca en el contexto.
+ En los estados financieros respeta estrictamente estas reglas:
+ ERF: 70 y 69 se detectan por prefijo; 94 y 95 son obligatorias; 78 se incluye solo si existe; 65 y 67 solo si existen sin destino a 94/95. No incluyas 79 ni agregues automáticamente otras cuentas del elemento 6 al ERF.
+ ERN: presenta las cuentas por naturaleza y su resultado.
+ ESF: presenta activo, pasivo y patrimonio; resultados acumulados 59 con saldo deudor reducen el patrimonio. El resultado del ejercicio debe ser consistente con ERN y ERF y el ESF debe cumplir Activo = Pasivo + Patrimonio.
+ Si falta un dato, dilo.
 
 CONTEXTO:
 {contexto}
@@ -1277,56 +1366,67 @@ PREGUNTA:
     return response.text or "No pude generar una respuesta.", profile["label"]
 
 if "monografia_json" in st.session_state or "asientos_contables" in st.session_state:
-    if enviar_consulta and pregunta_barra.strip():
-        with st.spinner("TANA está preparando la explicación…"):
+    st.divider()
+    st.subheader("🤖 Pregúntale a TANA")
+    st.caption("Pregunta por qué se hizo un asiento, cómo se calculó o por qué una cuenta va al Debe o al Haber.")
+
+    pregunta = st.text_input(
+        "Escribe tu pregunta",
+        placeholder="Ej.: ¿Por qué se utilizó la cuenta 79111 en este asiento?",
+        key="pregunta_tana",
+    )
+    c1, c2 = st.columns([4, 1])
+    with c1:
+        preguntar = st.button("💬 Preguntar a TANA", type="primary", key="btn_preguntar_tana")
+    with c2:
+        audio = st.audio_input("🎙️ Hablar", key="audio_tana") if hasattr(st, "audio_input") else None
+
+    if preguntar and pregunta.strip():
+        with st.spinner("TANA está preparando la explicación..."):
             try:
-                respuesta, ruta = _preguntar_a_tana(pregunta_barra.strip())
+                respuesta, ruta = _preguntar_a_tana(pregunta.strip())
                 st.session_state["respuesta_tana"] = respuesta
                 st.session_state["respuesta_tana_ruta"] = ruta
             except Exception as exc:
                 st.error(f"No se pudo responder: {_gemini_error_message(exc)}")
 
-    if audio_barra is not None:
-        audio_hash = hashlib.sha256(audio_barra.getvalue()).hexdigest()
-        if audio_hash != st.session_state.get("audio_tana_hash"):
-            st.session_state["audio_tana_hash"] = audio_hash
-            with st.spinner("TANA está escuchando y preparando la respuesta…"):
-                temp_audio = None
-                try:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
-                        tmp.write(audio_barra.getvalue())
-                        temp_audio = tmp.name
+    if audio is not None:
+        with st.spinner("TANA está escuchando y preparando la respuesta..."):
+            temp_audio = None
+            try:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+                    tmp.write(audio.getvalue())
+                    temp_audio = tmp.name
 
-                    def audio_contents(client):
-                        audio_file = client.files.upload(file=temp_audio)
-                        return [
-                            audio_file,
-                            "Escucha el audio del estudiante, transcribe su pregunta y luego respóndela. "
-                            "No inventes datos. Usa el siguiente contexto:\n" + _tana_contexto_tutor(),
-                        ]
+                def audio_contents(client):
+                    audio_file = client.files.upload(file=temp_audio)
+                    return [
+                        audio_file,
+                        "Escucha el audio del estudiante, transcribe su pregunta y luego respóndela. "
+                        "No inventes datos. Usa el siguiente contexto:\n" + _tana_contexto_tutor(),
+                    ]
 
-                    response, profile = _generate_with_fallback(
-                        audio_contents,
-                        types.GenerateContentConfig()
-                    )
-                    st.session_state["respuesta_tana"] = response.text or "No pude interpretar el audio."
-                    st.session_state["respuesta_tana_ruta"] = profile["label"]
-                except Exception as exc:
-                    st.error(f"No se pudo procesar el audio: {_gemini_error_message(exc)}")
-                finally:
-                    if temp_audio and os.path.exists(temp_audio):
-                        os.remove(temp_audio)
+                response, profile = _generate_with_fallback(
+                    audio_contents,
+                    types.GenerateContentConfig()
+                )
+                st.session_state["respuesta_tana"] = response.text or "No pude interpretar el audio."
+                st.session_state["respuesta_tana_ruta"] = profile["label"]
+            except Exception as exc:
+                st.error(f"No se pudo procesar el audio: {_gemini_error_message(exc)}")
+            finally:
+                if temp_audio and os.path.exists(temp_audio):
+                    os.remove(temp_audio)
 
     if st.session_state.get("respuesta_tana"):
         st.markdown("**Respuesta de TANA:**")
         st.info(st.session_state["respuesta_tana"])
-
+        if st.session_state.get("respuesta_tana_ruta"):
+            st.caption(f"Procesado por {st.session_state['respuesta_tana_ruta']}.")
 
 st.divider()
 
-# El Excel se construye automáticamente después de validar los asientos.
-# No se obliga al estudiante a recorrer pasos intermedios.
-if not st.session_state.get("excel_listo", False):
+if not st.button("📊 Generar Excel contable", type="primary"):
     st.stop()
 
 
@@ -1730,13 +1830,31 @@ CUENTAS_6_CON_DESTINO = detectar_cuentas_6_con_destino(
 )
 
 def es_funcion(code):
-    """Clasificación exacta del Resultado por Función de TANA."""
-    if code[:2] in {"70", "69", "94", "95", "78"}:
+    """
+    Clasificación EXACTA para Resultado por Función según la plantilla
+    revisada por el usuario:
+
+    OBLIGATORIAS:
+      - 70: ventas (detecta cualquier cuenta 70xxxxx presente).
+      - 69: costo de ventas (detecta cualquier cuenta 69xxxxx presente).
+      - 94 y 95: gastos por función.
+
+    ADICIONALES SOLO SI CORRESPONDE:
+      - 78: otros ingresos, si existe en la práctica.
+      - 65 y 67: solo si la cuenta existe y NO tiene destino a 94/95.
+
+    NO pertenecen al ERF:
+      - 60, 61, 62, 63, 64, 66 y 68 por el solo hecho de ser
+        cuentas del elemento 6.
+      - 79: es cuenta puente de distribución y nunca se presenta
+        como componente del ERF.
+    """
+    if not code:
+        return False
+    if code[:2] in {"70", "69", "78", "94", "95"}:
         return True
-    # Excepciones del elemento 6: solo 65 y 67 sin destino a 94/95.
     if code[:2] in {"65", "67"} and len(code) == 5:
         return code not in CUENTAS_6_CON_DESTINO
-    # 60, 61, 62, 63, 64, 66, 68 y 79 no entran automáticamente al ERF.
     return False
 
 def es_balance(code):
@@ -1905,321 +2023,524 @@ def ht_sum(code, col):
 # se generan diferencias artificiales entre ERN, ERF y ESF.
 
 # ------------------------------------------------------------
-# ERN - Estado de Resultados por Naturaleza
+# ESTADOS FINANCIEROS — PRESENTACIÓN FINAL TANA
 # ------------------------------------------------------------
-ws7 = wb.create_sheet("ERN")
-ws7["B2"] = "ESTADO DE RESULTADOS POR NATURALEZA"
-ws7["B2"].font = TITLE_FONT
-ws7["B3"] = "Expresado en soles"
-ws7["B3"].font = SUBTITLE_FONT
+# IMPORTANTE:
+# - La HT queda intacta y es la única fuente de datos.
+# - Los estados detectan las cuentas realmente presentes en la práctica.
+# - No se inventan cuentas ni importes.
+# - ERF: 70, 69, 94 y 95 son estructurales; 78 se incorpora si existe;
+#        65 y 67 se incorporan solo si existen y no tienen destino a 94/95.
+#        79 NO se presenta en el ERF.
+# - ERN: presenta las cuentas por naturaleza y el resultado del ejercicio.
+# - ESF: presenta activo, pasivo y patrimonio, y verifica A = P + PN.
 
-# En naturaleza se excluyen 69, elemento 9 y 79, porque 69/9 se presentan
-# por función y 79 es cuenta puente de destino. Se consideran ingresos
-# distintos de ventas (71-78) para no perder resultados que existan en la HT.
-ern_items = [
-    ("Ventas netas", "70", "acreedor"),
-    ("Compras", "60", "deudor"),
-    ("Variación de existencias", "61", "acreedor"),
-    ("Gastos de personal", "62", "deudor"),
-    ("Servicios prestados por terceros", "63", "deudor"),
-    ("Tributos", "64", "deudor"),
-    ("Otros gastos de gestión", "65", "deudor"),
-    ("Pérdidas por medición / deterioro", "66", "deudor"),
-    ("Gastos financieros", "67", "deudor"),
-    ("Depreciación y deterioro", "68", "deudor"),
-    ("Otros ingresos 71", "71", "acreedor"),
-    ("Otros ingresos 72", "72", "acreedor"),
-    ("Otros ingresos 73", "73", "acreedor"),
-    ("Otros ingresos 74", "74", "acreedor"),
-    ("Otros ingresos 75", "75", "acreedor"),
-    ("Otros ingresos 76", "76", "acreedor"),
-    ("Ingresos financieros 77", "77", "acreedor"),
-    ("Otros ingresos 78", "78", "acreedor"),
-]
+# ------------------------------------------------------------
+# Utilidades para los estados
+# ------------------------------------------------------------
+def _prefix_exists(prefix):
+    return any(str(c).startswith(prefix) for c in cuentas_reporte)
 
-def _ht_group_formula(prefix, side_col):
-    return f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*HT!${side_col}$4:${side_col}${HT_LAST_ROW})'
+
+def _sum_ht(prefix, column):
+    """Suma el saldo de una familia de cuentas en una columna de HT."""
+    return f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*HT!${column}$4:${column}${HT_LAST_ROW})'
+
+
+def _sum_ht_codes(codes, column):
+    if not codes:
+        return '=0'
+    formulas = [
+        f'SUMPRODUCT((HT!$A$4:$A${HT_LAST_ROW}="{code}")*HT!${column}$4:${column}${HT_LAST_ROW})'
+        for code in codes
+    ]
+    return '=' + '+'.join(formulas)
+
+
+def _set_report_value(ws, row, col, formula, bold=False):
+    cell = ws.cell(row=row, column=col, value=formula)
+    cell.font = BOLD if bold else BLACK
+    cell.number_format = '#,##0.00;(#,##0.00);"-"'
+    return cell
+
+
+def _report_title(ws, title):
+    ws.merge_cells('B2:E2')
+    ws['B2'] = title
+    ws['B2'].font = TITLE_FONT
+    ws['B2'].alignment = Alignment(horizontal='left')
+    ws.merge_cells('B3:E3')
+    ws['B3'] = 'Expresado en soles'
+    ws['B3'].font = SUBTITLE_FONT
+
+
+def _report_header(ws, row, right_label='AÑO 2026'):
+    ws.cell(row=row, column=2, value='DESCRIPCIÓN').font = BOLD
+    ws.cell(row=row, column=4, value='Notas').font = BOLD
+    ws.cell(row=row, column=5, value=right_label).font = BOLD
+    for c in (2, 4, 5):
+        ws.cell(row=row, column=c).fill = PatternFill('solid', fgColor='D9E1F2')
+        ws.cell(row=row, column=c).border = Border(
+            top=Side(style='thin', color='808080'),
+            bottom=Side(style='thin', color='808080')
+        )
+        ws.cell(row=row, column=c).alignment = Alignment(horizontal='center')
+
+
+def _write_label(ws, row, text, bold=False):
+    ws.cell(row=row, column=2, value=text).font = BOLD if bold else BLACK
+
+
+def _write_amount(ws, row, formula, bold=False):
+    # Columna E: importe del estado, alineado con el modelo enviado.
+    _set_report_value(ws, row, 5, formula, bold=bold)
+
+
+def _hide_control_row(ws, row):
+    if row:
+        ws.row_dimensions[row].hidden = True
+
+# ============================================================
+# ERF — ESTADO DE RESULTADOS POR FUNCIÓN
+# ============================================================
+ws8 = wb.create_sheet('ERF')
+_report_title(ws8, 'ESTADO DE RESULTADOS POR FUNCIÓN')
+_report_header(ws8, 4)
 
 r = 5
-ern_rows = []
-for label, prefix, side in ern_items:
-    ws7.cell(r, 2, label).font = BLACK
-    col = "L" if side == "acreedor" else "K"
-    ws7.cell(r, 4, _ht_group_formula(prefix, col)).font = BLACK
-    ws7.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-    ern_rows.append((r, prefix, side))
-    r += 1
-
-ws7.cell(r, 2, "TOTAL INGRESOS").font = BOLD
-income_rows = [rr for rr, pfx, side in ern_rows if side == "acreedor"]
-ws7.cell(r, 4, "=" + "+".join(f'D{x}' for x in income_rows)).font = BOLD
-ws7.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-ERN_TOTAL_ING = r
+_write_label(ws8, r, 'INGRESOS OPERACIONALES', True); r += 1
+ventas_row = r
+_write_label(ws8, r, 'VENTAS')
+_write_amount(ws8, r, _sum_ht('70', 'N'), False)
 r += 1
 
-ws7.cell(r, 2, "TOTAL GASTOS").font = BOLD
-gasto_rows = [rr for rr, pfx, side in ern_rows if side == "deudor"]
-ws7.cell(r, 4, "=" + "+".join(f'D{x}' for x in gasto_rows)).font = BOLD
-ws7.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-ERN_TOTAL_GAST = r
+# Líneas de detalle de ventas: solo se muestran cuando existen cuentas 70 adicionales.
+ventas_codes = sorted(c for c in cuentas_reporte if c.startswith('70'))
+if len(ventas_codes) > 1:
+    for code in ventas_codes:
+        _write_label(ws8, r, f'{code} - {pcge_map.get(code, code)}')
+        _write_amount(ws8, r, _sum_ht_codes([code], 'N'))
+        r += 1
+
+ventas_total_row = r
+_write_label(ws8, r, 'INGRESOS OPERACIONALES', True)
+_write_amount(ws8, r, f'=E{ventas_row}', True)
 r += 1
 
-ws7.cell(r, 2, "RESULTADO ANTES DE IMPUESTOS").font = BOLD
-ws7.cell(r, 4, f'=D{ERN_TOTAL_ING}-D{ERN_TOTAL_GAST}').font = BOLD
-ws7.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-ERN_RESULTADO_ROW = r
+_write_label(ws8, r, 'COSTO DE VENTA', True)
+costo_row = r
+_write_amount(ws8, r, _sum_ht('69', 'M'))
+r += 1
 
-# ------------------------------------------------------------
-# ERF - Estado de Resultados por Función
-# ------------------------------------------------------------
-ws8 = wb.create_sheet("ERF")
-ws8["B2"] = "ESTADO DE RESULTADOS POR FUNCIÓN"
-ws8["B2"].font = TITLE_FONT
-ws8["B3"] = "Expresado en soles"
-ws8["B3"].font = SUBTITLE_FONT
+utilidad_bruta_row = r
+_write_label(ws8, r, 'UTILIDAD BRUTA', True)
+_write_amount(ws8, r, f'=E{ventas_total_row}-E{costo_row}', True)
+r += 2
 
-r = 5
+_write_label(ws8, r, 'GASTOS OPERACIONALES', True); r += 1
 
-def erf_exact(label, code, side="deudor", multiplier=1):
-    global r
-    ws8.cell(r, 2, label).font = BLACK
-    col = "N" if side == "acreedor" else "M"
-    formula = (
-        f'=SUMIFS(HT!${col}:${col},HT!$A:$A,"{code}")'
-        if multiplier == 1
-        else f'=-SUMIFS(HT!${col}:${col},HT!$A:$A,"{code}")'
-    )
-    ws8.cell(r, 4, formula).font = BLACK
-    ws8.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
+gasto_operativo_rows = []
+# 95 y 94 son obligatorias en la estructura, aunque su saldo sea cero.
+for prefix, label in [('95', 'Gastos de venta'), ('94', 'Gastos de administración')]:
     rr = r
+    _write_label(ws8, r, label.upper())
+    _write_amount(ws8, r, f'=-{_sum_ht(prefix, "M")[1:]}')
+    gasto_operativo_rows.append(rr)
     r += 1
-    return rr
 
-# En el PCGE operativo de TANA las ventas se desarrollan con 70121
-# (venta local) y el costo de ventas con 69121.
-ventas_row = erf_exact("Ventas locales (70121)", "70121", "acreedor")
-costo_row = erf_exact("Costo de ventas (69121)", "69121", "deudor", -1)
+# 65: solo si existe y no fue destinada a 94/95.
+for code in sorted(c for c in cuentas_reporte if len(c) == 5 and c.startswith('65') and c not in CUENTAS_6_CON_DESTINO):
+    rr = r
+    _write_label(ws8, r, f'{code} - {pcge_map.get(code, code)}')
+    _write_amount(ws8, r, f'=-{_sum_ht_codes([code], "M")[1:]}')
+    gasto_operativo_rows.append(rr)
+    r += 1
 
-ws8.cell(r, 2, "UTILIDAD BRUTA").font = BOLD
-ws8.cell(r, 4, f'=D{ventas_row}+D{costo_row}').font = BOLD
-ws8.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-UTILIDAD_BRUTA_ROW = r
+utilidad_operativa_row = r
+_write_label(ws8, r, 'UTILIDAD OPERATIVA', True)
+parts = [f'E{utilidad_bruta_row}'] + [f'+E{x}' for x in gasto_operativo_rows]
+_write_amount(ws8, r, '=' + ''.join(parts), True)
+r += 2
+
+_write_label(ws8, r, 'OTROS INGRESOS Y GASTOS', True); r += 1
+
+# 78: se incorpora si existe.
+otros_78_row = None
+if _prefix_exists('78'):
+    otros_78_row = r
+    _write_label(ws8, r, 'OTROS INGRESOS')
+    _write_amount(ws8, r, _sum_ht('78', 'N'))
+    r += 1
+
+# Ingreso financiero 77, si existe.
+ingreso_fin_row = None
+if _prefix_exists('77'):
+    ingreso_fin_row = r
+    _write_label(ws8, r, 'INGRESO FINANCIERO')
+    _write_amount(ws8, r, _sum_ht('77', 'N'))
+    r += 1
+
+# 67: solo si existe y no tiene destino a 94/95; se presenta como gasto financiero.
+gasto_fin_rows = []
+for code in sorted(c for c in cuentas_reporte if len(c) == 5 and c.startswith('67') and c not in CUENTAS_6_CON_DESTINO):
+    rr = r
+    _write_label(ws8, r, f'{code} - {pcge_map.get(code, code)}')
+    _write_amount(ws8, r, f'=-{_sum_ht_codes([code], "M")[1:]}')
+    gasto_fin_rows.append(rr)
+    r += 1
+
+resultado_antes_part_row = r
+_write_label(ws8, r, 'RESULTADO ANTES DE PARTICIPACIONES E IMPUESTOS', True)
+parts = [f'E{utilidad_operativa_row}']
+if otros_78_row is not None:
+    parts.append(f'+E{otros_78_row}')
+if ingreso_fin_row is not None:
+    parts.append(f'+E{ingreso_fin_row}')
+parts += [f'+E{x}' for x in gasto_fin_rows]
+_write_amount(ws8, r, '=' + ''.join(parts), True)
 r += 1
 
-# Solo las cuentas 94 y 95 forman la sección principal de gastos por función.
-gv_row = erf_exact("Gastos de venta (95)", "95", "deudor", -1)
-ga_row = erf_exact("Gastos de administración (94)", "94", "deudor", -1)
+# Participaciones: solo si existe elemento 87; si no existe, se mantiene 0.
+part_row = r
+_write_label(ws8, r, 'PARTICIPACIONES')
+_write_amount(ws8, r, f'=-{_sum_ht("87", "M")[1:]}')
+r += 1
 
-# Solo 65 y 67 pueden aparecer desde el elemento 6, y únicamente
-# cuando no tienen un destino explícito a 94/95.
-cuentas_6_sin_destino = sorted(
-    c for c in cuentas_reporte
-    if c[:2] in {"65", "67"} and len(c) == 5 and c not in CUENTAS_6_CON_DESTINO
-)
+# Impuesto a la renta: solo si existe elemento 88; si no existe, 0.
+impuesto_row = r
+_write_label(ws8, r, 'IMPUESTO A LA RENTA')
+_write_amount(ws8, r, f'=-{_sum_ht("88", "M")[1:]}')
+r += 1
 
-elemento6_rows = []
-for code6 in cuentas_6_sin_destino:
-    desc6 = pcge_map.get(code6, code6)
-    rr = erf_exact(f"{code6} - {desc6}", code6, "deudor", -1)
-    elemento6_rows.append(rr)
-
-# La 78 se incorpora únicamente cuando realmente existe en la práctica.
-extra_income_rows = []
-if any(c.startswith("78") for c in cuentas_reporte):
-    ws8.cell(r, 2, "OTROS INGRESOS (78)").font = BLACK
-    ws8.cell(
-        r, 4,
-        f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="78")*HT!$N$4:$N${HT_LAST_ROW})'
-    ).font = BLACK
-    ws8.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-    extra_income_rows.append(r)
-    r += 1
-
-ws8.cell(r, 2, "RESULTADO DEL EJERCICIO").font = BOLD
-componentes = [f"D{UTILIDAD_BRUTA_ROW}", f"D{gv_row}", f"D{ga_row}"]
-componentes += [f"D{x}" for x in elemento6_rows]
-componentes += [f"D{x}" for x in extra_income_rows]
-ws8.cell(r, 4, "=" + "+".join(componentes)).font = BOLD
-ws8.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-ERF_RESULTADO_ROW = r
+resultado_erf_row = r
+_write_label(ws8, r, 'RESULTADO DEL EJERCICIO', True)
+_write_amount(ws8, r, f'=E{resultado_antes_part_row}+E{part_row}+E{impuesto_row}', True)
 r += 2
 
-ws8.cell(r, 2, "CONTROL: ERN - ERF").font = BOLD
-ws8.cell(r, 4, f'=ERN!D{ERN_RESULTADO_ROW}-D{ERF_RESULTADO_ROW}').font = BOLD
-ws8.cell(r, 4).number_format = '#,##0.00;(#,##0.00);"-"'
-ws8.cell(r, 5, f'=IF(ABS(D{r})<0.01,"CUADRADO","REVISAR")').font = BOLD
-ERF_CONTROL_ROW = r
+# Control interno: no se muestra en el informe, pero permite comprobar que ERF = ERN.
+control_erf_row = r
+_write_label(ws8, r, 'CONTROL INTERNO ERF')
+_write_amount(ws8, r, '=0')
+ws8.cell(r, 6, f'=IF(ABS(E{r})<0.01,"CUADRADO","REVISAR")')
+_hide_control_row(ws8, control_erf_row)
 
+ws8.column_dimensions['B'].width = 58
+ws8.column_dimensions['C'].width = 3
+ws8.column_dimensions['D'].width = 10
+ws8.column_dimensions['E'].width = 18
+ws8.freeze_panes = 'B5'
+
+# ============================================================
+# ERN — ESTADO DE RESULTADOS POR NATURALEZA
+# ============================================================
+ws7 = wb.create_sheet('ERN')
+_report_title(ws7, 'ESTADO DE RESULTADOS POR NATURALEZA')
+_report_header(ws7, 4)
+
+r = 5
+_write_label(ws7, r, 'INGRESOS OPERACIONALES', True); r += 1
+
+# Ventas y otros ingresos: se detectan por prefijo, sin inventar cuentas.
+ventas_ern_row = r
+_write_label(ws7, r, 'VENTAS')
+_write_amount(ws7, r, _sum_ht('70', 'L'))
+r += 1
+
+# Ingresos por naturaleza que efectivamente existan. La 74 es gasto.
+for prefix, label in [
+    ('71', 'Variación de la producción almacenada'),
+    ('72', 'Producción de activo inmovilizado'),
+    ('73', 'Descuentos, rebajas y bonificaciones obtenidos'),
+    ('75', 'Otros ingresos de gestión'),
+    ('76', 'Ganancia por medición / valuación'),
+    ('77', 'Ingresos financieros'),
+    ('78', 'Otros ingresos'),
+]:
+    if _prefix_exists(prefix):
+        _write_label(ws7, r, label.upper())
+        _write_amount(ws7, r, _sum_ht(prefix, 'L'))
+        r += 1
+
+ventas_total_ern_row = r
+_write_label(ws7, r, 'TOTAL INGRESOS OPERACIONALES', True)
+_write_amount(ws7, r, f'=SUM(E{ventas_ern_row}:E{r-1})', True)
 r += 2
-ws8.cell(r, 2, "NOTA DE CONTROL").font = BOLD
-ws8.cell(r, 2).comment = Comment(
-    "ERF: incluye 70/70121, 69/69121, 94 y 95. La 65 y 67 solo "
-    "si existen y no tienen destino a 94/95; la 78 solo si existe. "
-    "La 79 es cuenta puente y NO forma parte del Estado de Resultado por Función.",
-    "TANA"
-)
 
-autofit(ws8, [3, 52, 5, 18, 16])
+_write_label(ws7, r, 'COSTO Y GASTOS POR NATURALEZA', True); r += 1
 
-# ------------------------------------------------------------
-# ESF - Estado de Situación Financiera
-# ------------------------------------------------------------
-ws9 = wb.create_sheet("ESF")
-ws9["B2"] = "ESTADO DE SITUACIÓN FINANCIERA"
-ws9["B2"].font = TITLE_FONT
-ws9["B3"] = "Expresado en soles"
-ws9["B3"].font = SUBTITLE_FONT
-for cell, value in [("B4","ACTIVO"),("D4","Notas"),("E4","AÑO 2026"),("G4","PASIVO Y PATRIMONIO"),("I4","Notas"),("J4","AÑO 2026")]:
+naturaleza_rows = []
+for prefix, label in [
+    ('60', 'Compras'),
+    ('61', 'Variación de existencias'),
+    ('62', 'Gastos de personal'),
+    ('63', 'Servicios prestados por terceros'),
+    ('64', 'Tributos'),
+    ('65', 'Otros gastos de gestión'),
+    ('66', 'Pérdidas por medición / deterioro'),
+    ('67', 'Gastos financieros'),
+    ('68', 'Valuación, deterioro y depreciación'),
+    ('74', 'Descuentos, rebajas y bonificaciones concedidos'),
+]:
+    if _prefix_exists(prefix):
+        rr = r
+        _write_label(ws7, r, label.upper())
+        _write_amount(ws7, r, _sum_ht(prefix, 'K'))
+        naturaleza_rows.append(rr)
+        r += 1
+
+total_gastos_ern_row = r
+_write_label(ws7, r, 'TOTAL COSTO Y GASTOS', True)
+_write_amount(ws7, r, '=' + '+'.join(f'E{x}' for x in naturaleza_rows) if naturaleza_rows else '=0', True)
+r += 2
+
+resultado_ern_row = r
+_write_label(ws7, r, 'RESULTADO DEL EJERCICIO', True)
+_write_amount(ws7, r, f'=E{ventas_total_ern_row}-E{total_gastos_ern_row}', True)
+ERN_RESULTADO_ROW = r
+r += 1
+
+# Control interno oculto.
+control_ern_row = r
+_write_label(ws7, r, 'CONTROL INTERNO ERN')
+_write_amount(ws7, r, f'=E{resultado_ern_row}-ERF!E{resultado_erf_row}')
+ws7.cell(r, 6, f'=IF(ABS(E{r})<0.01,"CUADRADO","REVISAR")')
+_hide_control_row(ws7, control_ern_row)
+
+# Ahora que ERN_RESULTADO_ROW ya existe, completamos el control cruzado del ERF.
+ws8.cell(control_erf_row, 5, f'=E{resultado_erf_row}-ERN!E{ERN_RESULTADO_ROW}')
+ws8.cell(control_erf_row, 5).number_format = '#,##0.00;(#,##0.00);"-"'
+
+ws7.column_dimensions['B'].width = 58
+ws7.column_dimensions['C'].width = 3
+ws7.column_dimensions['D'].width = 10
+ws7.column_dimensions['E'].width = 18
+ws7.freeze_panes = 'B5'
+
+# ============================================================
+# ESF — ESTADO DE SITUACIÓN FINANCIERA
+# ============================================================
+# Regla de presentación final:
+# 1) Se muestran TODAS las cuentas de balance realmente utilizadas por TANA.
+# 2) En las hojas públicas se muestra únicamente la DESCRIPCIÓN; no se
+#    imprimen códigos de cuenta en el ESF.
+# 3) La ubicación se decide por el saldo real de la cuenta en la HT:
+#       - saldo deudor  -> ACTIVO
+#       - saldo acreedor -> PASIVO o PATRIMONIO según el elemento.
+# 4) Si una cuenta normalmente activa (1-3) aparece con saldo acreedor,
+#    se presenta en el lado pasivo como "otras cuentas"; si una cuenta de
+#    pasivo (4) aparece con saldo deudor, se presenta en activo. Así no se
+#    pierde ninguna cuenta y nunca se duplica una cuenta.
+# 5) Las cuentas 5 se presentan como PATRIMONIO, respetando su signo.
+# 6) El resultado del ejercicio se toma del ERN y debe coincidir con ERF.
+# 7) TOTAL ACTIVO = TOTAL PASIVO + TOTAL PATRIMONIO NETO.
+
+ws9 = wb.create_sheet('ESF')
+_report_title(ws9, 'ESTADO DE SITUACIÓN FINANCIERA')
+
+# Encabezados, exactamente en el estilo de la plantilla suministrada.
+for cell, value in [('B4','ACTIVO'), ('D4','Notas'), ('E4','AÑO 2026'),
+                    ('G4','PASIVO Y PATRIMONIO'), ('I4','Notas'), ('J4','AÑO 2026')]:
     ws9[cell] = value
 for c in (2,4,5,7,9,10):
-    ws9.cell(4,c).fill = PatternFill("solid", fgColor="D9E1F2")
+    ws9.cell(4,c).fill = PatternFill('solid', fgColor='D9E1F2')
     ws9.cell(4,c).font = BOLD
-    ws9.cell(4,c).alignment = Alignment(horizontal="center")
+    ws9.cell(4,c).alignment = Alignment(horizontal='center')
 
-# Ninguna cuenta de balance utilizada por TANA desaparece. La ubicación se
-# decide por su saldo real y se conserva una sola vez.
+# Saldos de cada cuenta desde la HT. Se usa SALDO AJUSTADO (I/J) para las
+# cuentas de balance; si por alguna razón estuviera vacío, se conserva el
+# saldo deudor/acreedor de la HT (O/P).
+def _es_balance_real(code):
+    return bool(code) and code[:1] in {'1','2','3','4','5'}
+
+def _saldo_deudor_esf(code):
+    return f'=IF(SUMIF(HT!$A$4:$A${HT_LAST_ROW},"{code}",HT!$I$4:$I${HT_LAST_ROW})<>0,' \
+           f'SUMIF(HT!$A$4:$A${HT_LAST_ROW},"{code}",HT!$I$4:$I${HT_LAST_ROW}),' \
+           f'SUMIF(HT!$A$4:$A${HT_LAST_ROW},"{code}",HT!$O$4:$O${HT_LAST_ROW}))'
+
+def _saldo_acreedor_esf(code):
+    return f'=IF(SUMIF(HT!$A$4:$A${HT_LAST_ROW},"{code}",HT!$J$4:$J${HT_LAST_ROW})<>0,' \
+           f'SUMIF(HT!$A$4:$A${HT_LAST_ROW},"{code}",HT!$J$4:$J${HT_LAST_ROW}),' \
+           f'SUMIF(HT!$A$4:$A${HT_LAST_ROW},"{code}",HT!$P$4:$P${HT_LAST_ROW}))'
+
+# Para decidir el lado en Excel sin depender de la evaluación previa del
+# archivo, usamos los saldos ya consolidados en Python (movimientos). Los
+# valores son los mismos que alimentan la HT. Esto permite que cada cuenta
+# aparezca una sola vez y evita filas de códigos "sueltos" fuera del cuadro.
+
 def _saldo_python(code):
-    rec = movimientos.get(code, {"debe": 0.0, "haber": 0.0})
-    return float(rec.get("debe", 0) or 0) - float(rec.get("haber", 0) or 0)
+    rec = movimientos.get(code, {'debe':0.0,'haber':0.0})
+    return float(rec.get('debe',0) or 0) - float(rec.get('haber',0) or 0)
 
-cuentas_balance = [c for c in cuentas_reporte if c[:1] in {"1","2","3","4","5"}]
-activos_corrientes, activos_no_corrientes = [], []
-pasivos_corrientes, pasivos_no_corrientes = [], []
+# Cuentas de balance con saldo no nulo. Las cuentas con saldo cero también
+# se conservan si fueron utilizadas: ninguna cuenta utilizada desaparece.
+cuentas_balance = [c for c in cuentas_reporte if _es_balance_real(c)]
+
+# Orden lógico: activos 1-3, luego saldos deudores anómalos de 4-5;
+# pasivos 4, luego patrimonio 5.
+activos = []
+activos_anomalos = []
+pasivos = []
 patrimonio = []
 
 for code in cuentas_balance:
     saldo = _saldo_python(code)
-    if code.startswith("5"):
+    if code.startswith('5'):
         patrimonio.append(code)
-    elif code.startswith(("36", "39")):
-        # Contra-activos: aunque su saldo sea acreedor, permanecen dentro del
-        # activo no corriente y se restan del costo del activo.
-        activos_no_corrientes.append(code)
     elif saldo >= 0:
-        # Activo normal: 1-2 corriente; 3 no corriente. Una cuenta 4 con
-        # saldo deudor es una excepción y se conserva en activo no corriente.
-        if code.startswith(("3", "4")):
-            activos_no_corrientes.append(code)
+        if code.startswith(('1','2','3')):
+            activos.append(code)
+        elif code.startswith('4'):
+            # Cuenta de pasivo con saldo deudor: se presenta como activo,
+            # pero separada como "otras cuentas de activo".
+            activos_anomalos.append(code)
         else:
-            activos_corrientes.append(code)
+            activos.append(code)
     else:
-        # Pasivo normal: 4 corriente. Si una cuenta 1-3 queda acreedora,
-        # se conserva en pasivo no corriente, como excepción.
-        if code.startswith("4"):
-            pasivos_corrientes.append(code)
+        if code.startswith(('1','2','3')):
+            # Cuenta normalmente activa con saldo acreedor: se presenta como
+            # pasivo, sin duplicarla.
+            pasivos.append(code)
+        elif code.startswith('4'):
+            pasivos.append(code)
         else:
-            pasivos_no_corrientes.append(code)
-
-def _write_esf_balance_line(row, col, code, formula, negative=False):
-    desc = pcge_map.get(code, "") or f"Cuenta {code}"
-    ws9.cell(row, 2 if col == 5 else 7, desc).font = BLACK
-    ws9.cell(row, col, formula if not negative else f"=-({formula[1:]})").font = BLACK
-    ws9.cell(row, col).number_format = '#,##0.00;(#,##0.00);"-"'
+            pasivos.append(code)
 
 # --------------------------- ACTIVO ---------------------------
 r = 5
-ws9.cell(r, 2, "ACTIVO CORRIENTE").font = BOLD
+ws9.cell(r,2,'ACTIVO CORRIENTE').font = BOLD
 r += 1
-ac_rows = []
-for code in activos_corrientes:
-    _write_esf_balance_line(r, 5, code, f'=SUMIF(HT!$A:$A,"{code}",HT!$O:$O)')
-    ac_rows.append(r); r += 1
-ws9.cell(r, 2, "TOTAL ACTIVO CORRIENTE").font = BOLD
-ws9.cell(r, 5, "=" + "+".join(f"E{x}" for x in ac_rows) if ac_rows else "=0").font = BOLD
-ws9.cell(r, 5).number_format = '#,##0.00;(#,##0.00);"-"'
-TOTAL_AC_ROW = r
+ac_rows=[]
+
+# Elementos 1-2 se presentan como activo corriente, salvo cuentas 3 (PPE,
+# etc.) que corresponden al no corriente. La cuenta 40 con saldo deudor se
+# considera activo corriente (crédito fiscal).
+for code in activos:
+    if code.startswith('3'):
+        continue
+    desc = pcge_map.get(code, '')
+    if not desc:
+        desc = f'Cuenta {code}'
+    _write_label(ws9, r, desc)
+    _set_report_value(ws9, r, 5, _saldo_deudor_esf(code))
+    ac_rows.append(r)
+    r += 1
+for code in activos_anomalos:
+    desc = pcge_map.get(code, '') or f'Cuenta {code}'
+    _write_label(ws9, r, desc)
+    _set_report_value(ws9, r, 5, _saldo_deudor_esf(code))
+    ac_rows.append(r)
+    r += 1
+
+ws9.cell(r,2,'TOTAL ACTIVO CORRIENTE').font = BOLD
+_set_report_value(ws9, r, 5, '=' + '+'.join(f'E{x}' for x in ac_rows) if ac_rows else '=0', True)
+TOTAL_AC_ROW=r
 r += 2
 
-ws9.cell(r, 2, "ACTIVO NO CORRIENTE").font = BOLD
+ws9.cell(r,2,'ACTIVO NO CORRIENTE').font = BOLD
 r += 1
-anc_rows = []
-for code in activos_no_corrientes:
-    if code.startswith(("36", "39")):
-        _write_esf_balance_line(r, 5, code, f'=SUMIF(HT!$A:$A,"{code}",HT!$P:$P)', negative=True)
-    else:
-        _write_esf_balance_line(r, 5, code, f'=SUMIF(HT!$A:$A,"{code}",HT!$O:$O)')
-    anc_rows.append(r); r += 1
-ws9.cell(r, 2, "TOTAL ACTIVO NO CORRIENTE").font = BOLD
-ws9.cell(r, 5, "=" + "+".join(f"E{x}" for x in anc_rows) if anc_rows else "=0").font = BOLD
-ws9.cell(r, 5).number_format = '#,##0.00;(#,##0.00);"-"'
-TOTAL_ANC_ROW = r
+anc_rows=[]
+for code in activos:
+    if not code.startswith('3'):
+        continue
+    desc = pcge_map.get(code, '') or f'Cuenta {code}'
+    _write_label(ws9, r, desc)
+    _set_report_value(ws9, r, 5, _saldo_deudor_esf(code))
+    anc_rows.append(r)
+    r += 1
+
+ws9.cell(r,2,'TOTAL ACTIVO NO CORRIENTE').font = BOLD
+_set_report_value(ws9, r, 5, '=' + '+'.join(f'E{x}' for x in anc_rows) if anc_rows else '=0', True)
+TOTAL_ANC_ROW=r
 r += 1
 
-ws9.cell(r, 2, "TOTAL ACTIVO").font = BOLD
-ws9.cell(r, 5, f'=E{TOTAL_AC_ROW}+E{TOTAL_ANC_ROW}').font = BOLD
-ws9.cell(r, 5).number_format = '#,##0.00;(#,##0.00);"-"'
-TOTAL_ACTIVO_ROW = r
+ws9.cell(r,2,'TOTAL ACTIVO').font = BOLD
+_set_report_value(ws9, r, 5, f'=E{TOTAL_AC_ROW}+E{TOTAL_ANC_ROW}', True)
+TOTAL_ACTIVO_ROW=r
 
 # ---------------------- PASIVO / PATRIMONIO ----------------------
-r2 = 5
-ws9.cell(r2, 7, "PASIVO").font = BOLD
+r2=5
+ws9.cell(r2,7,'PASIVO').font=BOLD
 r2 += 1
-ws9.cell(r2, 7, "PASIVO CORRIENTE").font = BOLD
+ws9.cell(r2,7,'PASIVO CORRIENTE').font=BOLD
 r2 += 1
-pc_rows = []
-for code in pasivos_corrientes:
-    _write_esf_balance_line(r2, 10, code, f'=SUMIF(HT!$A:$A,"{code}",HT!$P:$P)')
-    pc_rows.append(r2); r2 += 1
-ws9.cell(r2, 7, "TOTAL PASIVO CORRIENTE").font = BOLD
-ws9.cell(r2, 10, "=" + "+".join(f"J{x}" for x in pc_rows) if pc_rows else "=0").font = BOLD
-ws9.cell(r2, 10).number_format = '#,##0.00;(#,##0.00);"-"'
-TOTAL_PC_ROW = r2
+pc_rows=[]
+
+# Pasivos corrientes: cuentas 4 y saldos acreedores de cuentas 1-3.
+# La clasificación se mantiene dinámica y no se inventan cuentas.
+for code in pasivos:
+    # Las obligaciones financieras que comienzan en 45 se mantienen en
+    # corriente en esta plantilla, tal como el modelo del usuario.
+    desc = pcge_map.get(code, '') or f'Cuenta {code}'
+    _write_label(ws9, r2, desc)
+    _set_report_value(ws9, r2, 10, _saldo_acreedor_esf(code))
+    pc_rows.append(r2)
+    r2 += 1
+
+ws9.cell(r2,7,'TOTAL PASIVO CORRIENTE').font=BOLD
+_set_report_value(ws9, r2, 10, '=' + '+'.join(f'J{x}' for x in pc_rows) if pc_rows else '=0', True)
+TOTAL_PC_ROW=r2
 r2 += 2
 
-ws9.cell(r2, 7, "PASIVO NO CORRIENTE").font = BOLD
+# Pasivo no corriente: queda preparado para cuentas que explícitamente
+# correspondan a obligaciones no corrientes. Si el catálogo/monografía no
+# aporta una clasificación de vencimiento, no se duplica ninguna cuenta.
+ws9.cell(r2,7,'PASIVO NO CORRIENTE').font=BOLD
 r2 += 1
-pnc_rows = []
-for code in pasivos_no_corrientes:
-    _write_esf_balance_line(r2, 10, code, f'=SUMIF(HT!$A:$A,"{code}",HT!$P:$P)')
-    pnc_rows.append(r2); r2 += 1
-ws9.cell(r2, 7, "TOTAL PASIVO NO CORRIENTE").font = BOLD
-ws9.cell(r2, 10, "=" + "+".join(f"J{x}" for x in pnc_rows) if pnc_rows else "=0").font = BOLD
-ws9.cell(r2, 10).number_format = '#,##0.00;(#,##0.00);"-"'
-TOTAL_PNC_ROW = r2
+pnc_rows=[]
+# Se reserva la clasificación de cuentas 45/46/47 con información de
+# vencimiento futura. En esta versión no se fuerza ninguna cuenta a PNC;
+# todas las cuentas existentes se muestran una sola vez en pasivo corriente,
+# siguiendo el modelo suministrado.
+ws9.cell(r2,7,'Obligaciones financieras y otras').font=BLACK
+_set_report_value(ws9,r2,10,'=0')
+TOTAL_PNC_ROW=r2
 r2 += 1
 
-ws9.cell(r2, 7, "TOTAL PASIVO").font = BOLD
-ws9.cell(r2, 10, f'=J{TOTAL_PC_ROW}+J{TOTAL_PNC_ROW}').font = BOLD
-ws9.cell(r2, 10).number_format = '#,##0.00;(#,##0.00);"-"'
-TOTAL_PASIVO_ROW = r2
+ws9.cell(r2,7,'TOTAL PASIVO').font=BOLD
+_set_report_value(ws9,r2,10,f'=J{TOTAL_PC_ROW}+J{TOTAL_PNC_ROW}',True)
+TOTAL_PASIVO_ROW=r2
 r2 += 2
 
-ws9.cell(r2, 7, "PATRIMONIO NETO").font = BOLD
+ws9.cell(r2,7,'PATRIMONIO NETO').font=BOLD
 r2 += 1
-pat_rows = []
+pat_rows=[]
 for code in patrimonio:
-    desc = pcge_map.get(code, "") or f"Cuenta {code}"
-    ws9.cell(r2, 7, desc).font = BLACK
-    ws9.cell(r2, 10, f'=SUMIF(HT!$A:$A,"{code}",HT!$P:$P)-SUMIF(HT!$A:$A,"{code}",HT!$O:$O)').font = BLACK
-    ws9.cell(r2, 10).number_format = '#,##0.00;(#,##0.00);"-"'
-    pat_rows.append(r2); r2 += 1
+    desc=pcge_map.get(code,'') or f'Cuenta {code}'
+    _write_label(ws9,r2,desc)
+    # Patrimonio: saldo acreedor aumenta; saldo deudor disminuye.
+    _set_report_value(ws9,r2,10,f'={_saldo_acreedor_esf(code)[1:]}-{_saldo_deudor_esf(code)[1:]}')
+    pat_rows.append(r2)
+    r2 += 1
 
-ws9.cell(r2, 7, "Resultado del ejercicio").font = BLACK
-ws9.cell(r2, 10, f'=ERN!D{ERN_RESULTADO_ROW}').font = BLACK
-ws9.cell(r2, 10).number_format = '#,##0.00;(#,##0.00);"-"'
-pat_rows.append(r2); r2 += 1
-
-ws9.cell(r2, 7, "TOTAL PATRIMONIO NETO").font = BOLD
-ws9.cell(r2, 10, "=" + "+".join(f"J{x}" for x in pat_rows) if pat_rows else "=0").font = BOLD
-ws9.cell(r2, 10).number_format = '#,##0.00;(#,##0.00);"-"'
-TOTAL_PATRIMONIO_ROW = r2
+ws9.cell(r2,7,'Resultado del ejercicio').font=BLACK
+_set_report_value(ws9,r2,10,f'=ERN!E{resultado_ern_row}')
+pat_rows.append(r2)
 r2 += 1
 
-ws9.cell(r2, 7, "TOTAL PASIVO Y PATRIMONIO NETO").font = BOLD
-ws9.cell(r2, 10, f'=J{TOTAL_PASIVO_ROW}+J{TOTAL_PATRIMONIO_ROW}').font = BOLD
-ws9.cell(r2, 10).number_format = '#,##0.00;(#,##0.00);"-"'
-TOTAL_PYPN_ROW = r2
+ws9.cell(r2,7,'TOTAL PATRIMONIO NETO').font=BOLD
+_set_report_value(ws9,r2,10,'=' + '+'.join(f'J{x}' for x in pat_rows) if pat_rows else '=0',True)
+TOTAL_PATRIMONIO_ROW=r2
 r2 += 1
 
-ws9.cell(r2, 7, "DIFERENCIA: ACTIVO - (PASIVO + PATRIMONIO)").font = BOLD
-ws9.cell(r2, 10, f'=E{TOTAL_ACTIVO_ROW}-J{TOTAL_PYPN_ROW}').font = BOLD
-ws9.cell(r2, 10).number_format = '#,##0.00;(#,##0.00);"-"'
-ws9.cell(r2, 11, f'=IF(ABS(J{r2})<0.01,"CUADRADO","REVISAR")').font = BOLD
-ESF_CONTROL_ROW = r2
+ws9.cell(r2,7,'TOTAL PASIVO Y PATRIMONIO NETO').font=BOLD
+_set_report_value(ws9,r2,10,f'=J{TOTAL_PASIVO_ROW}+J{TOTAL_PATRIMONIO_ROW}',True)
+TOTAL_PYPN_ROW=r2
+r2 += 1
 
-for col, width in {'B':56,'C':3,'D':18,'G':56,'H':3,'I':9,'J':18,'K':14}.items():
-    ws9.column_dimensions[col].width = width
-ws9.freeze_panes = "B5"
+# Control: la diferencia debe ser exactamente cero.
+control_esf_row=r2
+ws9.cell(r2,7,'DIFERENCIA: ACTIVO - (PASIVO + PATRIMONIO)').font=BOLD
+_set_report_value(ws9,r2,10,f'=E{TOTAL_ACTIVO_ROW}-J{TOTAL_PYPN_ROW}',True)
+ws9.cell(r2,11,f'=IF(ABS(J{r2})<0.01,"CUADRADO","REVISAR")').font=BOLD
+_hide_control_row(ws9,control_esf_row)
+
+for col,width in {'B':52,'C':3,'D':9,'E':18,'G':52,'H':3,'I':9,'J':18,'K':14}.items():
+    ws9.column_dimensions[col].width=width
+ws9.freeze_panes='B5'
+
+# ============================================================
+# FIN DE ESTADOS FINANCIEROS
+# ============================================================
 
 # HOJA: ASIENTOS_CONTABLES (resueltos y validados por TANA)
 # ============================================================
@@ -2321,8 +2642,7 @@ buffer = io.BytesIO()
 wb.save(buffer)
 buffer.seek(0)
 
-st.subheader("📥 Excel contable listo")
-st.success("Workbook generado correctamente. Descarga tu archivo y continúa trabajando en Excel.")
+st.success("Workbook generado correctamente.")
 if "monografia_nombre" in st.session_state:
     st.caption("La hoja Monografia conserva el texto extraído para revisión.")
 st.download_button(
