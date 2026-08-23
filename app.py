@@ -434,7 +434,10 @@ st.markdown("""
 <style>
 /* Oculta el header/menú default de Streamlit para look de app */
 #MainMenu, header[data-testid="stHeader"] {visibility: hidden; height: 0;}
-.block-container {padding-top: 1.2rem; padding-bottom: 11rem; max-width: 980px;}
+div[data-testid="stDecoration"] {display: none !important;}
+div[data-testid="stToolbar"] {display: none !important;}
+div[data-testid="stAppViewContainer"] {padding-top: 0 !important;}
+.block-container {padding-top: 0rem; padding-bottom: 11rem; max-width: 980px;}
 
 /* ---- Sidebar tipo ChatGPT/Claude ---- */
 section[data-testid="stSidebar"] {background: #F7F9FB; border-right: 1px solid #E3E9EE;}
@@ -601,10 +604,10 @@ def _tana_chat_add(role, content):
 
 if not st.session_state["tana_chat"]:
     st.markdown(
-        '<div style="text-align:center; padding:70px 0 20px 0;">'
-        f'{"<img src=\'data:image/png;base64," + __import__("base64").b64encode(open(LOGO_PATH,"rb").read()).decode() + "\' width=64 style=\'border-radius:14px;\'>" if os.path.exists(LOGO_PATH) else ""}'
-        '<div style="font-size:26px;font-weight:800;color:#12304A;margin-top:14px;">¿Qué monografía resolvemos hoy?</div>'
-        '<div style="color:#6B7B87;font-size:14.5px;margin-top:6px;">'
+        '<div style="text-align:center; padding:2px 0 6px 0;">'
+        f'{"<img src=\'data:image/png;base64," + __import__("base64").b64encode(open(LOGO_PATH,"rb").read()).decode() + "\' width=52 style=\'border-radius:12px;\'>" if os.path.exists(LOGO_PATH) else ""}'
+        '<div style="font-size:23px;font-weight:800;color:#12304A;margin-top:8px;">¿Qué monografía resolvemos hoy?</div>'
+        '<div style="color:#6B7B87;font-size:14.5px;margin-top:5px;">'
         'Sube tu monografía abajo y TANA desarrolla los asientos, la HT y los estados financieros.</div>'
         '</div>',
         unsafe_allow_html=True,
