@@ -834,26 +834,85 @@ def _diagnosticar_asientos(asientos, pcge_map):
 
 
 def _resumen_excel_para_tutor(uploaded):
-    """Extrae nombres de hojas y datos visibles para que TANA pueda localizar el problema."""
+    """Lee TODAS las hojas del Excel, una por una.
+
+    El nombre de la hoja es solo una pista. El contenido se conserva para que
+    TANA pueda responder después a preguntas como "¿en qué hoja está el error?".
+    No obliga al Excel del estudiante a tener una hoja Asientos_Contables.
+    """
     try:
         raw = uploaded.getvalue() if uploaded is not None else st.session_state.get("tana_excel_origen_bytes")
         if not raw:
             return ""
         wbv = openpyxl.load_workbook(io.BytesIO(raw), data_only=False, read_only=True)
-        partes = ["HOJAS DEL EXCEL: " + ", ".join(wbv.sheetnames)]
-        for nombre in wbv.sheetnames:
+        partes = [
+            f"EXCEL REVISADO: {len(wbv.sheetnames)} hojas.",
+            "INSTRUCCIÓN: analizar cada hoja por su contenido; el nombre de la hoja es solo una pista.",
+        ]
+        for idx, nombre in enumerate(wbv.sheetnames, start=1):
             ws = wbv[nombre]
-            if nombre in ("Asientos_Contables", "HT", "ERF", "ERN", "ESF", "LM"):
-                partes.append(f"\n--- HOJA {nombre} ---")
-                max_rows = min(ws.max_row, 120)
-                max_cols = min(ws.max_column, 12)
-                for r in ws.iter_rows(min_row=1, max_row=max_rows, max_col=max_cols, values_only=True):
-                    vals = [str(v) for v in r if v not in (None, "")]
-                    if vals:
-                        partes.append(" | ".join(vals))
-        return "\n".join(partes)[:30000]
+            tipo, meta = _clasificar_hoja_excel(ws)
+            etiqueta = {
+                'libro_diario': 'POSIBLE LIBRO DIARIO',
+                'desconocida': 'HOJA PARA REVISAR',
+            }.get(tipo, 'HOJA')
+            partes.append(
+                f"\n=== HOJA {idx}: {nombre} | {etiqueta} | filas={ws.max_row} columnas={ws.max_column} ==="
+            )
+            if meta and meta.get('resolved'):
+                partes.append(
+                    "COLUMNAS DETECTADAS: " + ", ".join(
+                        f"{k}={v}" for k, v in meta['resolved'].items()
+                    )
+                )
+            # Se inspeccionan todas las hojas. Para mantener el contexto manejable,
+            # se toma una muestra amplia y representativa de cada hoja.
+            max_rows = min(ws.max_row or 0, 180)
+            max_cols = min(ws.max_column or 0, 20)
+            filas_no_vacias = 0
+            for r in ws.iter_rows(min_row=1, max_row=max_rows, max_col=max_cols, values_only=True):
+                vals = [str(v) for v in r if v not in (None, "")]
+                if vals:
+                    filas_no_vacias += 1
+                    partes.append(" | ".join(vals))
+            if (ws.max_row or 0) > max_rows:
+                partes.append(f"... [muestra truncada: se omitieron {ws.max_row - max_rows} filas posteriores] ...")
+            partes.append(f"FILAS NO VACÍAS EN MUESTRA: {filas_no_vacias}")
+        return "\n".join(partes)[:90000]
     except Exception as exc:
         return f"No fue posible resumir el Excel: {exc}"
+
+
+def _revisar_excel_completo(uploaded):
+    """Construye un inventario de TODAS las hojas sin exigir que exista un diario."""
+    raw = uploaded.getvalue()
+    wb = openpyxl.load_workbook(io.BytesIO(raw), data_only=False, read_only=True)
+    hojas = []
+    for idx, nombre in enumerate(wb.sheetnames, start=1):
+        ws = wb[nombre]
+        tipo, meta = _clasificar_hoja_excel(ws)
+        # Detectar señales generales, sin declarar todavía que existe un error.
+        formulas = 0
+        errores_formula = 0
+        no_vacias = 0
+        for r in ws.iter_rows(min_row=1, max_row=min(ws.max_row or 0, 300), max_col=min(ws.max_column or 0, 25), values_only=True):
+            if any(v not in (None, "") for v in r):
+                no_vacias += 1
+            for v in r:
+                if isinstance(v, str) and v.startswith('='):
+                    formulas += 1
+                if isinstance(v, str) and v.startswith('#'):
+                    errores_formula += 1
+        hojas.append({
+            'indice': idx, 'nombre': nombre, 'tipo': tipo,
+            'filas': ws.max_row or 0, 'columnas': ws.max_column or 0,
+            'columnas_detectadas': list((meta or {}).get('resolved', {}).keys()),
+            'fila_encabezado': (meta or {}).get('header_row'),
+            'filas_no_vacias_muestra': no_vacias,
+            'formulas_muestra': formulas,
+            'errores_formula_muestra': errores_formula,
+        })
+    return hojas
 
 
 def _es_excel_tana(nombre):
@@ -964,55 +1023,62 @@ if uploaded_file is not None and enviar_top and st.session_state.get("tana_file_
     ):
         st.session_state.pop(_key, None)
     if _es_excel_tana(uploaded_file.name):
-        with st.spinner("TANA está leyendo el Excel para revisión…"):
+        with st.spinner("TANA está revisando todas las hojas del Excel…"):
             try:
-                asientos_importados = _cargar_asientos_desde_excel(uploaded_file)
-                # La validación vive en el motor principal y se ejecuta DESPUÉS
-                # de cargar el Excel. Esto evita depender de parches/funciones
-                # externas que puedan provocar NameError.
-                valid, errors, warnings = validate_asientos({"asientos": asientos_importados}, pcge_map)
-                st.session_state["asientos_contables"] = asientos_importados
-                st.session_state["asientos_validos"] = valid
-                st.session_state["errores_asientos"] = errors
-                st.session_state["alertas_asientos"] = warnings
+                # PRIMERA FASE: revisión completa. No se exige Libro Diario y no
+                # se detiene el proceso si no se pueden reconstruir asientos.
+                hojas_revisadas = _revisar_excel_completo(uploaded_file)
+                resumen_completo = _resumen_excel_para_tutor(uploaded_file)
                 st.session_state["tana_excel_origen_bytes"] = uploaded_file.getvalue()
                 st.session_state["archivo_excel_origen"] = uploaded_file.name
                 st.session_state["monografia_nombre"] = uploaded_file.name
+                st.session_state["tana_excel_hojas"] = hojas_revisadas
+                st.session_state["tana_excel_revisado"] = True
+                st.session_state["tana_excel_resumen_completo"] = resumen_completo
                 st.session_state["monografia_texto"] = (
-                    "Excel generado previamente por TANA. Se conserva como base "
-                    "para revisión, diagnóstico y corrección."
+                    "Excel del estudiante revisado hoja por hoja. La información de todas las hojas "
+                    "queda disponible para responder preguntas y localizar errores."
                 )
-                st.session_state["tana_diagnostico_excel"] = _diagnosticar_asientos(
-                    asientos_importados, pcge_map
-                )
+                # Intentamos reconstruir asientos solo como capacidad adicional.
+                # Si no se puede, NO es un error de carga y TANA continúa con la revisión.
+                try:
+                    asientos_importados = _cargar_asientos_desde_excel(uploaded_file)
+                    valid, errors, warnings = validate_asientos({"asientos": asientos_importados}, pcge_map)
+                    st.session_state["asientos_contables"] = asientos_importados
+                    st.session_state["asientos_validos"] = valid
+                    st.session_state["errores_asientos"] = errors
+                    st.session_state["alertas_asientos"] = warnings
+                    st.session_state["tana_diagnostico_excel"] = _diagnosticar_asientos(asientos_importados, pcge_map)
+                except Exception:
+                    # No se obliga al alumno a entregar una hoja de diario compatible.
+                    st.session_state.pop("asientos_contables", None)
+                    st.session_state["asientos_validos"] = []
+                    st.session_state["errores_asientos"] = []
+                    st.session_state["alertas_asientos"] = []
+                    st.session_state["tana_diagnostico_excel"] = "La revisión por asientos se realizará cuando la pregunta identifique una operación o asiento concreto."
+
                 st.session_state["tana_file_signature"] = file_signature
-                st.session_state["tana_correccion_version"] = 1
-                st.session_state["tana_modo_trabajo"] = "completo"
-                st.session_state["tana_excel_buffer"] = uploaded_file.getvalue()
+                st.session_state["tana_modo_trabajo"] = "revision_excel"
+                # NO guardar el archivo original como archivo de salida.
+                st.session_state.pop("tana_excel_buffer", None)
                 _tana_chat_add(
                     "user",
                     f"📊 Cargó un Excel para revisión: <b>{uploaded_file.name}</b>"
                 )
-                if errors:
-                    _tana_chat_add(
-                        "assistant",
-                        "<b>TANA revisó el Excel.</b><br>"
-                        + st.session_state["tana_diagnostico_excel"].replace("\n", "<br>")
-                        + "<br><br>"
-                        "Puedo indicarte exactamente qué asiento o cuenta necesita revisión y, "
-                        "si me lo pides, generar un nuevo Excel corregido."
-                    )
-                else:
-                    _tana_chat_add(
-                        "assistant",
-                        "<b>TANA leyó el Excel correctamente.</b><br>"
-                        + st.session_state["tana_diagnostico_excel"].replace("\n", "<br>")
-                        + "<br><br>"
-                        "Soy una inteligencia artificial y puedo cometer errores. "
-                        "Revisa siempre el resultado antes de utilizarlo."
-                    )
+                resumen_hojas = "<br>".join(
+                    f"{h['indice']}. <b>{h['nombre']}</b> — {h['filas']} filas × {h['columnas']} columnas"
+                    for h in hojas_revisadas
+                )
+                _tana_chat_add(
+                    "assistant",
+                    "<b>✅ Tu Excel ha sido revisado hoja por hoja.</b><br><br>"
+                    "He leído todas las hojas y tengo su contenido disponible para analizarlo.<br><br>"
+                    + resumen_hojas +
+                    "<br><br><b>Ahora puedes preguntarme dónde está un error.</b> Por ejemplo: "
+                    "<i>¿En qué hoja está el error y qué debo corregir?</i>"
+                )
             except Exception as exc:
-                st.error(f"No se pudo cargar el Excel para revisión: {exc}")
+                st.error(f"No se pudo revisar el Excel: {exc}")
                 st.stop()
     else:
         with st.spinner("TANA está leyendo y procesando la monografía…"):
@@ -1821,12 +1887,12 @@ def _tana_contexto_tutor():
     asientos = st.session_state.get("asientos_contables", [])
     asientos_txt = json.dumps(asientos, ensure_ascii=False, indent=2)
     diagnostico = st.session_state.get("tana_diagnostico_excel", "")
-    excel_contexto = _resumen_excel_para_tutor(None) if st.session_state.get("tana_excel_origen_bytes") else ""
+    excel_contexto = st.session_state.get("tana_excel_resumen_completo", "")
     return (
         "MONOGRAFÍA / FUENTE:\n" + mono[:12000]
-        + "\n\nASIENTOS ACTUALES:\n" + asientos_txt[:22000]
+        + "\n\nASIENTOS ACTUALES (si fueron reconstruidos):\n" + asientos_txt[:18000]
         + "\n\nDIAGNÓSTICO DETERMINISTA:\n" + diagnostico[:8000]
-        + "\n\nCONTENIDO DEL EXCEL:\n" + excel_contexto[:26000]
+        + "\n\nCONTENIDO COMPLETO DEL EXCEL, HOJA POR HOJA:\n" + excel_contexto[:90000]
     )
 
 def _preguntar_a_tana(pregunta):
@@ -1866,7 +1932,7 @@ PREGUNTA:
 
 # La consulta y el audio se capturan arriba. Aquí solo se procesa la acción,
 # una vez que las funciones del tutor ya están definidas.
-if enviar_top and (pregunta_top.strip() or audio_top is not None) and st.session_state.get("asientos_contables"):
+if enviar_top and (pregunta_top.strip() or audio_top is not None) and (st.session_state.get("asientos_contables") or st.session_state.get("tana_excel_revisado") or st.session_state.get("monografia_json")):
     if enviar_top and pregunta_top.strip():
         _tana_chat_add("user", pregunta_top.strip())
         _modo = _detectar_modo_trabajo(pregunta_top.strip())
