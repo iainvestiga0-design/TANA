@@ -434,7 +434,7 @@ st.markdown("""
 <style>
 /* Oculta el header/menú default de Streamlit para look de app */
 #MainMenu, header[data-testid="stHeader"] {visibility: hidden; height: 0;}
-.block-container {padding-top: 1.2rem; padding-bottom: 8rem; max-width: 980px;}
+.block-container {padding-top: 1.2rem; padding-bottom: 12rem; max-width: 980px;}
 
 /* ---- Sidebar tipo ChatGPT/Claude ---- */
 section[data-testid="stSidebar"] {background: #F7F9FB; border-right: 1px solid #E3E9EE;}
@@ -474,7 +474,7 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .t
 div[data-testid="stVerticalBlockBorderWrapper"]:has(.tana-inputbar-anchor),
 div[data-testid="stVerticalBlock"]:has(.tana-inputbar-anchor) {
     position: fixed !important;
-    bottom: 0; left: 50%; transform: translateX(-50%);
+    bottom: 34px; left: 50%; transform: translateX(-50%);
     width: min(940px, 94vw);
     z-index: 999;
     background: #fff;
@@ -482,7 +482,7 @@ div[data-testid="stVerticalBlock"]:has(.tana-inputbar-anchor) {
     border-radius: 22px;
     padding: 8px 14px 10px 14px;
     box-shadow: 0 6px 22px rgba(18,48,74,.09);
-    margin-bottom: 16px;
+    margin-bottom: 0;
 }
 
 /* ---- Unifica los 4 controles (adjuntar, texto, micro, enviar) en UNA
@@ -603,7 +603,7 @@ def _tana_chat_add(role, content):
 
 if not st.session_state["tana_chat"]:
     st.markdown(
-        '<div style="text-align:center; padding:70px 0 20px 0;">'
+        '<div style="text-align:center; padding:38px 0 92px 0;">'
         f'{"<img src=\'data:image/png;base64," + __import__("base64").b64encode(open(LOGO_PATH,"rb").read()).decode() + "\' width=64 style=\'border-radius:14px;\'>" if os.path.exists(LOGO_PATH) else ""}'
         '<div style="font-size:26px;font-weight:800;color:#12304A;margin-top:14px;">¿Qué monografía resolvemos hoy?</div>'
         '<div style="color:#6B7B87;font-size:14.5px;margin-top:6px;">'
