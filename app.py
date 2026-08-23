@@ -100,13 +100,32 @@ def _save_user_registry(data):
         return False
 
 def _record_user_activity(event_type, detail="", signature=""):
-    """Registra actividad breve del usuario autenticado, sin guardar archivos ni contenido sensible."""
+    """Registra actividad del usuario autenticado y la guarda inmediatamente en el registro."""
     if not user_email:
         return False
+
     users = _load_user_registry()
-    user = next((u for u in users if str(u.get("email", "")).strip().lower() == user_email), None)
+    user = next(
+        (u for u in users if str(u.get("email", "")).strip().lower() == user_email),
+        None,
+    )
+
+    # Si por un reinicio/rerun el usuario todavía no aparece en el registro,
+    # no perdemos la actividad: lo creamos en este mismo momento.
     if user is None:
-        return False
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        user = {
+            "email": user_email,
+            "role": user_role,
+            "first_seen": now,
+            "last_seen": now,
+            "visits": 1,
+            "activity": [],
+        }
+        users.append(user)
+    else:
+        user["role"] = user_role
+        user["last_seen"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
 
     activity = user.get("activity", [])
     if not isinstance(activity, list):
@@ -130,7 +149,6 @@ def _record_user_activity(event_type, detail="", signature=""):
         "detail": str(detail)[:300],
         "signature": str(signature)[:120],
     })
-    # Conservamos solo las actividades más recientes para mantener ligero el registro.
     user["activity"] = activity[-100:]
     return _save_user_registry(users)
 
@@ -293,6 +311,7 @@ if user_role == "Creador":
                             "archivo_cargado": "📄 Archivo cargado",
                             "desarrollo_completado": "✅ Desarrollo completado",
                             "excel_descargado": "⬇️ Excel descargado",
+                            "consulta_realizada": "💬 Consulta realizada",
                         }
                         activity_rows = []
                         for item in reversed(activity[-20:]):
@@ -2435,6 +2454,7 @@ PREGUNTA:
 # una vez que las funciones del tutor ya están definidas.
 if enviar_top and (pregunta_top.strip() or audio_top is not None) and (st.session_state.get("asientos_contables") or st.session_state.get("tana_excel_revisado") or st.session_state.get("monografia_json")):
     if enviar_top and pregunta_top.strip():
+        _record_user_activity("consulta_realizada", pregunta_top.strip())
         _tana_chat_add("user", pregunta_top.strip())
         _modo = _detectar_modo_trabajo(pregunta_top.strip())
         if _modo:
@@ -2471,6 +2491,7 @@ if enviar_top and (pregunta_top.strip() or audio_top is not None) and (st.sessio
         else:
             st.session_state["audio_tana_processed"] = _audio_sig
         if audio_top is not None:
+            _record_user_activity("consulta_realizada", "Pregunta enviada por voz", _audio_sig)
             _tana_chat_add("user", "🎤 Pregunta enviada por voz")
             with st.spinner("TANA está escuchando y preparando la respuesta…"):
                 temp_audio = None
