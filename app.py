@@ -1838,6 +1838,15 @@ def _crear_excel_revision_desde_origen(asientos, errores):
     except Exception: pass
     out=io.BytesIO(); wb_in.save(out); out.seek(0); return out.getvalue()
 
+def _revisar_bytes_excel_completo(raw):
+    """Vuelve a revisar un Excel generado por TANA, hoja por hoja."""
+    class _MemoryUpload:
+        def __init__(self, data): self._data = data
+        def getvalue(self): return self._data
+    obj = _MemoryUpload(raw)
+    return _revisar_excel_completo(obj), _resumen_excel_para_tutor(obj)
+
+
 def _aplicar_correccion_si_corresponde(pregunta):
     if not _es_peticion_correccion(pregunta):
         return False
@@ -1859,8 +1868,22 @@ def _aplicar_correccion_si_corresponde(pregunta):
             valid, errors, warnings = validate_asientos({"asientos": nuevos}, pcge_map)
 
             if st.session_state.get("tana_excel_origen_bytes"):
+                # Generamos SIEMPRE un archivo nuevo; el original permanece intacto.
                 nuevo_buffer = _crear_excel_revision_desde_origen(nuevos, errors)
                 st.session_state["tana_excel_buffer"] = nuevo_buffer
+
+                # Segunda pasada obligatoria: revisar nuevamente TODO el Excel generado.
+                # Esto evita afirmar que una corrección quedó bien solo porque el
+                # conjunto de asientos cuadró. También deja el inventario de hojas
+                # actualizado para las preguntas posteriores del estudiante.
+                try:
+                    hojas_post, resumen_post = _revisar_bytes_excel_completo(nuevo_buffer)
+                    st.session_state["tana_excel_hojas"] = hojas_post
+                    st.session_state["tana_excel_resumen_completo"] = resumen_post
+                    st.session_state["tana_excel_revisado_post"] = True
+                except Exception as exc_post:
+                    st.session_state["tana_excel_revisado_post"] = False
+                    st.session_state["tana_excel_post_error"] = str(exc_post)
             st.session_state["asientos_contables"] = nuevos
             st.session_state["asientos_validos"] = valid
             st.session_state["errores_asientos"] = errors
@@ -1869,11 +1892,12 @@ def _aplicar_correccion_si_corresponde(pregunta):
             st.session_state["tana_correccion_version"] = st.session_state.get("tana_correccion_version", 1) + 1
             st.session_state["tana_resuelto_signature"] = None
 
+            post_ok = st.session_state.get("tana_excel_revisado_post", False)
             if errors:
                 detalle = "<br>".join(str(e) for e in errors[:12])
-                _tana_chat_add("assistant", f"<b>TANA generó una propuesta de corrección.</b><br>{observacion}<br><br><b>Advertencia:</b> la nueva versión todavía NO pasó la validación contable.<br>{detalle}<br><br>Te entrego el nuevo Excel para que puedas revisarlo. Soy una inteligencia artificial y puedo cometer errores; intenta corregir a partir del diagnóstico, pero revisa siempre el resultado antes de utilizarlo.")
+                _tana_chat_add("assistant", f"<b>⚠️ TANA generó un nuevo Excel, pero la revisión contable todavía encuentra observaciones.</b><br>{observacion}<br><br><b>Observaciones:</b><br>{detalle}<br><br><b>El archivo nuevo fue vuelto a revisar hoja por hoja.</b><br>{'La segunda revisión se completó.' if post_ok else 'La segunda revisión no pudo completarse.'}<br><br><small>El Excel original no fue modificado.</small>")
             else:
-                _tana_chat_add("assistant", f"<b>TANA generó una nueva versión corregida.</b><br>{observacion}<br><br>La nueva versión pasó la validación de asientos.<br><br><small>Soy una inteligencia artificial y puedo cometer errores. Revisa siempre el resultado antes de utilizarlo.</small>")
+                _tana_chat_add("assistant", f"<b>✅ Corrección aplicada y Excel nuevo generado.</b><br>{observacion}<br><br><b>Primera validación:</b> los asientos cuadran.<br><b>Segunda validación:</b> {'TANA volvió a revisar todo el Excel, hoja por hoja.' if post_ok else 'no pudo completar la segunda revisión.'}<br><br><b>El archivo original permanece intacto y el botón de descarga corresponde al archivo nuevo.</b>")
             return True
         except Exception as exc:
             st.error(f"No se pudo aplicar la corrección: {_gemini_error_message(exc)}")
