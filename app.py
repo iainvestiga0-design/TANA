@@ -5,6 +5,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
 
 import streamlit as st
@@ -62,8 +63,64 @@ if not st.user.is_logged_in:
 # La identificación del rol es automática mediante el correo devuelto por Google.
 # El correo autorizado del creador se guarda en Streamlit Secrets y nunca se muestra.
 user_email = str(getattr(st.user, "email", "") or "").strip().lower()
-creator_email = str(st.secrets.get("TANA_CREATOR_EMAIL", "iainvestiga0@gmail.com") or "").strip().lower()
+creator_email = str(st.secrets.get("TANA_CREATOR_EMAIL", "iainvestigaia0@gmail.com") or "").strip().lower()
 user_role = "Creador" if creator_email and user_email == creator_email else "Estudiante"
+
+# ============================================================
+# REGISTRO BÁSICO DE USUARIOS AUTENTICADOS
+# ============================================================
+# V1: guarda el registro en un JSON local del despliegue. Esto permite
+# comprobar el flujo y el listado sin tocar el motor contable. En una
+# siguiente etapa se puede conectar a una base persistente externa.
+USER_REGISTRY_PATH = os.path.join(os.path.dirname(__file__), "tana_users_registry.json")
+
+def _load_user_registry():
+    try:
+        if not os.path.exists(USER_REGISTRY_PATH):
+            return []
+        with open(USER_REGISTRY_PATH, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+def _save_user_registry(data):
+    tmp_path = USER_REGISTRY_PATH + ".tmp"
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, ensure_ascii=False, indent=2)
+        os.replace(tmp_path, USER_REGISTRY_PATH)
+        return True
+    except Exception:
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
+        return False
+
+def _register_current_user():
+    if not user_email:
+        return []
+    users = _load_user_registry()
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    existing = next((u for u in users if str(u.get("email", "")).lower() == user_email), None)
+    if existing is None:
+        users.append({
+            "email": user_email,
+            "role": user_role,
+            "first_seen": now,
+            "last_seen": now,
+            "visits": 1,
+        })
+    else:
+        existing["role"] = user_role
+        existing["last_seen"] = now
+        existing["visits"] = int(existing.get("visits", 0) or 0) + 1
+    _save_user_registry(users)
+    return users
+
+registered_users = _register_current_user()
 
 # Identificación visible, breve y automática. Nunca mostramos el correo completo.
 if user_role == "Creador":
@@ -88,15 +145,104 @@ with st.sidebar:
 
 
 # ============================================================
-# PANEL EXCLUSIVO DEL CREADOR — PRUEBA DE PERMISOS
+# PANEL EXCLUSIVO DEL CREADOR — LISTADO DE USUARIOS
 # ============================================================
-# Esta sección es intencionalmente pequeña: solo verifica que el
-# rol controle una zona exclusiva. No modifica el motor contable.
+# Esta sección solo es visible para la cuenta autorizada como creador.
+# No modifica el motor contable ni la experiencia del estudiante.
 if user_role == "Creador":
     with st.expander("🔐 Panel del Creador", expanded=False):
         st.success("Acceso de creador verificado.")
-        st.caption("Esta zona solo es visible para la cuenta autorizada como creador.")
-        st.write("**Estado:** Creador autorizado")
+        st.caption("Los usuarios se registran automáticamente al iniciar sesión en TANA.")
+
+        users = _load_user_registry()
+        users_sorted = sorted(
+            users,
+            key=lambda u: str(u.get("last_seen", "")),
+            reverse=True,
+        )
+
+        st.markdown("### 👥 Listado de usuarios")
+
+        if users_sorted:
+            student_count = sum(
+                1 for u in users_sorted
+                if str(u.get("role", "Estudiante")) != "Creador"
+            )
+            creator_count = sum(
+                1 for u in users_sorted
+                if str(u.get("role", "Estudiante")) == "Creador"
+            )
+
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Usuarios registrados", len(users_sorted))
+            m2.metric("Estudiantes", student_count)
+            m3.metric("Creadores", creator_count)
+
+            rows = []
+            for idx, u in enumerate(users_sorted, start=1):
+                role = str(u.get("role", "Estudiante"))
+                email = str(u.get("email", "")).strip().lower()
+                if role == "Creador":
+                    visible_role = "Creador"
+                else:
+                    local = email.split("@", 1)[0].strip()
+                    initial = (local[:1] or "E").upper()
+                    visible_role = f"Estudiante · {initial}"
+
+                rows.append({
+                    "N°": idx,
+                    "Correo": email,
+                    "Rol": visible_role,
+                    "Primer acceso": str(u.get("first_seen", "")),
+                    "Último acceso": str(u.get("last_seen", "")),
+                    "Ingresos": int(u.get("visits", 0) or 0),
+                })
+
+            st.dataframe(
+                rows,
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "N°": st.column_config.NumberColumn(width="small"),
+                    "Correo": st.column_config.TextColumn(width="large"),
+                    "Rol": st.column_config.TextColumn(width="medium"),
+                    "Primer acceso": st.column_config.TextColumn(width="medium"),
+                    "Último acceso": st.column_config.TextColumn(width="medium"),
+                    "Ingresos": st.column_config.NumberColumn(width="small"),
+                },
+            )
+
+            csv_rows = [
+                {
+                    "N°": row["N°"],
+                    "Correo": row["Correo"],
+                    "Rol": row["Rol"],
+                    "Primer acceso": row["Primer acceso"],
+                    "Último acceso": row["Último acceso"],
+                    "Ingresos": row["Ingresos"],
+                }
+                for row in rows
+            ]
+            import csv
+            csv_buffer = io.StringIO()
+            writer = csv.DictWriter(csv_buffer, fieldnames=list(csv_rows[0].keys()))
+            writer.writeheader()
+            writer.writerows(csv_rows)
+
+            c1, c2 = st.columns([1, 1])
+            with c1:
+                if st.button("🔄 Actualizar listado", use_container_width=True):
+                    st.rerun()
+            with c2:
+                st.download_button(
+                    "⬇️ Descargar listado CSV",
+                    data=csv_buffer.getvalue().encode("utf-8-sig"),
+                    file_name="TANA_listado_usuarios.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                )
+        else:
+            st.info("Todavía no hay usuarios registrados.")
 
 
 # Gemini
