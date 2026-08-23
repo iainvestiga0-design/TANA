@@ -434,7 +434,7 @@ st.markdown("""
 <style>
 /* Oculta el header/menú default de Streamlit para look de app */
 #MainMenu, header[data-testid="stHeader"] {visibility: hidden; height: 0;}
-.block-container {padding-top: 0.6rem; padding-bottom: 13rem; max-width: 980px;}
+.block-container {padding-top: 0.6rem; padding-bottom: 17rem; max-width: 980px;}
 
 /* ---- Sidebar tipo ChatGPT/Claude ---- */
 section[data-testid="stSidebar"] {background: #F7F9FB; border-right: 1px solid #E3E9EE;}
@@ -474,7 +474,7 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .t
 div[data-testid="stVerticalBlockBorderWrapper"]:has(.tana-inputbar-anchor),
 div[data-testid="stVerticalBlock"]:has(.tana-inputbar-anchor) {
     position: fixed !important;
-    bottom: 20px; left: 50%; transform: translateX(-50%);
+    bottom: 18px; left: 50%; transform: translateX(-50%);
     width: min(940px, 94vw);
     z-index: 999;
     background: #fff;
@@ -483,6 +483,15 @@ div[data-testid="stVerticalBlock"]:has(.tana-inputbar-anchor) {
     padding: 8px 14px 10px 14px;
     box-shadow: 0 6px 22px rgba(18,48,74,.09);
     margin-bottom: 0;
+}
+
+/* Todo el contenido que aparece DESPUÉS de la barra fija conserva una
+   zona de seguridad para que respuestas, resultados y descargas nunca
+   queden ocultos detrás de la barra de preguntas/carga. */
+div[data-testid="stVerticalBlock"]:has(.tana-inputbar-anchor) ~ div[data-testid="stVerticalBlock"],
+div[data-testid="stVerticalBlockBorderWrapper"]:has(.tana-inputbar-anchor) ~ div[data-testid="stVerticalBlock"],
+div[data-testid="stVerticalBlock"]:has(.tana-inputbar-anchor) ~ div[data-testid="stVerticalBlockBorderWrapper"] {
+    margin-bottom: 170px !important;
 }
 
 /* ---- Unifica los 4 controles (adjuntar, texto, micro, enviar) en UNA
