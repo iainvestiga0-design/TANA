@@ -468,8 +468,11 @@ section[data-testid="stSidebar"] .block-container {padding-top: 1rem;}
    como hermanos, no hijos, en el DOM). Por eso anclamos un marcador
    invisible dentro de un st.container() real y usamos :has() para
    fijar exactamente ESE contenedor (y solo ese), sin afectar el resto
-   de la página, que sigue haciendo scroll normal. */
-div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) {
+   de la página, que sigue haciendo scroll normal. Se listan varias
+   variantes del selector para cubrir distintas versiones de Streamlit. */
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor),
+div[data-testid="stVerticalBlockBorderWrapper"]:has(.tana-inputbar-anchor),
+div[data-testid="stVerticalBlock"]:has(.tana-inputbar-anchor) {
     position: fixed !important;
     bottom: 0; left: 50%; transform: translateX(-50%);
     width: min(940px, 94vw);
@@ -477,9 +480,73 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .t
     background: #fff;
     border: 1px solid #DDE8EF;
     border-radius: 22px;
-    padding: 10px 16px 14px 16px;
+    padding: 8px 14px 10px 14px;
     box-shadow: 0 6px 22px rgba(18,48,74,.09);
     margin-bottom: 16px;
+}
+
+/* ---- Unifica los 4 controles (adjuntar, texto, micro, enviar) en UNA
+   sola barra visual, en vez de 4 cajas separadas. Se quita el borde y
+   fondo propio de cada widget de Streamlit y se dejan "transparentes"
+   dentro del contenedor blanco de arriba, alineados en una sola fila. ---- */
+div[data-testid="stVerticalBlock"]:has(.tana-inputbar-anchor) div[data-testid="stHorizontalBlock"] {
+    align-items: center !important;
+    gap: 6px !important;
+}
+div[data-testid="stVerticalBlock"]:has(.tana-inputbar-anchor) div[data-testid="column"] {
+    display: flex; align-items: center; padding: 0 !important;
+}
+
+/* Campo de texto: sin borde propio, se funde con la barra */
+div[data-testid="stVerticalBlock"]:has(.tana-inputbar-anchor) div[data-testid="stTextInput"] > div {
+    border: none !important; background: transparent !important; box-shadow: none !important;
+}
+div[data-testid="stVerticalBlock"]:has(.tana-inputbar-anchor) div[data-testid="stTextInput"] input {
+    background: transparent !important; font-size: 14.5px; padding-left: 4px;
+}
+
+/* Adjuntar archivo: se reduce a un botón circular tipo clip, sin la
+   zona de "arrastra y suelta" ni los textos de ayuda de Streamlit */
+div[data-testid="stVerticalBlock"]:has(.tana-inputbar-anchor) [data-testid="stFileUploader"] {
+    width: 40px;
+}
+div[data-testid="stVerticalBlock"]:has(.tana-inputbar-anchor) [data-testid="stFileUploaderDropzoneInstructions"] {
+    display: none !important;
+}
+div[data-testid="stVerticalBlock"]:has(.tana-inputbar-anchor) [data-testid*="FileUploaderDropzone"] {
+    border: none !important; background: transparent !important; padding: 0 !important;
+    min-height: 0 !important; width: 40px; height: 40px;
+    display: flex; align-items: center; justify-content: center;
+}
+div[data-testid="stVerticalBlock"]:has(.tana-inputbar-anchor) [data-testid*="FileUploaderDropzone"] button {
+    font-size: 0 !important; width: 38px; height: 38px; border-radius: 50%;
+    border: 1px solid #DDE8EF !important; background: #F5FAFC !important; padding: 0 !important;
+}
+div[data-testid="stVerticalBlock"]:has(.tana-inputbar-anchor) [data-testid*="FileUploaderDropzone"] button::after {
+    content: "📎"; font-size: 17px;
+}
+div[data-testid="stVerticalBlock"]:has(.tana-inputbar-anchor) [data-testid="stFileUploaderFile"] {
+    display: none !important; /* la ficha del archivo se muestra con nuestro propio chip, no la de Streamlit */
+}
+
+/* Micrófono: mismo tratamiento circular y transparente */
+div[data-testid="stVerticalBlock"]:has(.tana-inputbar-anchor) [data-testid*="AudioInput"] {
+    background: transparent !important; border: none !important; box-shadow: none !important;
+    min-height: 0 !important;
+}
+
+/* Botón enviar: circular, color de marca */
+div[data-testid="stVerticalBlock"]:has(.tana-inputbar-anchor) button[kind="primary"] {
+    border-radius: 50% !important; width: 40px; height: 40px; padding: 0 !important;
+}
+
+/* Chip que aparece cuando ya hay un archivo cargado: la barra se
+   agranda un poco hacia arriba para mostrarlo, sin salirse del recuadro fijo */
+.tana-file-chip {
+    display: flex; align-items: center; gap: 6px;
+    background: #F5FAFC; border: 1px solid #DDE8EF; border-radius: 10px;
+    color: #12304A; font-size: 12.5px; padding: 5px 10px; margin: 0 4px 6px 4px;
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -558,11 +625,12 @@ for msg in st.session_state["tana_chat"]:
 inputbar_container = st.container()
 with inputbar_container:
     st.markdown('<span class="tana-inputbar-anchor"></span>', unsafe_allow_html=True)
-    bar = st.columns([0.9, 5.4, 1.3, 0.7], gap="small")
+
+    bar = st.columns([0.7, 5.6, 0.85, 0.85], gap="small")
     with bar[0]:
         uploaded_file = st.file_uploader(
             "Archivo", type=SUPPORTED_TYPES, label_visibility="collapsed",
-            help="PDF, DOC, DOCX, XLS, XLSX, JPG, JPEG y PNG."
+            help="Adjuntar monografía: PDF, DOC, DOCX, XLS, XLSX, JPG, JPEG y PNG."
         )
     with bar[1]:
         pregunta_top = st.text_input(
@@ -574,8 +642,13 @@ with inputbar_container:
     with bar[3]:
         enviar_top = st.button("➤", type="primary", key="btn_enviar_tana_top", use_container_width=True)
 
-if uploaded_file:
-    st.caption(f"📎 {uploaded_file.name} · Pulsa ➤ para enviar y procesar")
+    # Cuando hay un archivo cargado, la barra se agranda un poco (hacia
+    # arriba) para mostrar esta etiqueta, en vez de un texto aparte debajo.
+    if uploaded_file:
+        st.markdown(
+            f'<div class="tana-file-chip">📎 {uploaded_file.name} · pulsa ➤ para enviar y procesar</div>',
+            unsafe_allow_html=True,
+        )
 
 def _normalizar_nombre_hoja(nombre):
     return re.sub(r"[^a-z0-9]", "", str(nombre or "").lower())
