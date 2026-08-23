@@ -1759,6 +1759,111 @@ def _money(value):
     except (InvalidOperation, ValueError):
         return None
 
+
+def _agregar_hoja_control_contable(wb, asientos, ht_last_row, ern_resultado_row, erf_resultado_row,
+                                   esf_control_row, esf_sheet="ESF", ern_sheet="ERN", erf_sheet="ERF"):
+    """
+    Auditoría determinista de la salida de TANA.
+    No depende de Gemini para decidir si los totales matemáticos cuadran.
+    Las fórmulas se calculan al abrir el Excel.
+    """
+    if "VALIDACION" in wb.sheetnames:
+        del wb["VALIDACION"]
+
+    ws = wb.create_sheet("VALIDACION")
+    _title = "VALIDACIÓN CONTABLE AUTOMÁTICA"
+    ws["A1"] = _title
+    ws["A1"].font = Font(name=FONT, bold=True, size=14, color="1F4E78")
+    ws.merge_cells("A1:D1")
+
+    ws["A3"] = "CONTROL"
+    ws["B3"] = "RESULTADO"
+    ws["C3"] = "DIFERENCIA"
+    ws["D3"] = "INTERPRETACIÓN"
+    style_header(ws, 3, 1, 4)
+
+    rows = []
+
+    # 1) Asientos: suma global.
+    max_ac = max(2, 1 + sum(len(a.get("lineas", []) or []) for a in (asientos or [])))
+    rows.append(("1. Debe = Haber de todos los asientos",
+                 f"=IF(ABS(SUM(Asientos_Contables!$I$2:$I${max_ac})-SUM(Asientos_Contables!$J$2:$J${max_ac}))<0.01,\"CUADRADO\",\"REVISAR\")",
+                 f"=SUM(Asientos_Contables!$I$2:$I${max_ac})-SUM(Asientos_Contables!$J$2:$J${max_ac})",
+                 "El total Debe y Haber debe ser igual."))
+
+    # 2) HT: suma de movimientos.
+    rows.append(("2. HT — suma Debe = Haber",
+                 f"=IF(ABS(SUM(HT!$C$4:$C${ht_last_row})-SUM(HT!$D$4:$D${ht_last_row}))<0.01,\"CUADRADO\",\"REVISAR\")",
+                 f"=SUM(HT!$C$4:$C${ht_last_row})-SUM(HT!$D$4:$D${ht_last_row})",
+                 "La suma de movimientos de la Hoja de Trabajo debe cuadrar."))
+
+    # 3) HT: saldos ajustados.
+    rows.append(("3. HT — saldos ajustados Debe = Haber",
+                 f"=IF(ABS(SUM(HT!$I$4:$I${ht_last_row})-SUM(HT!$J$4:$J${ht_last_row}))<0.01,\"CUADRADO\",\"REVISAR\")",
+                 f"=SUM(HT!$I$4:$I${ht_last_row})-SUM(HT!$J$4:$J${ht_last_row})",
+                 "Los saldos ajustados deben mantener la igualdad."))
+
+    # 4) ERN vs ERF.
+    rows.append(("4. ERN = ERF — resultado del ejercicio",
+                 f"=IF(ABS(ERN!$E${ern_resultado_row}-ERF!$E${erf_resultado_row})<0.01,\"CUADRADO\",\"REVISAR\")",
+                 f"=ERN!$E${ern_resultado_row}-ERF!$E${erf_resultado_row}",
+                 "Ambos estados deben llegar al mismo resultado."))
+
+    # 5) ESF.
+    rows.append(("5. ESF — Activo = Pasivo + Patrimonio",
+                 f"=IF(ABS(ESF!$J${esf_control_row})<0.01,\"CUADRADO\",\"REVISAR\")",
+                 f"=ESF!$J${esf_control_row}",
+                 "La diferencia del ESF debe ser 0.00."))
+
+    # 6) ERN resultado no vacío / numérico.
+    rows.append(("6. ERN — resultado calculado",
+                 f"=IF(ISNUMBER(ERN!$E${ern_resultado_row}),\"CALCULADO\",\"REVISAR\")",
+                 f"=ERN!$E${ern_resultado_row}",
+                 "El resultado por naturaleza debe existir."))
+
+    # 7) ERF resultado no vacío / numérico.
+    rows.append(("7. ERF — resultado calculado",
+                 f"=IF(ISNUMBER(ERF!$E${erf_resultado_row}),\"CALCULADO\",\"REVISAR\")",
+                 f"=ERF!$E${erf_resultado_row}",
+                 "El resultado por función debe existir."))
+
+    for i, (label, status, diff, note) in enumerate(rows, start=4):
+        ws.cell(i, 1, label)
+        ws.cell(i, 2, status)
+        ws.cell(i, 3, diff)
+        ws.cell(i, 4, note)
+        ws.cell(i, 1).font = BLACK
+        ws.cell(i, 2).font = BOLD
+        ws.cell(i, 3).number_format = '#,##0.00;(#,##0.00);"-"'
+        ws.cell(i, 4).font = GRAY
+
+    final_row = 4 + len(rows)
+    ws.cell(final_row, 1, "CONTROL FINAL")
+    # Los dos primeros controles son globales; los estados se validan de forma independiente.
+    ws.cell(final_row, 2, f'=IF(COUNTIF(B4:B{final_row-1},"REVISAR")=0,"✅ VALIDADO","⚠️ REVISAR")')
+    ws.cell(final_row, 1).font = BOLD
+    ws.cell(final_row, 2).font = Font(name=FONT, bold=True, size=11)
+    ws.cell(final_row, 3, "El control se recalcula al abrir el Excel.")
+    ws.merge_cells(start_row=final_row, start_column=3, end_row=final_row, end_column=4)
+
+    # Diagnóstico previo que sí puede calcularse sin Excel.
+    pre_row = final_row + 2
+    ws.cell(pre_row, 1, "REVISIÓN PREVIA DE ASIENTOS")
+    ws.cell(pre_row, 1).font = BOLD
+    if st.session_state.get("errores_asientos"):
+        ws.cell(pre_row + 1, 1, "⚠️ Se detectaron errores en los asientos antes de generar el Excel.")
+        for j, err in enumerate(st.session_state.get("errores_asientos", [])[:20], start=2):
+            ws.cell(pre_row + j, 1, err)
+    else:
+        ws.cell(pre_row + 1, 1, "✅ Los asientos pasan la validación básica de códigos, importes y Debe/Haber.")
+
+    ws.column_dimensions["A"].width = 48
+    ws.column_dimensions["B"].width = 18
+    ws.column_dimensions["C"].width = 18
+    ws.column_dimensions["D"].width = 62
+    ws.freeze_panes = "A4"
+    return ws.title
+
 def validate_asientos(data, pcge_map):
     errors = []
     warnings = []
@@ -4166,6 +4271,25 @@ if "monografia_texto" in st.session_state:
     ws_mono.freeze_panes = "A4"
 
 # ============================================================
+# VALIDACIÓN CONTABLE AUTOMÁTICA
+# ============================================================
+# Se agrega al Excel final para que el estudiante pueda ver los controles
+# matemáticos antes de utilizar el resultado.
+try:
+    _agregar_hoja_control_contable(
+        wb,
+        st.session_state.get("asientos_contables", []) or [],
+        HT_LAST_ROW,
+        ERN_RESULTADO_ROW,
+        resultado_erf_row,
+        control_esf_row,
+    )
+except Exception as _control_exc:
+    # La auditoría nunca debe impedir que TANA genere el Excel.
+    # Si falla su construcción, queda registrada en el chat/diagnóstico.
+    st.session_state["tana_control_contable_error"] = str(_control_exc)
+
+# ============================================================
 # PRESENTACIÓN DEL EXCEL FINAL
 # ============================================================
 # Las hojas auxiliares siguen existiendo durante la construcción porque
@@ -4173,7 +4297,7 @@ if "monografia_texto" in st.session_state:
 # al usuario. El archivo final muestra únicamente los reportes solicitados.
 if st.session_state.get("tana_modo_trabajo") == "asientos":
     # Modo básico: el estudiante pidió únicamente asientos / libro diario.
-    HOJAS_PUBLICAS = ["Asientos_Contables"]
+    HOJAS_PUBLICAS = ["Asientos_Contables", "VALIDACION"]
 else:
     HOJAS_PUBLICAS = [
         "Asientos_Contables",
@@ -4182,6 +4306,7 @@ else:
         "ESF",
         "ERF",
         "ERN",
+        "VALIDACION",
     ]
 
 for ws in wb.worksheets:
