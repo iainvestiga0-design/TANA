@@ -65,10 +65,25 @@ user_email = str(getattr(st.user, "email", "") or "").strip().lower()
 creator_email = str(st.secrets.get("TANA_CREATOR_EMAIL", "") or "").strip().lower()
 user_role = "Creador" if creator_email and user_email == creator_email else "Estudiante"
 
+# Identificación visible, breve y automática. Nunca mostramos el correo completo.
+if user_role == "Creador":
+    role_label = "👤 Creador"
+else:
+    email_local = user_email.split("@", 1)[0].strip()
+    initial = (email_local[:1] or "E").upper()
+    role_label = f"👤 Estudiante · {initial}"
+
+# Se muestra discretamente en la zona principal, sin llenar la interfaz.
+st.markdown(
+    f'<div style="display:flex;justify-content:flex-end;margin:-6px 2px 2px 0;">'
+    f'<span style="display:inline-block;padding:4px 10px;border:1px solid #DDE8EF;'
+    f'border-radius:999px;background:#F7FAFC;color:#5F7180;font-size:12px;'
+    f'font-weight:600;">{role_label}</span></div>',
+    unsafe_allow_html=True,
+)
+
 # El cierre de sesión se ofrece en la barra lateral sin alterar el flujo contable.
 with st.sidebar:
-    st.caption(f"Sesión: {getattr(st.user, 'email', getattr(st.user, 'name', 'Usuario'))}")
-    st.caption(f"Rol: {user_role}")
     st.button("Cerrar sesión", on_click=st.logout, use_container_width=True)
 
 # Gemini
