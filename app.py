@@ -212,6 +212,42 @@ if user_role == "Creador":
                 },
             )
 
+            # Ficha individual: permite al creador seleccionar un usuario
+            # del listado y consultar sus datos básicos sin modificar nada
+            # del motor contable.
+            st.markdown("### 🔎 Ficha del usuario")
+            selectable_users = [
+                str(u.get("email", "")).strip().lower()
+                for u in users_sorted
+                if str(u.get("email", "")).strip()
+            ]
+            if selectable_users:
+                selected_email = st.selectbox(
+                    "Selecciona un usuario",
+                    options=selectable_users,
+                    key="creator_selected_user",
+                )
+                selected = next(
+                    (u for u in users_sorted
+                     if str(u.get("email", "")).strip().lower() == selected_email),
+                    None,
+                )
+                if selected:
+                    selected_role = str(selected.get("role", "Estudiante"))
+                    if selected_role == "Creador":
+                        selected_visible_role = "Creador"
+                    else:
+                        local = selected_email.split("@", 1)[0].strip()
+                        selected_initial = (local[:1] or "E").upper()
+                        selected_visible_role = f"Estudiante · {selected_initial}"
+
+                    d1, d2, d3 = st.columns(3)
+                    d1.metric("Rol", selected_visible_role)
+                    d2.metric("Ingresos", int(selected.get("visits", 0) or 0))
+                    d3.metric("Último acceso", str(selected.get("last_seen", "")))
+                    st.caption(f"Correo: {selected_email}")
+                    st.caption(f"Primer acceso: {selected.get('first_seen', '')}")
+
             csv_rows = [
                 {
                     "N°": row["N°"],
