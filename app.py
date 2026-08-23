@@ -86,6 +86,19 @@ st.markdown(
 with st.sidebar:
     st.button("Cerrar sesión", on_click=st.logout, use_container_width=True)
 
+
+# ============================================================
+# PANEL EXCLUSIVO DEL CREADOR — PRUEBA DE PERMISOS
+# ============================================================
+# Esta sección es intencionalmente pequeña: solo verifica que el
+# rol controle una zona exclusiva. No modifica el motor contable.
+if user_role == "Creador":
+    with st.expander("🔐 Panel del Creador", expanded=False):
+        st.success("Acceso de creador verificado.")
+        st.caption("Esta zona solo es visible para la cuenta autorizada como creador.")
+        st.write("**Estado:** Creador autorizado")
+
+
 # Gemini
 from google import genai
 from google.genai import types
