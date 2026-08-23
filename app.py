@@ -1857,6 +1857,93 @@ def _agregar_hoja_control_contable(wb, asientos, ht_last_row, ern_resultado_row,
     else:
         ws.cell(pre_row + 1, 1, "✅ Los asientos pasan la validación básica de códigos, importes y Debe/Haber.")
 
+    # ==================== ETAPA 2: AUDITORÍA Y TRAZABILIDAD ====================
+    # Hoja adicional: no altera cálculos existentes. Relaciona cada línea
+    # del asiento con su origen y deja visibles los controles clave.
+    if "AUDITORIA_TANA" in wb.sheetnames:
+        del wb["AUDITORIA_TANA"]
+    wa = wb.create_sheet("AUDITORIA_TANA")
+
+    wa["A1"] = "AUDITORÍA Y TRAZABILIDAD TANA"
+    wa["A1"].font = Font(name=FONT, bold=True, size=14, color="1F4E78")
+    wa.merge_cells("A1:I1")
+    wa["A3"] = "Trazabilidad"
+    wa["A3"].font = BOLD
+    wa["A4"] = "Cada línea se enlaza al asiento y a la cuenta que TANA utilizó. Esta hoja es informativa y no modifica los cálculos."
+    wa.merge_cells("A4:I4")
+
+    audit_headers = ["Asiento", "Fecha", "Glosa / Operación", "Cuenta", "Debe", "Haber", "Diferencia", "Estado", "Origen"]
+    for col, h in enumerate(audit_headers, 1):
+        c = wa.cell(6, col, h)
+        c.font = BOLD
+
+    audit_row = 7
+    for a_idx, asiento in enumerate(asientos or [], start=1):
+        numero = asiento.get("numero", a_idx)
+        fecha = asiento.get("fecha", "")
+        glosa = asiento.get("glosa") or asiento.get("descripcion") or asiento.get("operacion") or ""
+        origen = asiento.get("origen") or asiento.get("fuente") or "Práctica procesada por TANA"
+        for linea in (asiento.get("lineas", []) or []):
+            codigo = str(linea.get("codigo", "")).strip()
+            debe = linea.get("debe", 0) or 0
+            haber = linea.get("haber", 0) or 0
+            try:
+                diff = float(debe) - float(haber)
+            except Exception:
+                diff = ""
+            wa.cell(audit_row, 1, numero)
+            wa.cell(audit_row, 2, fecha)
+            wa.cell(audit_row, 3, glosa)
+            wa.cell(audit_row, 4, codigo)
+            wa.cell(audit_row, 5, debe)
+            wa.cell(audit_row, 6, haber)
+            wa.cell(audit_row, 7, diff)
+            wa.cell(audit_row, 8, '=IF(ABS(G%d)<0.01,"OK","REVISAR")' % audit_row)
+            wa.cell(audit_row, 9, origen)
+            audit_row += 1
+
+    # Resumen de controles con referencias a VALIDACION.
+    summary_row = audit_row + 2
+    wa.cell(summary_row, 1, "RESUMEN DE CONTROLES")
+    wa.cell(summary_row, 1).font = BOLD
+    for col, h in enumerate(["Control", "Resultado", "Diferencia", "Lectura"], 1):
+        wa.cell(summary_row + 1, col, h).font = BOLD
+
+    controls = [
+        ("Debe = Haber de asientos", "=VALIDACION!B4", "=VALIDACION!C4", "Debe ser 0.00."),
+        ("HT movimientos", "=VALIDACION!B5", "=VALIDACION!C5", "Debe ser 0.00."),
+        ("HT saldos ajustados", "=VALIDACION!B6", "=VALIDACION!C6", "Debe ser 0.00."),
+        ("ERN = ERF", "=VALIDACION!B7", "=VALIDACION!C7", "Debe ser 0.00."),
+        ("ESF", "=VALIDACION!B8", "=VALIDACION!C8", "Activo debe coincidir con Pasivo + Patrimonio."),
+        ("Resultado ERN", "=VALIDACION!B9", "=VALIDACION!C9", "Debe existir un resultado numérico."),
+        ("Resultado ERF", "=VALIDACION!B10", "=VALIDACION!C10", "Debe existir un resultado numérico."),
+        ("Control final", "=VALIDACION!B11", "", "Resumen final de la validación."),
+    ]
+    for r, (control, result, diff, lectura) in enumerate(controls, start=summary_row+2):
+        wa.cell(r,1,control)
+        wa.cell(r,2,result)
+        wa.cell(r,3,diff)
+        wa.cell(r,4,lectura)
+
+    wa.cell(summary_row + len(controls) + 3, 1, "NOTA")
+    wa.cell(summary_row + len(controls) + 3, 2,
+            "La auditoría identifica el asiento y la cuenta origen de cada línea; los cálculos contables originales permanecen sin cambios.")
+    wa.merge_cells(start_row=summary_row + len(controls) + 3, start_column=2,
+                   end_row=summary_row + len(controls) + 3, end_column=9)
+
+    widths = [12, 14, 42, 16, 16, 16, 16, 14, 34]
+    for idx, width in enumerate(widths, 1):
+        wa.column_dimensions[chr(64+idx)].width = width
+    wa.freeze_panes = "A7"
+
+    # La auditoría debe acompañar al Excel final.
+    # Se añade a las hojas públicas sin ocultar ni modificar las anteriores.
+    try:
+        if "AUDITORIA_TANA" not in HOJAS_PUBLICAS:
+            HOJAS_PUBLICAS.append("AUDITORIA_TANA")
+    except Exception:
+        pass
+
     ws.column_dimensions["A"].width = 48
     ws.column_dimensions["B"].width = 18
     ws.column_dimensions["C"].width = 18
@@ -4340,7 +4427,7 @@ except Exception as _control_exc:
 # al usuario. El archivo final muestra únicamente los reportes solicitados.
 if st.session_state.get("tana_modo_trabajo") == "asientos":
     # Modo básico: el estudiante pidió únicamente asientos / libro diario.
-    HOJAS_PUBLICAS = ["Asientos_Contables", "VALIDACION"]
+    HOJAS_PUBLICAS = ["Asientos_Contables", "VALIDACION", "AUDITORIA_TANA"]
 else:
     HOJAS_PUBLICAS = [
         "Asientos_Contables",
@@ -4350,6 +4437,7 @@ else:
         "ERF",
         "ERN",
         "VALIDACION",
+        "AUDITORIA_TANA",
     ]
 
 for ws in wb.worksheets:
