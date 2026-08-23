@@ -99,7 +99,15 @@ def _supabase_request(method, path, payload=None, params=""):
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
-    if method in ("POST", "PATCH"):
+    if method == "POST":
+        # Supabase REST debe hacer UPSERT por email. Sin esta opción, un POST
+        # sobre un usuario que ya existe devuelve 409 y la actividad termina
+        # cayendo en el registro local, que no es persistente en Streamlit Cloud.
+        if "on_conflict=" in path or "on_conflict=" in params:
+            headers["Prefer"] = "resolution=merge-duplicates,return=representation"
+        else:
+            headers["Prefer"] = "return=representation"
+    elif method == "PATCH":
         headers["Prefer"] = "return=representation"
     try:
         data = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -152,7 +160,14 @@ def _load_user_registry():
 
 
 def _upsert_supabase_user(user):
-    rows = _supabase_request("POST", "tana_users", payload=user)
+    # UPSERT real: si el usuario ya existe, actualiza visitas/actividad en la
+    # misma fila en vez de devolver 409 por la clave primaria email.
+    rows = _supabase_request(
+        "POST",
+        "tana_users",
+        payload=user,
+        params="on_conflict=email",
+    )
     return isinstance(rows, list)
 
 
