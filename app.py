@@ -434,7 +434,7 @@ st.markdown("""
 <style>
 /* Oculta el header/menú default de Streamlit para look de app */
 #MainMenu, header[data-testid="stHeader"] {visibility: hidden; height: 0;}
-.block-container {padding-top: 1.2rem; padding-bottom: 12rem; max-width: 980px;}
+.block-container {padding-top: 1.2rem; padding-bottom: 22rem; max-width: 980px;}
 
 /* ---- Sidebar tipo ChatGPT/Claude ---- */
 section[data-testid="stSidebar"] {background: #F7F9FB; border-right: 1px solid #E3E9EE;}
@@ -474,7 +474,7 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .t
 div[data-testid="stVerticalBlockBorderWrapper"]:has(.tana-inputbar-anchor),
 div[data-testid="stVerticalBlock"]:has(.tana-inputbar-anchor) {
     position: fixed !important;
-    bottom: 34px; left: 50%; transform: translateX(-50%);
+    bottom: 24px; left: 50%; transform: translateX(-50%);
     width: min(940px, 94vw);
     z-index: 999;
     background: #fff;
@@ -538,6 +538,41 @@ div[data-testid="stVerticalBlock"]:has(.tana-inputbar-anchor) [data-testid*="Aud
 /* Botón enviar: circular, color de marca */
 div[data-testid="stVerticalBlock"]:has(.tana-inputbar-anchor) button[kind="primary"] {
     border-radius: 50% !important; width: 40px; height: 40px; padding: 0 !important;
+}
+
+/* ---- Panel de avance: queda SIEMPRE visible encima de la barra de entrada.
+   Su función es mostrar en qué etapa está TANA mientras Gemini trabaja y
+   mantener accesible el resultado final sin obligar a buscarlo con scroll. ---- */
+div[data-testid="stVerticalBlock"]:has(.tana-progress-anchor),
+div[data-testid="stVerticalBlockBorderWrapper"]:has(.tana-progress-anchor) {
+    position: fixed !important;
+    bottom: 116px; left: 50%; transform: translateX(-50%);
+    width: min(940px, 94vw);
+    z-index: 1000;
+    pointer-events: none;
+}
+.tana-progress-panel {
+    background: rgba(255,255,255,.98);
+    border: 1px solid #DDE8EF; border-radius: 16px;
+    padding: 10px 16px; box-shadow: 0 6px 22px rgba(18,48,74,.10);
+    color: #12304A; font-size: 13px;
+}
+.tana-progress-title {font-weight:800; font-size:13.5px; margin-bottom:7px;}
+.tana-progress-track {height:7px; background:#EDF2F5; border-radius:99px; overflow:hidden; margin:6px 0 8px;}
+.tana-progress-fill {height:100%; border-radius:99px; background:#087EA4; transition:width .25s ease;}
+.tana-progress-steps {display:flex; justify-content:space-between; gap:8px; color:#6B7B87; font-size:11.5px;}
+.tana-progress-step.done {color:#087EA4; font-weight:700;}
+
+/* Resultado/descarga: se mantiene visible encima de la barra cuando el Excel
+   ya está listo. El botón sigue siendo un widget real de Streamlit. */
+div[data-testid="stVerticalBlock"]:has(.tana-download-anchor),
+div[data-testid="stVerticalBlockBorderWrapper"]:has(.tana-download-anchor) {
+    position: fixed !important;
+    bottom: 116px; left: 50%; transform: translateX(-50%);
+    width: min(940px, 94vw);
+    z-index: 1001;
+    background:#fff; border:1px solid #DDE8EF; border-radius:16px;
+    padding:10px 14px; box-shadow:0 6px 22px rgba(18,48,74,.10);
 }
 
 /* Chip que aparece cuando ya hay un archivo cargado: la barra se
@@ -649,6 +684,39 @@ with inputbar_container:
             f'<div class="tana-file-chip">📎 {uploaded_file.name} · pulsa ➤ para enviar y procesar</div>',
             unsafe_allow_html=True,
         )
+
+# Panel fijo de avance: se crea antes del procesamiento para que el usuario
+# pueda ver el estado en tiempo real mientras las llamadas a Gemini están activas.
+progress_container = st.container()
+with progress_container:
+    st.markdown('<span class="tana-progress-anchor"></span>', unsafe_allow_html=True)
+    progress_placeholder = st.empty()
+
+def _mostrar_avance(porcentaje, etapa, detalle=""):
+    pasos = [
+        ("Archivo", porcentaje >= 15),
+        ("Lectura", porcentaje >= 45),
+        ("Asientos", porcentaje >= 75),
+        ("Validación", porcentaje >= 90),
+        ("Excel listo", porcentaje >= 100),
+    ]
+    steps_html = "".join(
+        f'<span class="tana-progress-step {"done" if ok else ""}">{"✓" if ok else "○"} {nombre}</span>'
+        for nombre, ok in pasos
+    )
+    detalle_html = (
+        f'<div style="margin-top:6px;color:#6B7B87;font-size:12px;">{detalle}</div>'
+        if detalle else ""
+    )
+    progress_placeholder.markdown(
+        f'<div class="tana-progress-panel">'
+        f'<div class="tana-progress-title">TANA · {etapa}</div>'
+        f'<div class="tana-progress-track"><div class="tana-progress-fill" style="width:{max(0,min(100,porcentaje))}%"></div></div>'
+        f'<div class="tana-progress-steps">{steps_html}</div>'
+        f'{("<div style=\"margin-top:6px;color:#6B7B87;font-size:12px;\">" + detalle + "</div>") if detalle else ""}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
 
 def _normalizar_nombre_hoja(nombre):
     return re.sub(r"[^a-z0-9]", "", str(nombre or "").lower())
@@ -948,12 +1016,14 @@ if uploaded_file is not None and enviar_top and st.session_state.get("tana_file_
     ):
         st.session_state.pop(_key, None)
     if _es_excel_tana(uploaded_file.name):
+        _mostrar_avance(20, "Leyendo el Excel", "Reconstruyendo los asientos y preparando el diagnóstico…")
         with st.spinner("TANA está leyendo el Excel para revisión…"):
             try:
                 asientos_importados = _cargar_asientos_desde_excel(uploaded_file)
                 # La validación vive en el motor principal y se ejecuta DESPUÉS
                 # de cargar el Excel. Esto evita depender de parches/funciones
                 # externas que puedan provocar NameError.
+                _mostrar_avance(75, "Validando los asientos", "Comprobando códigos, importes y que cada asiento cuadre…")
                 valid, errors, warnings = validate_asientos({"asientos": asientos_importados}, pcge_map)
                 st.session_state["asientos_contables"] = asientos_importados
                 st.session_state["asientos_validos"] = valid
@@ -999,6 +1069,7 @@ if uploaded_file is not None and enviar_top and st.session_state.get("tana_file_
                 st.error(f"No se pudo cargar el Excel para revisión: {exc}")
                 st.stop()
     else:
+        _mostrar_avance(20, "Leyendo la monografía", "Extrayendo operaciones, fechas, importes y cuentas…")
         with st.spinner("TANA está leyendo y procesando la monografía…"):
             try:
                 extracted = extract_with_gemini(uploaded_file)
@@ -1006,6 +1077,7 @@ if uploaded_file is not None and enviar_top and st.session_state.get("tana_file_
                 st.session_state["monografia_texto"] = extraction_to_text(extracted)
                 st.session_state["monografia_nombre"] = uploaded_file.name
                 st.session_state["tana_file_signature"] = file_signature
+                _mostrar_avance(45, "Lectura terminada", "La información fue extraída. Ahora TANA desarrolla los asientos contables…")
             except json.JSONDecodeError:
                 st.error("Gemini respondió con un formato que no pudo convertirse a JSON. Vuelve a intentarlo.")
                 st.stop()
@@ -1569,6 +1641,7 @@ def resolve_asientos_with_gemini():
     return data, pcge_map
 
 if "monografia_json" in st.session_state and "asientos_contables" not in st.session_state:
+    _mostrar_avance(55, "Desarrollando los asientos", "Aplicando el PCGE y construyendo cada asiento de la monografía…")
     with st.spinner("TANA está desarrollando y validando los asientos contables…"):
         try:
             resolved, pcge_map = resolve_asientos_with_gemini()
@@ -1582,6 +1655,7 @@ if "monografia_json" in st.session_state and "asientos_contables" not in st.sess
                 raise ValueError("La respuesta de Gemini no tiene una estructura de asientos válida.")
             if not isinstance(asientos_generados, list):
                 raise ValueError("La clave 'asientos' de Gemini no contiene una lista.")
+            _mostrar_avance(78, "Asientos desarrollados", "TANA terminó de generar los asientos. Ahora está haciendo la validación contable…")
             asientos_generados = asegurar_cuenta_79_en_destinos(asientos_generados, pcge_map)
             asientos_generados = corregir_retiro_socio(asientos_generados, st.session_state.get("monografia_json", {}))
             valid, errors, warnings = validate_asientos({"asientos": asientos_generados}, pcge_map)
@@ -1589,6 +1663,7 @@ if "monografia_json" in st.session_state and "asientos_contables" not in st.sess
             st.session_state["asientos_validos"] = valid
             st.session_state["errores_asientos"] = errors
             st.session_state["alertas_asientos"] = list(alertas_gemini) + list(warnings)
+            _mostrar_avance(92, "Validación terminada", "Los asientos ya están disponibles; TANA está preparando el Excel final…")
         except Exception as exc:
             st.error(f"No se pudieron desarrollar los asientos: {exc}")
             st.stop()
@@ -3140,21 +3215,32 @@ if _sig and st.session_state.get("tana_resuelto_signature") != _sig:
     st.rerun()
 
 if st.session_state.get("tana_excel_buffer"):
+    _n_asientos = len(st.session_state.get("asientos_contables", []) or [])
+    _n_validos = len(st.session_state.get("asientos_validos", []) or [])
+    _n_errores = len(st.session_state.get("errores_asientos", []) or [])
+    download_container = st.container()
+    with download_container:
+        st.markdown('<span class="tana-download-anchor"></span>', unsafe_allow_html=True)
+        st.markdown(
+            '<div style="font-weight:800;color:#12304A;font-size:13.5px;margin-bottom:4px;">📊 Resultado listo</div>'
+            f'<div style="color:#6B7B87;font-size:12px;margin-bottom:7px;">Asientos preparados: <b>{_n_asientos}</b> · Validados: <b>{_n_validos}</b>' + (f' · Con observaciones: <b>{_n_errores}</b>' if _n_errores else '') + '</div>',
+            unsafe_allow_html=True,
+        )
+        st.download_button(
+            label="⬇️  Descargar Excel",
+            data=st.session_state["tana_excel_buffer"],
+            file_name=(
+                f"TANA_Contabilidad_corregido_v{st.session_state.get('tana_correccion_version', 1)}.xlsx"
+                if st.session_state.get("tana_correcciones", 0) else
+                ("TANA_Asientos.xlsx" if st.session_state.get("tana_modo_trabajo") == "asientos" else "TANA_Contabilidad.xlsx")
+            ),
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
     st.markdown(
         '<div class="tana-bubble-assistant" style="max-width:340px;">'
         '<div class="tana-result-card"><span style="font-size:22px;">📊</span>'
         '<span class="name">TANA · Excel · Desarrollo</span></div></div>',
         unsafe_allow_html=True,
-    )
-    st.download_button(
-        label="⬇️  Descargar Excel",
-        data=st.session_state["tana_excel_buffer"],
-        file_name=(
-            f"TANA_Contabilidad_corregido_v{st.session_state.get('tana_correccion_version', 1)}.xlsx"
-            if st.session_state.get("tana_correcciones", 0) else
-            ("TANA_Asientos.xlsx" if st.session_state.get("tana_modo_trabajo") == "asientos" else "TANA_Contabilidad.xlsx")
-        ),
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
     if "monografia_nombre" in st.session_state:
         st.caption("La hoja Monografia conserva el texto extraído para revisión.")
