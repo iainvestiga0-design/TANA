@@ -59,9 +59,16 @@ if not st.user.is_logged_in:
     st.stop()
 
 # Usuario autenticado: la aplicación continúa normalmente.
+# La identificación del rol es automática mediante el correo devuelto por Google.
+# El correo autorizado del creador se guarda en Streamlit Secrets y nunca se muestra.
+user_email = str(getattr(st.user, "email", "") or "").strip().lower()
+creator_email = str(st.secrets.get("TANA_CREATOR_EMAIL", "") or "").strip().lower()
+user_role = "Creador" if creator_email and user_email == creator_email else "Estudiante"
+
 # El cierre de sesión se ofrece en la barra lateral sin alterar el flujo contable.
 with st.sidebar:
     st.caption(f"Sesión: {getattr(st.user, 'email', getattr(st.user, 'name', 'Usuario'))}")
+    st.caption(f"Rol: {user_role}")
     st.button("Cerrar sesión", on_click=st.logout, use_container_width=True)
 
 # Gemini
