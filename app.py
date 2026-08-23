@@ -671,11 +671,119 @@ with inputbar_container:
         )
 
 def _normalizar_nombre_hoja(nombre):
-    return re.sub(r"[^a-z0-9]", "", str(nombre or "").lower())
+    """Normaliza nombres de hojas sin depender de abreviaturas exactas."""
+    txt = unicodedata.normalize("NFKD", str(nombre or "")).encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"[^a-z0-9]", "", txt.lower())
+
+
+def _normalizar_encabezado(valor):
+    txt = unicodedata.normalize("NFKD", str(valor or "")).encode("ascii", "ignore").decode("ascii")
+    txt = re.sub(r"[^a-z0-9]+", " ", txt.lower()).strip()
+    return txt
+
+
+def _detectar_estructura_excel(wb):
+    """Identifica hojas por contenido y usa el nombre solo como pista.
+
+    El estudiante puede llamar a las hojas LD, Libro Diario, Asientos, Hoja1,
+    Diario, etc. La decisión principal se toma por los encabezados y los datos.
+    """
+    candidatos = []
+    for idx, name in enumerate(wb.sheetnames):
+        ws = wb[name]
+        max_scan_rows = min(ws.max_row, 25)
+        max_scan_cols = min(ws.max_column, 40)
+        valores = []
+        for r in range(1, max_scan_rows + 1):
+            fila = []
+            for c in range(1, max_scan_cols + 1):
+                v = ws.cell(r, c).value
+                if v not in (None, ""):
+                    fila.append(_normalizar_encabezado(v))
+            if fila:
+                valores.append((r, fila))
+
+        # La fila con mayor cantidad de señales contables se considera candidata
+        # a encabezado, aunque no esté en la primera fila.
+        best = None
+        for r, fila in valores:
+            joined = " | ".join(fila)
+            score = 0
+            hits = set()
+            for key, patterns in {
+                "codigo": ("codigo", "cuenta", "codigo cuenta", "cuenta contable"),
+                "debe": ("debe", "debe s", "debe soles", "cargo"),
+                "haber": ("haber", "haber s", "haber soles", "abono"),
+                "fecha": ("fecha", "fecha operacion", "fecha del asiento"),
+                "glosa": ("glosa", "descripcion", "concepto", "detalle"),
+                "asiento": ("asiento", "n asiento", "numero asiento", "nro asiento", "n° asiento"),
+                "denominacion": ("denominacion", "nombre cuenta", "descripcion cuenta"),
+                "activo": ("activo",), "pasivo": ("pasivo",), "patrimonio": ("patrimonio",),
+                "resultado": ("resultado", "utilidad", "perdida"),
+                "ajustes": ("ajustes", "balance de comprobacion", "balance de comprobación"),
+            }.items():
+                if any(pat in joined for pat in patterns):
+                    hits.add(key)
+            score += 5 * len(hits.intersection({"codigo", "debe", "haber"}))
+            score += 2 * len(hits.intersection({"fecha", "glosa", "asiento", "denominacion"}))
+            score += 2 * len(hits.intersection({"activo", "pasivo", "patrimonio", "resultado", "ajustes"}))
+            if best is None or score > best[0]:
+                best = (score, r, hits, fila)
+
+        norm_name = _normalizar_nombre_hoja(name)
+        name_bonus_journal = any(x in norm_name for x in ("ld", "librodiario", "asientos", "diario", "registrodeoperaciones"))
+        name_bonus_ht = any(x in norm_name for x in ("ht", "hojadetrabajo", "hojadetrabajo"))
+        name_bonus_ef = any(x in norm_name for x in ("ef", "esf", "ern", "erf", "estadosfinancieros", "estados"))
+        score, header_row, hits, _ = best or (0, 1, set(), [])
+        journal_score = score + (4 if name_bonus_journal else 0) + (3 if {"codigo", "debe", "haber"}.issubset(hits) else 0)
+        ht_score = score + (4 if name_bonus_ht else 0) + (3 if "ajustes" in hits else 0)
+        ef_score = score + (4 if name_bonus_ef else 0) + (4 if len(hits.intersection({"activo", "pasivo", "patrimonio", "resultado"})) >= 2 else 0)
+        candidatos.append({"name": name, "header_row": header_row or 1, "hits": hits,
+                           "journal_score": journal_score, "ht_score": ht_score, "ef_score": ef_score})
+
+    journal = max(candidatos, key=lambda x: x["journal_score"], default=None)
+    if journal and journal["journal_score"] < 8:
+        journal = None
+    ht = max(candidatos, key=lambda x: x["ht_score"], default=None)
+    if ht and ht["ht_score"] < 6:
+        ht = None
+    ef = max(candidatos, key=lambda x: x["ef_score"], default=None)
+    if ef and ef["ef_score"] < 6:
+        ef = None
+    return {"libro_diario": journal, "hoja_trabajo": ht, "estados": ef, "candidatos": candidatos}
+
+
+def _resolver_fila_encabezados(ws, max_scan_rows=25):
+    """Encuentra la fila de encabezados del diario aunque no sea la fila 1."""
+    required = ("codigo", "debe", "haber")
+    best = (0, 1, {})
+    for r in range(1, min(ws.max_row, max_scan_rows) + 1):
+        headers = {}
+        for c in range(1, min(ws.max_column, 60) + 1):
+            v = _normalizar_encabezado(ws.cell(r, c).value)
+            if v:
+                headers[v] = c
+        score = sum(1 for h in headers if any(h == x or x.startswith(x + " ") for x in required))
+        if score > best[0]:
+            best = (score, r, headers)
+    return best[1], best[2]
+
+
+def _resolver_columna(headers, aliases):
+    for alias in aliases:
+        a = _normalizar_encabezado(alias)
+        for h, c in headers.items():
+            if h == a or h.startswith(a + " ") or a in h:
+                return c
+    return None
+
 
 def _cargar_asientos_desde_excel(uploaded):
-    """Lee un Excel generado por TANA y reconstruye sus asientos.
-    Conserva los importes recibidos y no los recalcula durante la importación.
+    """Lee cualquier Excel contable razonable sin exigir nombres de hojas.
+
+    Se identifica el Libro Diario por contenido (Código/Cuenta + Debe + Haber),
+    usando el nombre de la hoja únicamente como señal adicional. Los encabezados
+    pueden estar en cualquier fila inicial habitual.
     """
     data = uploaded.getvalue()
     try:
@@ -683,108 +791,70 @@ def _cargar_asientos_desde_excel(uploaded):
     except Exception as exc:
         raise ValueError(f"No se pudo abrir el archivo Excel: {exc}")
 
-    # Admitimos pequeñas variaciones del nombre de la hoja.
-    sheet_name = None
-    for name in wb_in.sheetnames:
-        norm = _normalizar_nombre_hoja(name)
-        if norm in ("asientoscontables", "asientos", "librodiario"):
-            sheet_name = name
-            break
-    if not sheet_name:
+    estructura = _detectar_estructura_excel(wb_in)
+    diario = estructura.get("libro_diario")
+    if not diario:
+        detalle = ", ".join(f"{x['name']} (señales: {', '.join(sorted(x['hits'])) or 'ninguna'})" for x in estructura.get("candidatos", []))
         raise ValueError(
-            "No encontré la hoja de asientos. El Excel debe contener "
-            "'Asientos_Contables' (o una hoja equivalente de Libro Diario)."
+            "No pude identificar automáticamente el Libro Diario por su contenido. "
+            "Busqué columnas equivalentes a Código/Cuenta, Debe y Haber en todas las hojas. "
+            f"Hojas revisadas: {detalle}."
         )
 
+    sheet_name = diario["name"]
     ws = wb_in[sheet_name]
-    headers = {}
-    for c in range(1, ws.max_column + 1):
-        value = str(ws.cell(1, c).value or "").strip()
-        if value:
-            headers[value] = c
+    header_row, headers = _resolver_fila_encabezados(ws)
 
     aliases = {
-        "N° Asiento": ["N° Asiento", "Nº Asiento", "No. Asiento", "Asiento", "N°"],
-        "Fecha": ["Fecha"],
-        "Glosa": ["Glosa", "Descripción"],
-        "Documento": ["Documento", "Documento Ref.", "Documento Ref"],
+        "N° Asiento": ["N° Asiento", "Nº Asiento", "No. Asiento", "Numero Asiento", "Nro Asiento", "Asiento", "N°"],
+        "Fecha": ["Fecha", "Fecha Operación", "Fecha del Asiento"],
+        "Glosa": ["Glosa", "Descripción", "Descripcion", "Concepto", "Detalle"],
+        "Documento": ["Documento", "Documento Ref.", "Documento Ref", "Comprobante"],
         "Operación": ["Operación", "Operacion", "N° Operación", "N° Operacion"],
-        "Código": ["Código", "Codigo", "Cuenta", "Código Cuenta"],
-        "Denominación": ["Denominación", "Denominacion", "Nombre Cuenta", "Descripción Cuenta"],
-        "Concepto": ["Concepto", "Detalle"],
-        "Debe S/": ["Debe S/", "Debe", "Debe S/.","DEBE"],
-        "Haber S/": ["Haber S/", "Haber", "Haber S/.","HABER"],
+        "Código": ["Código", "Codigo", "Cuenta", "Código Cuenta", "Cuenta Contable"],
+        "Denominación": ["Denominación", "Denominacion", "Nombre Cuenta", "Descripción Cuenta", "Descripcion Cuenta"],
+        "Concepto": ["Concepto", "Detalle", "Glosa"],
+        "Debe S/": ["Debe S/", "Debe", "Debe S/.", "DEBE", "Cargo"],
+        "Haber S/": ["Haber S/", "Haber", "Haber S/.", "HABER", "Abono"],
     }
-    resolved = {}
-    for canonical, names in aliases.items():
-        for candidate in names:
-            if candidate in headers:
-                resolved[canonical] = headers[candidate]
-                break
-
-    required = ["N° Asiento", "Código", "Debe S/", "Haber S/"]
-    missing = [h for h in required if h not in resolved]
+    resolved = {canonical: _resolver_columna(headers, names) for canonical, names in aliases.items()}
+    required = ["Código", "Debe S/", "Haber S/"]
+    missing = [h for h in required if not resolved.get(h)]
     if missing:
-        raise ValueError(
-            "El Excel no tiene la estructura de asientos esperada. "
-            "Faltan columnas: " + ", ".join(missing)
-        )
-
-    asientos = []
-    actual = None
+        raise ValueError("Identifiqué la hoja '%s' como posible Libro Diario, pero faltan columnas: %s." % (sheet_name, ", ".join(missing)))
 
     def cell(row, key, default=""):
         col = resolved.get(key)
         if not col:
             return default
-        return ws.cell(row, col).value if ws.cell(row, col).value is not None else default
+        value = ws.cell(row, col).value
+        return value if value is not None else default
 
-    for r in range(2, ws.max_row + 1):
+    asientos, actual = [], None
+    for r in range(header_row + 1, ws.max_row + 1):
         numero = cell(r, "N° Asiento", "")
         codigo = str(cell(r, "Código", "") or "").strip()
-
         if numero in ("", None) and not codigo:
             continue
-
-        # En el Excel de TANA, fecha/glosa/número aparecen solo en la primera
-        # línea de cada asiento.
         if numero not in ("", None):
             try:
-                if isinstance(numero, float) and numero.is_integer():
-                    numero = int(numero)
-                elif isinstance(numero, str) and numero.strip().isdigit():
-                    numero = int(numero.strip())
+                if isinstance(numero, float) and numero.is_integer(): numero = int(numero)
+                elif isinstance(numero, str) and numero.strip().isdigit(): numero = int(numero.strip())
             except Exception:
                 pass
-
-            actual = {
-                "numero": numero,
-                "fecha": cell(r, "Fecha", ""),
-                "glosa": cell(r, "Glosa", ""),
-                "documento": cell(r, "Documento", ""),
-                "operacion_numero": cell(r, "Operación", ""),
-                "lineas": [],
-            }
+            actual = {"numero": numero, "fecha": cell(r, "Fecha", ""), "glosa": cell(r, "Glosa", ""),
+                      "documento": cell(r, "Documento", ""), "operacion_numero": cell(r, "Operación", ""), "lineas": []}
             asientos.append(actual)
-
         if actual is None or not codigo:
             continue
-
-        debe = _to_float(cell(r, "Debe S/", 0), 0.0)
-        haber = _to_float(cell(r, "Haber S/", 0), 0.0)
         actual["lineas"].append({
-            "codigo": codigo,
-            "denominacion": cell(r, "Denominación", ""),
-            "concepto": cell(r, "Concepto", ""),
-            "debe": debe,
-            "haber": haber,
+            "codigo": codigo, "denominacion": cell(r, "Denominación", ""),
+            "concepto": cell(r, "Concepto", ""), "debe": _to_float(cell(r, "Debe S/", 0), 0.0),
+            "haber": _to_float(cell(r, "Haber S/", 0), 0.0),
         })
-
     if not asientos:
-        raise ValueError("No se encontraron asientos contables en el Excel.")
-
+        raise ValueError("La hoja '%s' fue identificada como Libro Diario, pero no contiene asientos reconocibles." % sheet_name)
     return asientos
-
 
 def _diagnosticar_asientos(asientos, pcge_map):
     """Diagnóstico determinista y explícito para que TANA señale dónde está el error."""
@@ -989,6 +1059,12 @@ if uploaded_file is not None and enviar_top and st.session_state.get("tana_file_
                 st.session_state["tana_diagnostico_excel"] = _diagnosticar_asientos(
                     asientos_importados, pcge_map
                 )
+                # Guardamos también qué hoja fue reconocida por contenido, no por nombre.
+                try:
+                    wb_probe = openpyxl.load_workbook(io.BytesIO(uploaded_file.getvalue()), data_only=False, read_only=False)
+                    st.session_state["tana_excel_estructura"] = _detectar_estructura_excel(wb_probe)
+                except Exception:
+                    st.session_state["tana_excel_estructura"] = {}
                 st.session_state["tana_file_signature"] = file_signature
                 st.session_state["tana_correccion_version"] = 1
                 st.session_state["tana_modo_trabajo"] = "completo"
@@ -1712,11 +1788,14 @@ def _crear_excel_revision_desde_origen(asientos, errores):
     if not origen:
         return None
     wb_in = openpyxl.load_workbook(io.BytesIO(origen), data_only=False)
-    sheet_name = next((n for n in wb_in.sheetnames if _normalizar_nombre_hoja(n) in ("asientoscontables", "asientos", "librodiario")), None)
-    if not sheet_name:
-        raise ValueError("No encontré la hoja de asientos en el Excel original.")
+    estructura = _detectar_estructura_excel(wb_in)
+    diario = estructura.get("libro_diario")
+    if not diario:
+        raise ValueError("No pude identificar el Libro Diario por contenido para generar la corrección.")
+    sheet_name = diario["name"]
     ws = wb_in[sheet_name]
-    headers = {str(ws.cell(1,c).value or "").strip(): c for c in range(1, ws.max_column+1)}
+    header_row, _headers_detectados = _resolver_fila_encabezados(ws)
+    headers = {str(ws.cell(header_row,c).value or "").strip(): c for c in range(1, ws.max_column+1)}
     aliases = {
         "N° Asiento":["N° Asiento","Nº Asiento","No. Asiento","Asiento","N°"],
         "Fecha":["Fecha"], "Glosa":["Glosa","Descripción"],
@@ -1738,7 +1817,7 @@ def _crear_excel_revision_desde_origen(asientos, errores):
         for line in a.get("lineas",[]):
             rows.append((a,line,first))
             first=False
-    start=2
+    start=header_row + 1
     # Para conservar las fórmulas y referencias de las hojas, normalmente las correcciones
     # tienen el mismo número de líneas. Si cambia, ajustamos filas al final.
     old_rows=ws.max_row-start+1
