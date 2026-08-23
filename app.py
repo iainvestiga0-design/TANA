@@ -434,7 +434,7 @@ st.markdown("""
 <style>
 /* Oculta el header/menú default de Streamlit para look de app */
 #MainMenu, header[data-testid="stHeader"] {visibility: hidden; height: 0;}
-.block-container {padding-top: 1.2rem; padding-bottom: 8rem; max-width: 980px;}
+.block-container {padding-top: 1.2rem; padding-bottom: 9.5rem; max-width: 980px;}
 
 /* ---- Sidebar tipo ChatGPT/Claude ---- */
 section[data-testid="stSidebar"] {background: #F7F9FB; border-right: 1px solid #E3E9EE;}
@@ -480,7 +480,7 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .t
     border-radius: 22px;
     padding: 8px 14px 10px 14px;
     box-shadow: 0 6px 22px rgba(18,48,74,.09);
-    margin-bottom: 16px;
+    margin-bottom: 34px;
 }
 
 /* ---- Unifica los 4 controles (adjuntar, texto, micro, enviar) en UNA
