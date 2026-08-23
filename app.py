@@ -99,6 +99,41 @@ def _save_user_registry(data):
             pass
         return False
 
+def _record_user_activity(event_type, detail="", signature=""):
+    """Registra actividad breve del usuario autenticado, sin guardar archivos ni contenido sensible."""
+    if not user_email:
+        return False
+    users = _load_user_registry()
+    user = next((u for u in users if str(u.get("email", "")).strip().lower() == user_email), None)
+    if user is None:
+        return False
+
+    activity = user.get("activity", [])
+    if not isinstance(activity, list):
+        activity = []
+
+    # Evita duplicados cuando Streamlit vuelve a ejecutar el script por un rerun.
+    if signature:
+        duplicate = any(
+            str(item.get("event", "")) == str(event_type)
+            and str(item.get("detail", "")) == str(detail)
+            and str(item.get("signature", "")) == str(signature)
+            for item in activity
+        )
+        if duplicate:
+            return True
+
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    activity.append({
+        "timestamp": now,
+        "event": str(event_type),
+        "detail": str(detail)[:300],
+        "signature": str(signature)[:120],
+    })
+    # Conservamos solo las actividades más recientes para mantener ligero el registro.
+    user["activity"] = activity[-100:]
+    return _save_user_registry(users)
+
 def _register_current_user():
     if not user_email:
         return []
@@ -247,6 +282,37 @@ if user_role == "Creador":
                     d3.metric("Último acceso", str(selected.get("last_seen", "")))
                     st.caption(f"Correo: {selected_email}")
                     st.caption(f"Primer acceso: {selected.get('first_seen', '')}")
+
+                    # Seguimiento de actividad: muestra únicamente eventos resumidos.
+                    activity = selected.get("activity", [])
+                    if not isinstance(activity, list):
+                        activity = []
+                    st.markdown("#### 📈 Actividad reciente")
+                    if activity:
+                        event_labels = {
+                            "archivo_cargado": "📄 Archivo cargado",
+                            "desarrollo_completado": "✅ Desarrollo completado",
+                            "excel_descargado": "⬇️ Excel descargado",
+                        }
+                        activity_rows = []
+                        for item in reversed(activity[-20:]):
+                            activity_rows.append({
+                                "Fecha": str(item.get("timestamp", "")),
+                                "Actividad": event_labels.get(str(item.get("event", "")), str(item.get("event", ""))),
+                                "Detalle": str(item.get("detail", "")),
+                            })
+                        st.dataframe(
+                            activity_rows,
+                            use_container_width=True,
+                            hide_index=True,
+                            column_config={
+                                "Fecha": st.column_config.TextColumn(width="medium"),
+                                "Actividad": st.column_config.TextColumn(width="medium"),
+                                "Detalle": st.column_config.TextColumn(width="large"),
+                            },
+                        )
+                    else:
+                        st.info("Todavía no hay actividad registrada para este usuario.")
 
             csv_rows = [
                 {
@@ -1310,6 +1376,7 @@ if uploaded_file is not None and enviar_top and st.session_state.get("tana_file_
 
                 st.session_state["tana_file_signature"] = file_signature
                 st.session_state["tana_modo_trabajo"] = "revision_excel"
+                _record_user_activity("archivo_cargado", uploaded_file.name, file_signature)
                 # NO guardar el archivo original como archivo de salida.
                 st.session_state.pop("tana_excel_buffer", None)
                 _tana_chat_add(
@@ -1339,6 +1406,7 @@ if uploaded_file is not None and enviar_top and st.session_state.get("tana_file_
                 st.session_state["monografia_texto"] = extraction_to_text(extracted)
                 st.session_state["monografia_nombre"] = uploaded_file.name
                 st.session_state["tana_file_signature"] = file_signature
+                _record_user_activity("archivo_cargado", uploaded_file.name, file_signature)
             except json.JSONDecodeError:
                 st.error("Gemini respondió con un formato que no pudo convertirse a JSON. Vuelve a intentarlo.")
                 st.stop()
@@ -3658,6 +3726,7 @@ if _sig and st.session_state.get("tana_resuelto_signature") != _sig:
     )
     st.session_state["tana_resuelto_signature"] = _sig
     st.session_state["tana_excel_buffer"] = buffer.getvalue()
+    _record_user_activity("desarrollo_completado", st.session_state.get("monografia_nombre", "archivo"), _sig)
     st.rerun()
 
 if st.session_state.get("tana_excel_buffer"):
@@ -3672,9 +3741,17 @@ if st.session_state.get("tana_excel_buffer"):
         f'</div>',
         unsafe_allow_html=True,
     )
+    def _registrar_descarga_excel():
+        _record_user_activity(
+            "excel_descargado",
+            st.session_state.get("monografia_nombre", "TANA_Contabilidad.xlsx"),
+            st.session_state.get("tana_resuelto_signature", ""),
+        )
+
     st.download_button(
         label="⬇️  Descargar Excel",
         data=st.session_state["tana_excel_buffer"],
+        on_click=_registrar_descarga_excel,
         file_name=(
             f"TANA_Contabilidad_corregido_v{st.session_state.get('tana_correccion_version', 1)}.xlsx"
             if st.session_state.get("tana_correcciones", 0) else
