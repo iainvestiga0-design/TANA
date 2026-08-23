@@ -3674,6 +3674,49 @@ for c in range(3, 19):
     ws6.cell(r, c, f'=SUM({letter}4:{letter}{HT_LAST_ROW})').font = BOLD
     ws6.cell(r, c).number_format = '#,##0.00;(#,##0.00);"-"'
 
+# ------------------------------------------------------------
+# DIFERENCIA / RESTA — línea de cierre de la Hoja de Trabajo
+# ------------------------------------------------------------
+# La plantilla de referencia del usuario muestra una línea adicional debajo
+# de TOTAL para hacer explícita la resta entre los dos lados de cada bloque.
+# TANA antes dejaba esa diferencia implícita en los estados, lo que hacía
+# difícil localizar un descuadre. Aquí se calcula de forma determinista y
+# visible, sin inventar cuentas ni modificar los movimientos originales.
+#
+# En R.NAT y R.FUNCIÓN la diferencia es el resultado neto: lado acreedor
+# menos lado deudor cuando los ingresos superan a los gastos, o viceversa.
+# En E.S.F. se coloca la diferencia en el lado menor para mostrar qué importe
+# debe explicar el patrimonio/resultado.
+HT_DIF_ROW = r + 1
+ws6.cell(HT_DIF_ROW, 2, "DIFERENCIA / RESTA").font = BOLD
+ws6.cell(HT_DIF_ROW, 2).fill = PatternFill('solid', fgColor='FFF2CC')
+
+# Ajustes: deben cuadrar por sí mismos.
+ws6.cell(HT_DIF_ROW, 7, f'=ABS(G{HT_TOTAL_ROW}-H{HT_TOTAL_ROW})')
+ws6.cell(HT_DIF_ROW, 8, f'=ABS(G{HT_TOTAL_ROW}-H{HT_TOTAL_ROW})')
+# Saldos ajustados: misma lógica de diferencia visible.
+ws6.cell(HT_DIF_ROW, 9, f'=ABS(I{HT_TOTAL_ROW}-J{HT_TOTAL_ROW})')
+ws6.cell(HT_DIF_ROW, 10, f'=ABS(I{HT_TOTAL_ROW}-J{HT_TOTAL_ROW})')
+
+# Resultado por naturaleza: la diferencia se coloca en el lado menor.
+ws6.cell(HT_DIF_ROW, 11, f'=MAX(L{HT_TOTAL_ROW}-K{HT_TOTAL_ROW},0)')
+ws6.cell(HT_DIF_ROW, 12, f'=MAX(K{HT_TOTAL_ROW}-L{HT_TOTAL_ROW},0)')
+# Resultado por función.
+ws6.cell(HT_DIF_ROW, 13, f'=MAX(N{HT_TOTAL_ROW}-M{HT_TOTAL_ROW},0)')
+ws6.cell(HT_DIF_ROW, 14, f'=MAX(M{HT_TOTAL_ROW}-N{HT_TOTAL_ROW},0)')
+# Estado de situación: si Activo > Pasivo+Patrimonio se muestra la diferencia
+# en el lado pasivo; si ocurre lo contrario, se muestra en activo.
+ws6.cell(HT_DIF_ROW, 15, f'=MAX(P{HT_TOTAL_ROW}-O{HT_TOTAL_ROW},0)')
+ws6.cell(HT_DIF_ROW, 16, f'=MAX(O{HT_TOTAL_ROW}-P{HT_TOTAL_ROW},0)')
+
+for c in range(3, 19):
+    ws6.cell(HT_DIF_ROW, c).number_format = '#,##0.00;(#,##0.00);"-"'
+    ws6.cell(HT_DIF_ROW, c).fill = PatternFill('solid', fgColor='FFF2CC')
+    ws6.cell(HT_DIF_ROW, c).font = BOLD
+
+# La línea de diferencia es informativa y no se vuelve a sumar al TOTAL.
+ws6.cell(HT_DIF_ROW, 18, f'=ABS(Q{HT_TOTAL_ROW}-R{HT_TOTAL_ROW})')
+
 ws6.freeze_panes = "A4"
 autofit(ws6, [11, 44, 14, 14, 14, 14, 13, 13, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14])
 
