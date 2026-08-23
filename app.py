@@ -1,4 +1,58 @@
 import json
+
+# --- TANA: filtro de diagnóstico preciso ---
+def tana_filtrar_diagnostico_preciso(diagnostico):
+    """
+    Evita convertir cuentas relacionadas en errores.
+    Solo conserva hallazgos con evidencia explícita de inconsistencia.
+    """
+    if not diagnostico:
+        return diagnostico
+
+    # Si el diagnóstico es texto libre, no inventamos cuentas nuevas.
+    # Marcamos únicamente patrones explícitos de error/diferencia/fórmula inválida.
+    lineas = str(diagnostico).splitlines()
+    salida = []
+    contexto_error = False
+
+    patrones_error = (
+        "error", "diferencia", "descuadre", "incorrect", "inválid",
+        "invalida", "no existe", "referencia circular", "fórmula incorrecta",
+        "saldo incorrecto", "no coincide", "mal ubicada", "mal ubicado"
+    )
+    patrones_relacion = (
+        "relacionad", "participa", "contrapartida", "impacta", "afecta",
+        "cuenta vinculada", "cuentas relacionadas"
+    )
+
+    for linea in lineas:
+        low=linea.lower().strip()
+        if not low:
+            continue
+        # Si la línea presenta una evidencia concreta, conservarla.
+        if any(p in low for p in patrones_error):
+            salida.append(linea)
+            contexto_error=True
+            continue
+        # Conservar identificación de asiento/cuenta inmediatamente asociada al hallazgo.
+        if contexto_error and (
+            "cuenta" in low or "asiento" in low or "línea" in low or
+            "fila" in low or "celda" in low or "debe" in low or "haber" in low
+        ):
+            salida.append(linea)
+            continue
+        # No propagar cuentas solo por relación.
+        if any(p in low for p in patrones_relacion):
+            continue
+        # Mantener encabezados útiles, pero no listas especulativas de cuentas.
+        if low.startswith(("diagnóstico", "hallazgos", "resultado", "revisión")):
+            salida.append(linea)
+
+    if salida:
+        return "\n".join(salida)
+    return diagnostico
+# --- fin filtro ---
+
 import io
 import os
 import re
@@ -1070,7 +1124,7 @@ with st.sidebar:
             "respuesta_tana", "respuesta_tana_ruta", "audio_tana_processed",
             "tana_modo_trabajo", "tana_correcciones", "tana_correccion_version",
             "tana_excel_origen_bytes", "tana_diagnostico_excel",
-            "tana_excel_buffer", "tana_resuelto_signature",
+            "tana_excel_buffer", "tana_excel_output_ready", "tana_resuelto_signature",
         ):
             st.session_state.pop(_key, None)
         st.rerun()
@@ -1263,7 +1317,7 @@ def _cargar_asientos_desde_excel(uploaded):
 
 def _diagnosticar_asientos(asientos, pcge_map):
     """Diagnóstico determinista y explícito para que TANA señale dónde está el error."""
-    diagnostico = []
+    diagnostico = tana_filtrar_diagnostico_preciso([])
     total_d = Decimal("0")
     total_h = Decimal("0")
 
@@ -1498,7 +1552,7 @@ if uploaded_file is not None and enviar_top and st.session_state.get("tana_file_
         "alertas_asientos", "respuesta_tana", "respuesta_tana_ruta", "audio_tana_processed",
         "tana_modo_trabajo", "tana_correcciones", "tana_correccion_version",
         "tana_excel_origen_bytes", "tana_diagnostico_excel",
-        "tana_excel_buffer", "tana_resuelto_signature",
+        "tana_excel_buffer", "tana_excel_output_ready", "tana_resuelto_signature",
     ):
         st.session_state.pop(_key, None)
     if _es_excel_tana(uploaded_file.name):
@@ -1541,6 +1595,7 @@ if uploaded_file is not None and enviar_top and st.session_state.get("tana_file_
                 _record_user_activity("archivo_cargado", uploaded_file.name, file_signature)
                 # NO guardar el archivo original como archivo de salida.
                 st.session_state.pop("tana_excel_buffer", None)
+                st.session_state["tana_excel_output_ready"] = False
                 _tana_chat_add(
                     "user",
                     f"📊 Cargó un Excel para revisión: <b>{uploaded_file.name}</b>"
@@ -2185,80 +2240,58 @@ def _es_peticion_correccion(texto):
 
 
 def _corregir_excel_directamente_con_gemini(instruccion):
-    """Analiza el Excel completo y propone una corrección editable.
+    """Analiza TODO el Excel y devuelve cambios de celdas concretos.
 
-    Importante: el Excel cargado se considera el TRABAJO ACTUAL del estudiante.
-    La corrección puede afectar varias filas/hojas si la evidencia lo exige.
-    TANA nunca modifica el original: siempre trabaja sobre una copia.
+    Esta ruta es para Excel del estudiante: no exige Libro Diario ni intenta
+    convertir la hoja HT/EF/ES en asientos. Gemini propone únicamente cambios
+    explícitos de celdas, y TANA los aplica sobre una COPIA del libro original.
     """
     raw = st.session_state.get("tana_excel_origen_bytes")
     if not raw:
         raise ValueError("No hay un Excel original cargado para corregir.")
 
     contexto = st.session_state.get("tana_excel_resumen_completo", "")
-    diagnostico = st.session_state.get("tana_diagnostico_excel", "")
-    pcge_5 = [[str(c).strip(), str(d)] for c, d in PCGE_DATA
-              if re.fullmatch(r"\d{5}", str(c).strip())]
+    prompt = f"""Eres TANA, un sistema de revisión y corrección de Excel contable peruano.
 
-    prompt = f"""Eres TANA, un sistema de revisión Y CORRECCIÓN de Excel contable peruano.
+El estudiante te pide CORREGIR DIRECTAMENTE SU EXCEL. NO respondas que no puedes
+modificar archivos. Tu tarea aquí es proponer cambios concretos de celdas para que
+la aplicación pueda aplicarlos a una COPIA del Excel.
 
-El archivo que recibiste NO es una monografía nueva: es el Excel de trabajo que TANA
-ya generó y que el estudiante está revisando. Debes tratarlo como un documento
-EDITABLE que puede contener errores.
+REGLAS ABSOLUTAS:
+1. Analiza TODAS las hojas del Excel, no solamente el Libro Diario.
+2. La hoja puede llamarse HT, Hoja de Trabajo, Balance, Hoja1 o cualquier otro nombre.
+3. El nombre de la hoja es solo una pista; usa el contenido para localizarla.
+4. Puedes proponer VARIOS cambios en VARIAS hojas si el diagnóstico demuestra que están relacionados.
+5. NO modifiques celdas que no estén justificadas por el diagnóstico, la instrucción del estudiante o evidencia cruzada.
+6. Si el error es una fórmula desplazada/desalineada, devuelve la fórmula correcta para la celda concreta, respetando las referencias relativas de esa fila.
+7. Si el estudiante pide corregir todos los errores encontrados, incluye todos los cambios que puedas justificar; no te limites a una sola fila.
+8. No inventes valores. Usa las demás hojas como evidencia cruzada (LD/HT/EF/ES, aunque tengan otros nombres) y el diagnóstico determinista.
+9. Antes de proponer cada cambio, comprueba que la celda actual coincide con la evidencia del Excel.
+10. Devuelve JSON válido, sin Markdown.
 
-El estudiante pide:
-{instruccion}
-
-DIAGNÓSTICO DETERMINISTA YA OBTENIDO:
-{diagnostico[:18000]}
-
-CONTENIDO DEL EXCEL, HOJA POR HOJA:
-{contexto[:120000]}
-
-PCGE DE 5 DÍGITOS:
-{json.dumps(pcge_5, ensure_ascii=False)[:50000]}
-
-OBJETIVO:
-1. Identifica exactamente el error que el estudiante está señalando o el error que
-   aparece en el diagnóstico.
-2. Busca la evidencia en TODAS las hojas del Excel.
-3. Si el Excel contiene una hoja Monografia/Fuente/Enunciado, úsala para determinar
-   qué operación originó el asiento.
-4. Si una cuenta es inválida, no la cambies simplemente por otra que haga cuadrar:
-   busca la cuenta correcta según la operación y el PCGE.
-5. Si un cambio en un asiento afecta una Hoja de Trabajo o Estados Financieros,
-   identifica las celdas/fórmulas relacionadas que realmente deben cambiar. No
-   inventes resultados.
-6. Puedes modificar VARIAS filas y VARIAS hojas cuando sean necesarias para que
-   el Excel corregido sea coherente.
-7. Conserva formato, estructura, fórmulas y contenido no relacionado.
-8. Nunca borres hojas.
-9. Nunca cambies una celda solo para forzar Activo = Pasivo + Patrimonio.
-10. Si no existe evidencia suficiente para determinar una corrección, devuelve
-    "no_hay_evidencia" y explica exactamente qué falta.
-11. Si el estudiante pide corregir, DEBES intentar corregir con la evidencia disponible.
-12. Devuelve exclusivamente JSON válido, sin Markdown.
-
-FORMATO:
+FORMATO OBLIGATORIO:
 {{
   "estado": "corregible" | "no_hay_evidencia",
-  "confianza": "alta" | "media" | "baja",
   "cambios": [
     {{
-      "hoja": "nombre exacto",
+      "hoja": "nombre exacto de la hoja",
       "celda": "C23",
       "valor_actual": "valor o fórmula actual",
       "valor_nuevo": "valor o fórmula nueva",
-      "motivo": "por qué esta celda debe cambiar",
-      "evidencia": "qué hoja/fila/cuenta demuestra el cambio"
+      "motivo": "explicación breve"
     }}
   ],
-  "observacion": "resumen exacto de lo corregido"
+  "observacion": "qué se corrigió y por qué"
 }}
 
-Si una corrección requiere cambiar una cuenta y además sus importes relacionados,
-incluye TODAS las celdas necesarias. No te limites a una sola fila.
+Si no puedes demostrar con el contenido del Excel qué celda debe cambiar,
+usa estado "no_hay_evidencia" y no inventes una corrección.
 
+CONTENIDO DEL EXCEL, HOJA POR HOJA:
+{contexto[:100000]}
+
+SOLICITUD EXACTA DEL ESTUDIANTE:
+{instruccion}
 """
     response, profile = _generate_with_fallback(
         lambda client: [prompt],
@@ -2269,88 +2302,51 @@ incluye TODAS las celdas necesarias. No te limites a una sola fila.
 
 
 def _aplicar_cambios_celdas_excel(propuesta):
-    """Aplica cambios concretos de múltiples celdas sobre una COPIA del Excel."""
+    """Aplica múltiples cambios explícitos sobre una COPIA del Excel original."""
     raw = st.session_state.get("tana_excel_origen_bytes")
     if not raw:
         raise ValueError("No hay Excel original cargado.")
     if propuesta.get("estado") != "corregible":
-        raise ValueError(propuesta.get("observacion") or "No existe evidencia suficiente para corregir el Excel.")
+        raise ValueError(propuesta.get("observacion") or "No existe evidencia suficiente para una corrección segura.")
 
     cambios = propuesta.get("cambios") or []
-    if not cambios:
+    if not isinstance(cambios, list) or not cambios:
         raise ValueError("La propuesta no contiene cambios concretos.")
 
     wb = openpyxl.load_workbook(io.BytesIO(raw), data_only=False)
-    aplicados = []
-
+    aplicados=[]
     for cambio in cambios:
         hoja = str(cambio.get("hoja") or "").strip()
         celda = str(cambio.get("celda") or "").strip()
-        if not hoja or not celda or hoja not in wb.sheetnames:
-            raise ValueError(f"Cambio rechazado: hoja/celda inválida: {hoja}!{celda}")
-        if not re.fullmatch(r"[A-Za-z]{1,4}\d+", celda):
-            raise ValueError(f"Referencia de celda inválida: {hoja}!{celda}")
-
+        if not hoja or hoja not in wb.sheetnames:
+            raise ValueError(f"La hoja '{hoja}' no existe en el Excel original.")
+        if not re.fullmatch(r"[A-Za-z]+\d+", celda):
+            raise ValueError(f"Celda inválida: {celda}")
         ws = wb[hoja]
+        valor_actual = cambio.get("valor_actual")
+        valor_nuevo = cambio.get("valor_nuevo")
         actual = ws[celda].value
-        esperado = cambio.get("valor_actual")
+        if valor_actual not in (None, "") and str(actual).strip() != str(valor_actual).strip():
+            raise ValueError(f"La celda {hoja}!{celda} cambió desde el diagnóstico. Actual='{actual}' / esperado='{valor_actual}'.")
+        ws[celda] = valor_nuevo
+        aplicados.append((hoja, celda, actual, valor_nuevo, cambio.get("motivo", "")))
 
-        # Protección contra una versión distinta del archivo.
-        if esperado not in (None, "") and str(actual).strip() != str(esperado).strip():
-            raise ValueError(
-                f"La celda {hoja}!{celda} cambió desde el diagnóstico. "
-                f"Actual='{actual}' / esperado='{esperado}'. No se aplicó ningún cambio."
-            )
-
-        ws[celda] = cambio.get("valor_nuevo")
-        aplicados.append((
-            hoja, celda, actual, cambio.get("valor_nuevo"),
-            cambio.get("motivo", ""), cambio.get("evidencia", "")
-        ))
-
-    # Evitar duplicar Revision_TANA en sucesivas correcciones.
     if "Revision_TANA" in wb.sheetnames:
         del wb["Revision_TANA"]
     ws_rev = wb.create_sheet("Revision_TANA")
-    ws_rev["A1"] = "TANA — PROPUESTA DE CORRECCIÓN"
-    ws_rev["A2"] = "Estado"
-    ws_rev["B2"] = "PROPUESTA — REVISAR ANTES DE USAR"
-    ws_rev["A3"] = "Confianza"
-    ws_rev["B3"] = str(propuesta.get("confianza", "media")).upper()
-    ws_rev["A4"] = "Advertencia"
-    ws_rev["B4"] = "Soy una inteligencia artificial y puedo cometer errores. Revisa siempre el resultado antes de utilizarlo."
-    ws_rev["A6"] = "Hoja"
-    ws_rev["B6"] = "Celda"
-    ws_rev["C6"] = "Valor anterior"
-    ws_rev["D6"] = "Valor nuevo"
-    ws_rev["E6"] = "Motivo"
-    ws_rev["F6"] = "Evidencia"
-    for i,(hoja,celda,antes,nuevo,motivo,evidencia) in enumerate(aplicados, start=7):
-        ws_rev.cell(i,1,hoja)
-        ws_rev.cell(i,2,celda)
-        ws_rev.cell(i,3,str(antes))
-        ws_rev.cell(i,4,str(nuevo))
-        ws_rev.cell(i,5,str(motivo))
-        ws_rev.cell(i,6,str(evidencia))
-    ws_rev.column_dimensions["A"].width=28
-    ws_rev.column_dimensions["B"].width=14
-    ws_rev.column_dimensions["C"].width=28
-    ws_rev.column_dimensions["D"].width=28
-    ws_rev.column_dimensions["E"].width=65
-    ws_rev.column_dimensions["F"].width=65
-    ws_rev["A"+str(len(aplicados)+9)] = "Observación"
-    ws_rev["B"+str(len(aplicados)+9)] = str(propuesta.get("observacion",""))
-
+    ws_rev["A1"] = "TANA — CORRECCIÓN PROPUESTA"
+    ws_rev["A2"] = "Estado"; ws_rev["B2"] = "CORRECCIÓN APLICADA — REVISAR RESULTADO"
+    ws_rev["A4"] = "Hoja"; ws_rev["B4"] = "Celda"; ws_rev["C4"] = "Valor anterior"; ws_rev["D4"] = "Valor nuevo"; ws_rev["E4"] = "Motivo"
+    for i,(hoja,celda,antes,nuevo,motivo) in enumerate(aplicados,start=5):
+        ws_rev.cell(i,1,hoja); ws_rev.cell(i,2,celda); ws_rev.cell(i,3,str(antes)); ws_rev.cell(i,4,str(nuevo)); ws_rev.cell(i,5,str(motivo))
+    ws_rev.column_dimensions["A"].width=24; ws_rev.column_dimensions["B"].width=15; ws_rev.column_dimensions["C"].width=28; ws_rev.column_dimensions["D"].width=28; ws_rev.column_dimensions["E"].width=80
+    ws_rev["A"+str(len(aplicados)+7)] = "Advertencia"
+    ws_rev["B"+str(len(aplicados)+7)] = "Soy una inteligencia artificial y puedo cometer errores. Revisa siempre el resultado antes de utilizarlo."
     try:
-        wb.calculation.fullCalcOnLoad = True
-        wb.calculation.forceFullCalc = True
-        wb.calculation.calcMode = "auto"
+        wb.calculation.fullCalcOnLoad=True; wb.calculation.forceFullCalc=True; wb.calculation.calcMode="auto"
     except Exception:
         pass
-
-    out = io.BytesIO()
-    wb.save(out)
-    out.seek(0)
+    out=io.BytesIO(); wb.save(out); out.seek(0)
     return out.getvalue(), aplicados
 
 def _corregir_asientos_con_gemini(instruccion):
@@ -2511,16 +2507,41 @@ def _aplicar_correccion_si_corresponde(pregunta):
                     _tana_chat_add("assistant", f"<b>⚠️ No hice cambios.</b><br>{propuesta.get('observacion','No encontré evidencia suficiente para una corrección segura.')}<br><br><small>El Excel original permanece intacto.</small>")
                     return True
                 nuevo_buffer, aplicados = _aplicar_cambios_celdas_excel(propuesta)
-                # Segunda revisión del libro completo.
+                # Segunda revisión completa. El archivo SOLO queda descargable si
+                # la revisión posterior no detecta errores de fórmula/estructura y,
+                # cuando es posible reconstruir asientos, éstos también cuadran.
                 hojas_post, resumen_post = _revisar_bytes_excel_completo(nuevo_buffer)
-                st.session_state["tana_excel_buffer"] = nuevo_buffer
+                formula_errors = sum(int(h.get("errores_formula_muestra", 0) or 0) for h in hojas_post)
+                validacion_asientos_ok = True
+                validacion_detalle = ""
+                try:
+                    obj_post = _MemoryUpload(nuevo_buffer, name="corregido.xlsx")
+                    as_post = _cargar_asientos_desde_excel(obj_post)
+                    v_post, e_post, w_post = validate_asientos({"asientos": as_post}, pcge_map)
+                    validacion_asientos_ok = bool(v_post)
+                    if e_post:
+                        validacion_detalle = "<br>".join(str(e) for e in e_post[:10])
+                except Exception:
+                    # Algunos Excel de revisión pueden no tener un diario reconstruible.
+                    # En ese caso la revisión de todas las hojas sigue siendo válida,
+                    # pero no se declara validación de asientos.
+                    validacion_asientos_ok = True
+                salida_valida = formula_errors == 0 and validacion_asientos_ok
                 st.session_state["tana_excel_hojas"] = hojas_post
                 st.session_state["tana_excel_resumen_completo"] = resumen_post
                 st.session_state["tana_excel_revisado_post"] = True
                 st.session_state["tana_correcciones"] = st.session_state.get("tana_correcciones", 0) + 1
                 st.session_state["tana_correccion_version"] = st.session_state.get("tana_correccion_version", 1) + 1
-                detalle = "<br>".join(f"<b>{c}</b>: {a} → {n}<br><small>{m}</small>" for c,a,n,m in aplicados)
-                _tana_chat_add("assistant", f"<b>✅ Corrección aplicada en el Excel.</b><br><br><b>Hoja:</b> {propuesta.get('hoja')}<br><b>Fila:</b> {propuesta.get('fila')}<br><br>{detalle}<br><br><b>Nuevo Excel generado.</b><br>TANA volvió a revisar todas las hojas del archivo corregido.<br><br><small>El Excel original permanece intacto.</small>")
+                detalle = "<br>".join(f"<b>{h}!{c}</b>: {a} → {n}<br><small>{m}</small>" for h,c,a,n,m in aplicados)
+                if salida_valida:
+                    st.session_state["tana_excel_buffer"] = nuevo_buffer
+                    st.session_state["tana_excel_output_ready"] = True
+                    _tana_chat_add("assistant", f"<b>✅ Corrección aplicada y revisada.</b><br><br>{detalle}<br><br><b>Nuevo Excel generado y habilitado para descarga.</b><br><small>El Excel original permanece intacto. Soy una inteligencia artificial y puedo cometer errores; revisa siempre el resultado.</small>")
+                else:
+                    st.session_state.pop("tana_excel_buffer", None)
+                    st.session_state["tana_excel_output_ready"] = False
+                    extra = (f"<br><b>Observaciones:</b><br>{validacion_detalle}" if validacion_detalle else "")
+                    _tana_chat_add("assistant", f"<b>⚠️ Encontré una propuesta de corrección, pero la nueva versión no pasó la validación.</b><br><br>{detalle}{extra}<br><br><b>No habilité la descarga.</b> El Excel original permanece intacto.<br><small>Soy una inteligencia artificial y puedo cometer errores; revisa siempre el resultado.</small>")
                 return True
 
             data, profile = _corregir_asientos_con_gemini(pregunta)
@@ -2581,7 +2602,7 @@ def _tana_contexto_tutor():
     mono = st.session_state.get("monografia_texto", "")
     asientos = st.session_state.get("asientos_contables", [])
     asientos_txt = json.dumps(asientos, ensure_ascii=False, indent=2)
-    diagnostico = st.session_state.get("tana_diagnostico_excel", "")
+    diagnostico = tana_filtrar_diagnostico_preciso(st.session_state.get("tana_diagnostico_excel", ""))
     excel_contexto = st.session_state.get("tana_excel_resumen_completo", "")
     return (
         "MONOGRAFÍA / FUENTE:\n" + mono[:12000]
@@ -2641,7 +2662,7 @@ if enviar_top and (pregunta_top.strip() or audio_top is not None) and (st.sessio
             for k in ("no cuadra", "no cuadran", "diferencia", "dónde está el error", "donde esta el error",
                       "qué está mal", "que esta mal", "revisa el excel", "revisa este excel")
         ):
-            diagnostico = st.session_state.get("tana_diagnostico_excel", "")
+            diagnostico = tana_filtrar_diagnostico_preciso(st.session_state.get("tana_diagnostico_excel", ""))
             _tana_chat_add(
                 "assistant",
                 "<b>Revisión exacta del Excel:</b><br>" +
@@ -2688,7 +2709,7 @@ if enviar_top and (pregunta_top.strip() or audio_top is not None) and (st.sessio
                     if temp_audio and os.path.exists(temp_audio):
                         os.remove(temp_audio)
     st.rerun()
-if st.session_state.get("asientos_contables"):
+if st.session_state.get("asientos_contables") and st.session_state.get("tana_modo_trabajo") != "revision_excel":
     st.markdown(
         '<div class="tana-success-card">✅&nbsp; TANA terminó el desarrollo contable. Tu Excel está listo para descargar.</div>',
         unsafe_allow_html=True,
@@ -3912,7 +3933,7 @@ wb.save(buffer)
 buffer.seek(0)
 
 _sig = st.session_state.get("tana_file_signature")
-if _sig and st.session_state.get("tana_resuelto_signature") != _sig:
+if _sig and st.session_state.get("tana_resuelto_signature") != _sig and st.session_state.get("tana_modo_trabajo") != "revision_excel":
     _tana_chat_add(
         "assistant",
         "TANA ha resuelto tu monografía:<br>" + (
@@ -3922,10 +3943,11 @@ if _sig and st.session_state.get("tana_resuelto_signature") != _sig:
     )
     st.session_state["tana_resuelto_signature"] = _sig
     st.session_state["tana_excel_buffer"] = buffer.getvalue()
+    st.session_state["tana_excel_output_ready"] = True
     _record_user_activity("desarrollo_completado", st.session_state.get("monografia_nombre", "archivo"), _sig)
     st.rerun()
 
-if st.session_state.get("tana_excel_buffer"):
+if st.session_state.get("tana_excel_buffer") and st.session_state.get("tana_excel_output_ready", False):
     _n_asientos = len(st.session_state.get("asientos_contables", []) or [])
     _n_validos = len(st.session_state.get("asientos_validos", []) or [])
     st.markdown(
