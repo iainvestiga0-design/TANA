@@ -87,12 +87,18 @@ def _supabase_enabled():
     return bool(SUPABASE_URL and SUPABASE_KEY)
 
 
-def _supabase_request(method, path, payload=None, params=""):
+def _supabase_request(method, path, payload=None, params=None):
+    """Realiza una petición REST a Supabase de forma segura y reutilizable."""
     if not _supabase_enabled():
         return None
+    from urllib.parse import urlencode
+
     url = f"{SUPABASE_URL}/rest/v1/{path}"
     if params:
+        if isinstance(params, dict):
+            params = urlencode(params, doseq=True)
         url += f"?{params}"
+
     headers = {
         "apikey": SUPABASE_KEY,
         "Authorization": f"Bearer {SUPABASE_KEY}",
@@ -100,15 +106,10 @@ def _supabase_request(method, path, payload=None, params=""):
         "Accept": "application/json",
     }
     if method == "POST":
-        # Supabase REST debe hacer UPSERT por email. Sin esta opción, un POST
-        # sobre un usuario que ya existe devuelve 409 y la actividad termina
-        # cayendo en el registro local, que no es persistente en Streamlit Cloud.
-        if "on_conflict=" in path or "on_conflict=" in params:
-            headers["Prefer"] = "resolution=merge-duplicates,return=representation"
-        else:
-            headers["Prefer"] = "return=representation"
+        headers["Prefer"] = "return=representation"
     elif method == "PATCH":
         headers["Prefer"] = "return=representation"
+
     try:
         data = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
@@ -147,12 +148,12 @@ def _save_local_registry(data):
 
 
 def _load_user_registry():
-    """Carga usuarios desde Supabase; usa JSON local solo como transición."""
+    """Carga usuarios desde Supabase; JSON local solo como fallback."""
     if _supabase_enabled():
         rows = _supabase_request(
             "GET",
             "tana_users",
-            params="select=email,role,first_seen,last_seen,visits,activity&order=last_seen.desc",
+            params={"select": "email,role,first_seen,last_seen,visits", "order": "last_seen.desc"},
         )
         if isinstance(rows, list):
             return rows
@@ -160,19 +161,45 @@ def _load_user_registry():
 
 
 def _upsert_supabase_user(user):
-    # UPSERT real: si el usuario ya existe, actualiza visitas/actividad en la
-    # misma fila en vez de devolver 409 por la clave primaria email.
+    """Actualiza únicamente la ficha del usuario. La actividad vive en otra tabla."""
     rows = _supabase_request(
         "POST",
         "tana_users",
         payload=user,
-        params="on_conflict=email",
+        params={"on_conflict": "email"},
     )
     return isinstance(rows, list)
 
 
+def _load_user_activity(email, limit=20):
+    """Lee los eventos de actividad desde la tabla persistente tana_activity."""
+    email = str(email or "").strip().lower()
+    if not email:
+        return []
+
+    if _supabase_enabled():
+        rows = _supabase_request(
+            "GET",
+            "tana_activity",
+            params={
+                "select": "timestamp,event,detail,signature",
+                "email": f"eq.{email}",
+                "order": "timestamp.desc",
+                "limit": str(int(limit)),
+            },
+        )
+        if isinstance(rows, list):
+            return rows
+
+    # Fallback local para transición o pruebas sin Supabase.
+    users = _load_local_registry()
+    user = next((u for u in users if str(u.get("email", "")).strip().lower() == email), None)
+    activity = user.get("activity", []) if user else []
+    return list(reversed(activity[-int(limit):])) if isinstance(activity, list) else []
+
+
 def _save_user_registry(data):
-    """Guarda el registro en Supabase de forma persistente; local como fallback."""
+    """Guarda usuarios en Supabase; mantiene fallback local durante la transición."""
     if _supabase_enabled():
         ok = True
         for user in data:
@@ -182,7 +209,6 @@ def _save_user_registry(data):
                 "first_seen": user.get("first_seen"),
                 "last_seen": user.get("last_seen"),
                 "visits": int(user.get("visits", 0) or 0),
-                "activity": user.get("activity", []) if isinstance(user.get("activity", []), list) else [],
             }
             if not _upsert_supabase_user(payload):
                 ok = False
@@ -192,17 +218,55 @@ def _save_user_registry(data):
 
 
 def _record_user_activity(event_type, detail="", signature=""):
-    """Registra actividad persistente del usuario autenticado."""
+    """Registra cada evento como fila independiente en Supabase.
+
+    Esto evita perder actividad por actualizaciones simultáneas o por reemplazo
+    de un JSONB completo dentro de tana_users.
+    """
     if not user_email:
         return False
 
-    users = _load_user_registry()
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    detail = str(detail)[:300]
+    signature = str(signature)[:120]
+
+    if _supabase_enabled():
+        # Evitar duplicados del mismo evento cuando Streamlit reejecuta el script.
+        existing = _supabase_request(
+            "GET",
+            "tana_activity",
+            params={
+                "select": "id",
+                "email": f"eq.{user_email}",
+                "event": f"eq.{event_type}",
+                "detail": f"eq.{detail}",
+                "signature": f"eq.{signature}",
+                "limit": "1",
+            },
+        )
+        if isinstance(existing, list) and existing:
+            return True
+
+        rows = _supabase_request(
+            "POST",
+            "tana_activity",
+            payload={
+                "email": user_email,
+                "event": str(event_type),
+                "detail": detail,
+                "signature": signature,
+                "timestamp": now,
+            },
+        )
+        if isinstance(rows, list):
+            return True
+
+    # Fallback local.
+    users = _load_local_registry()
     user = next(
         (u for u in users if str(u.get("email", "")).strip().lower() == user_email),
         None,
     )
-
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     if user is None:
         user = {
             "email": user_email,
@@ -213,33 +277,20 @@ def _record_user_activity(event_type, detail="", signature=""):
             "activity": [],
         }
         users.append(user)
-    else:
-        user["role"] = user_role
-        user["last_seen"] = now
-
     activity = user.get("activity", [])
     if not isinstance(activity, list):
         activity = []
-
-    if signature:
-        duplicate = any(
-            str(item.get("event", "")) == str(event_type)
-            and str(item.get("detail", "")) == str(detail)
-            and str(item.get("signature", "")) == str(signature)
-            for item in activity
-        )
-        if duplicate:
-            return True
-
-    activity.append({
-        "timestamp": now,
-        "event": str(event_type),
-        "detail": str(detail)[:300],
-        "signature": str(signature)[:120],
-    })
+    if signature and any(
+        str(item.get("event", "")) == str(event_type)
+        and str(item.get("detail", "")) == detail
+        and str(item.get("signature", "")) == signature
+        for item in activity
+    ):
+        return True
+    activity.append({"timestamp": now, "event": str(event_type), "detail": detail, "signature": signature})
     user["activity"] = activity[-100:]
     user["last_seen"] = now
-    return _save_user_registry(users)
+    return _save_local_registry(users)
 
 
 def _register_current_user():
@@ -394,10 +445,9 @@ if user_role == "Creador":
                     st.caption(f"Correo: {selected_email}")
                     st.caption(f"Primer acceso: {selected.get('first_seen', '')}")
 
-                    # Seguimiento de actividad: muestra únicamente eventos resumidos.
-                    activity = selected.get("activity", [])
-                    if not isinstance(activity, list):
-                        activity = []
+                    # Seguimiento de actividad: se lee directamente de tana_activity.
+                    # No dependemos del JSON de la ficha del usuario.
+                    activity = _load_user_activity(selected_email, limit=20)
                     st.markdown("#### 📈 Actividad reciente")
                     if activity:
                         event_labels = {
@@ -407,7 +457,7 @@ if user_role == "Creador":
                             "consulta_realizada": "💬 Consulta realizada",
                         }
                         activity_rows = []
-                        for item in reversed(activity[-20:]):
+                        for item in activity:
                             activity_rows.append({
                                 "Fecha": str(item.get("timestamp", "")),
                                 "Actividad": event_labels.get(str(item.get("event", "")), str(item.get("event", ""))),
@@ -2135,64 +2185,80 @@ def _es_peticion_correccion(texto):
 
 
 def _corregir_excel_directamente_con_gemini(instruccion):
-    """Analiza TODO el Excel y devuelve cambios de celdas concretos.
+    """Analiza el Excel completo y propone una corrección editable.
 
-    Esta ruta es para Excel del estudiante: no exige Libro Diario ni intenta
-    convertir la hoja HT/EF/ES en asientos. Gemini propone únicamente cambios
-    explícitos de celdas, y TANA los aplica sobre una COPIA del libro original.
+    Importante: el Excel cargado se considera el TRABAJO ACTUAL del estudiante.
+    La corrección puede afectar varias filas/hojas si la evidencia lo exige.
+    TANA nunca modifica el original: siempre trabaja sobre una copia.
     """
     raw = st.session_state.get("tana_excel_origen_bytes")
     if not raw:
         raise ValueError("No hay un Excel original cargado para corregir.")
 
     contexto = st.session_state.get("tana_excel_resumen_completo", "")
-    prompt = f"""Eres TANA, un sistema de revisión y corrección de Excel contable peruano.
+    diagnostico = st.session_state.get("tana_diagnostico_excel", "")
+    pcge_5 = [[str(c).strip(), str(d)] for c, d in PCGE_DATA
+              if re.fullmatch(r"\d{5}", str(c).strip())]
 
-El estudiante te pide CORREGIR DIRECTAMENTE SU EXCEL. NO respondas que no puedes
-modificar archivos. Tu tarea aquí es proponer cambios concretos de celdas para que
-la aplicación pueda aplicarlos a una COPIA del Excel.
+    prompt = f"""Eres TANA, un sistema de revisión Y CORRECCIÓN de Excel contable peruano.
 
-REGLAS ABSOLUTAS:
-1. Analiza TODAS las hojas del Excel, no solamente el Libro Diario.
-2. La hoja puede llamarse HT, Hoja de Trabajo, Balance, Hoja1 o cualquier otro nombre.
-3. El nombre de la hoja es solo una pista; usa el contenido para localizarla.
-4. Si el estudiante indica una hoja y una cuenta/fila concreta, modifica ÚNICAMENTE
-   esa fila y las celdas estrictamente necesarias de esa fila.
-5. NO modifiques otras filas, otras hojas, formatos, fórmulas o valores no relacionados.
-6. Si el error es una fórmula desplazada/desalineada, devuelve la fórmula correcta
-   para la celda concreta, respetando las referencias relativas de esa fila.
-7. Si el estudiante pide "corrige solo esa fila", la respuesta debe contener solo
-   las celdas de esa fila.
-8. No inventes valores. Usa las demás hojas como evidencia cruzada (LD/HT/EF/ES,
-   aunque tengan otros nombres).
-9. Antes de proponer el cambio, comprueba que la celda actual y la fila coinciden
-   con la evidencia del Excel.
-10. Devuelve JSON válido, sin Markdown.
+El archivo que recibiste NO es una monografía nueva: es el Excel de trabajo que TANA
+ya generó y que el estudiante está revisando. Debes tratarlo como un documento
+EDITABLE que puede contener errores.
 
-FORMATO OBLIGATORIO:
+El estudiante pide:
+{instruccion}
+
+DIAGNÓSTICO DETERMINISTA YA OBTENIDO:
+{diagnostico[:18000]}
+
+CONTENIDO DEL EXCEL, HOJA POR HOJA:
+{contexto[:120000]}
+
+PCGE DE 5 DÍGITOS:
+{json.dumps(pcge_5, ensure_ascii=False)[:50000]}
+
+OBJETIVO:
+1. Identifica exactamente el error que el estudiante está señalando o el error que
+   aparece en el diagnóstico.
+2. Busca la evidencia en TODAS las hojas del Excel.
+3. Si el Excel contiene una hoja Monografia/Fuente/Enunciado, úsala para determinar
+   qué operación originó el asiento.
+4. Si una cuenta es inválida, no la cambies simplemente por otra que haga cuadrar:
+   busca la cuenta correcta según la operación y el PCGE.
+5. Si un cambio en un asiento afecta una Hoja de Trabajo o Estados Financieros,
+   identifica las celdas/fórmulas relacionadas que realmente deben cambiar. No
+   inventes resultados.
+6. Puedes modificar VARIAS filas y VARIAS hojas cuando sean necesarias para que
+   el Excel corregido sea coherente.
+7. Conserva formato, estructura, fórmulas y contenido no relacionado.
+8. Nunca borres hojas.
+9. Nunca cambies una celda solo para forzar Activo = Pasivo + Patrimonio.
+10. Si no existe evidencia suficiente para determinar una corrección, devuelve
+    "no_hay_evidencia" y explica exactamente qué falta.
+11. Si el estudiante pide corregir, DEBES intentar corregir con la evidencia disponible.
+12. Devuelve exclusivamente JSON válido, sin Markdown.
+
+FORMATO:
 {{
   "estado": "corregible" | "no_hay_evidencia",
-  "hoja": "nombre exacto de la hoja",
-  "fila": 0,
+  "confianza": "alta" | "media" | "baja",
   "cambios": [
     {{
+      "hoja": "nombre exacto",
       "celda": "C23",
       "valor_actual": "valor o fórmula actual",
       "valor_nuevo": "valor o fórmula nueva",
-      "motivo": "explicación breve"
+      "motivo": "por qué esta celda debe cambiar",
+      "evidencia": "qué hoja/fila/cuenta demuestra el cambio"
     }}
   ],
-  "observacion": "qué se corrigió y por qué"
+  "observacion": "resumen exacto de lo corregido"
 }}
 
-Si no puedes demostrar con el contenido del Excel qué celda debe cambiar,
-usa estado "no_hay_evidencia" y no inventes una corrección.
+Si una corrección requiere cambiar una cuenta y además sus importes relacionados,
+incluye TODAS las celdas necesarias. No te limites a una sola fila.
 
-CONTENIDO DEL EXCEL, HOJA POR HOJA:
-{contexto[:100000]}
-
-SOLICITUD EXACTA DEL ESTUDIANTE:
-{instruccion}
 """
     response, profile = _generate_with_fallback(
         lambda client: [prompt],
@@ -2203,72 +2269,88 @@ SOLICITUD EXACTA DEL ESTUDIANTE:
 
 
 def _aplicar_cambios_celdas_excel(propuesta):
-    """Aplica cambios explícitos sobre una COPIA del Excel original."""
+    """Aplica cambios concretos de múltiples celdas sobre una COPIA del Excel."""
     raw = st.session_state.get("tana_excel_origen_bytes")
     if not raw:
         raise ValueError("No hay Excel original cargado.")
     if propuesta.get("estado") != "corregible":
         raise ValueError(propuesta.get("observacion") or "No existe evidencia suficiente para corregir el Excel.")
 
-    hoja = str(propuesta.get("hoja") or "").strip()
-    fila = int(propuesta.get("fila") or 0)
     cambios = propuesta.get("cambios") or []
-    if not hoja or fila < 1 or not cambios:
-        raise ValueError("La propuesta de corrección no contiene hoja, fila y cambios concretos.")
+    if not cambios:
+        raise ValueError("La propuesta no contiene cambios concretos.")
 
     wb = openpyxl.load_workbook(io.BytesIO(raw), data_only=False)
-    if hoja not in wb.sheetnames:
-        raise ValueError(f"La hoja '{hoja}' no existe en el Excel original.")
+    aplicados = []
 
-    # Seguridad: todos los cambios deben pertenecer a la fila indicada.
     for cambio in cambios:
+        hoja = str(cambio.get("hoja") or "").strip()
         celda = str(cambio.get("celda") or "").strip()
-        m = re.fullmatch(r"([A-Za-z]+)(\d+)", celda)
-        if not m or int(m.group(2)) != fila:
-            raise ValueError(f"Cambio rechazado: {celda} no pertenece a la fila {fila}.")
+        if not hoja or not celda or hoja not in wb.sheetnames:
+            raise ValueError(f"Cambio rechazado: hoja/celda inválida: {hoja}!{celda}")
+        if not re.fullmatch(r"[A-Za-z]{1,4}\d+", celda):
+            raise ValueError(f"Referencia de celda inválida: {hoja}!{celda}")
 
-    ws = wb[hoja]
-    aplicados=[]
-    for cambio in cambios:
-        celda = str(cambio["celda"]).strip()
-        valor_actual = cambio.get("valor_actual")
-        valor_nuevo = cambio.get("valor_nuevo")
+        ws = wb[hoja]
         actual = ws[celda].value
-        # Si Gemini recibió una celda vacía, permitimos None/""; si no, exigimos
-        # coincidencia para evitar escribir encima de una versión distinta.
-        if valor_actual not in (None, ""):
-            if str(actual).strip() != str(valor_actual).strip():
-                raise ValueError(
-                    f"La celda {hoja}!{celda} cambió desde el diagnóstico. "
-                    f"Actual='{actual}' / esperado='{valor_actual}'. No se aplicó ningún cambio."
-                )
-        ws[celda] = valor_nuevo
-        aplicados.append((celda, actual, valor_nuevo, cambio.get("motivo", "")))
+        esperado = cambio.get("valor_actual")
 
+        # Protección contra una versión distinta del archivo.
+        if esperado not in (None, "") and str(actual).strip() != str(esperado).strip():
+            raise ValueError(
+                f"La celda {hoja}!{celda} cambió desde el diagnóstico. "
+                f"Actual='{actual}' / esperado='{esperado}'. No se aplicó ningún cambio."
+            )
+
+        ws[celda] = cambio.get("valor_nuevo")
+        aplicados.append((
+            hoja, celda, actual, cambio.get("valor_nuevo"),
+            cambio.get("motivo", ""), cambio.get("evidencia", "")
+        ))
+
+    # Evitar duplicar Revision_TANA en sucesivas correcciones.
+    if "Revision_TANA" in wb.sheetnames:
+        del wb["Revision_TANA"]
     ws_rev = wb.create_sheet("Revision_TANA")
-    ws_rev["A1"] = "TANA — CORRECCIÓN DE CELDAS"
+    ws_rev["A1"] = "TANA — PROPUESTA DE CORRECCIÓN"
     ws_rev["A2"] = "Estado"
-    ws_rev["B2"] = "CORRECCIÓN APLICADA"
-    ws_rev["A3"] = "Hoja"
-    ws_rev["B3"] = hoja
-    ws_rev["A4"] = "Fila corregida"
-    ws_rev["B4"] = fila
-    ws_rev["A6"] = "Celda"
-    ws_rev["B6"] = "Valor anterior"
-    ws_rev["C6"] = "Valor nuevo"
-    ws_rev["D6"] = "Motivo"
-    for i,(celda,antes,nuevo,motivo) in enumerate(aplicados,start=7):
-        ws_rev.cell(i,1,celda); ws_rev.cell(i,2,str(antes)); ws_rev.cell(i,3,str(nuevo)); ws_rev.cell(i,4,str(motivo))
-    ws_rev.column_dimensions["A"].width=15; ws_rev.column_dimensions["B"].width=30
-    ws_rev.column_dimensions["C"].width=30; ws_rev.column_dimensions["D"].width=80
-    ws_rev["A"+str(len(aplicados)+9)] = "Advertencia"
-    ws_rev["B"+str(len(aplicados)+9)] = "Soy una inteligencia artificial y puedo cometer errores. Revisa siempre el resultado antes de utilizarlo."
+    ws_rev["B2"] = "PROPUESTA — REVISAR ANTES DE USAR"
+    ws_rev["A3"] = "Confianza"
+    ws_rev["B3"] = str(propuesta.get("confianza", "media")).upper()
+    ws_rev["A4"] = "Advertencia"
+    ws_rev["B4"] = "Soy una inteligencia artificial y puedo cometer errores. Revisa siempre el resultado antes de utilizarlo."
+    ws_rev["A6"] = "Hoja"
+    ws_rev["B6"] = "Celda"
+    ws_rev["C6"] = "Valor anterior"
+    ws_rev["D6"] = "Valor nuevo"
+    ws_rev["E6"] = "Motivo"
+    ws_rev["F6"] = "Evidencia"
+    for i,(hoja,celda,antes,nuevo,motivo,evidencia) in enumerate(aplicados, start=7):
+        ws_rev.cell(i,1,hoja)
+        ws_rev.cell(i,2,celda)
+        ws_rev.cell(i,3,str(antes))
+        ws_rev.cell(i,4,str(nuevo))
+        ws_rev.cell(i,5,str(motivo))
+        ws_rev.cell(i,6,str(evidencia))
+    ws_rev.column_dimensions["A"].width=28
+    ws_rev.column_dimensions["B"].width=14
+    ws_rev.column_dimensions["C"].width=28
+    ws_rev.column_dimensions["D"].width=28
+    ws_rev.column_dimensions["E"].width=65
+    ws_rev.column_dimensions["F"].width=65
+    ws_rev["A"+str(len(aplicados)+9)] = "Observación"
+    ws_rev["B"+str(len(aplicados)+9)] = str(propuesta.get("observacion",""))
 
     try:
-        wb.calculation.fullCalcOnLoad=True; wb.calculation.forceFullCalc=True; wb.calculation.calcMode="auto"
+        wb.calculation.fullCalcOnLoad = True
+        wb.calculation.forceFullCalc = True
+        wb.calculation.calcMode = "auto"
     except Exception:
         pass
-    out=io.BytesIO(); wb.save(out); out.seek(0)
+
+    out = io.BytesIO()
+    wb.save(out)
+    out.seek(0)
     return out.getvalue(), aplicados
 
 def _corregir_asientos_con_gemini(instruccion):
