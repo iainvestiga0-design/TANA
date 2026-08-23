@@ -923,6 +923,82 @@ No inventes información.
 """
 
 
+def _extract_legacy_doc_text_local(path):
+    """Extrae texto de Word antiguo .doc usando antiword cuando está disponible.
+
+    Gemini puede aceptar application/msword en algunas rutas, pero para .doc
+    antiguo es mucho más estable convertirlo primero a texto plano localmente.
+    """
+    try:
+        proc = subprocess.run(
+            ["antiword", "-t", path],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=45,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError, OSError):
+        return ""
+    text = (proc.stdout or "").replace("\\x00", " ").strip()
+    if proc.returncode != 0 and not text:
+        return ""
+    return text
+
+
+LEGACY_OPERATION_RESCUE_PROMPT = """
+Eres el extractor de prácticas contables de TANA.
+
+A continuación recibirás el texto completo de una práctica contable, extraído
+localmente de un Word antiguo (.doc). El texto puede perder parte del formato,
+pero debes reconstruir la estructura por el contenido.
+
+IMPORTANTE:
+- NO resuelvas los asientos todavía.
+- NO hagas un resumen.
+- Identifica TODAS las operaciones contables de la práctica.
+- Cada compra, venta, cobro, pago, aporte, préstamo, gasto, adquisición,
+  depreciación, remuneración, ajuste, transferencia, etc. que deba registrarse
+  debe aparecer como una operación independiente.
+- Conserva fechas, importes, cantidades, porcentajes, documentos, nombres,
+  condiciones y formas de pago.
+- Si una operación no tiene importe explícito, conserva la descripción y usa
+  null para el importe.
+- No inventes operaciones.
+
+Devuelve SOLO JSON válido con esta estructura:
+{
+  "empresa": "",
+  "tipo_documento": "",
+  "periodo": "",
+  "estado_inicial": [],
+  "operaciones": [
+    {
+      "numero": 1,
+      "fecha": "",
+      "descripcion": "",
+      "importe": null,
+      "moneda": "PEN",
+      "cantidad": null,
+      "precio_unitario": null,
+      "porcentaje": null,
+      "documento": "",
+      "forma_pago": "",
+      "medio_pago": "",
+      "tercero": "",
+      "cuenta_bancaria": "",
+      "datos_adicionales": ""
+    }
+  ],
+  "solicitudes": [],
+  "datos_importantes": []
+}
+
+TEXTO COMPLETO DE LA PRÁCTICA:
+"""
+
+
 def _upload_gemini_file(client, path, mime_type=None):
     """Sube un archivo a Gemini con MIME explícito cuando el SDK lo permite."""
     if mime_type:
@@ -990,6 +1066,34 @@ def extract_with_gemini(uploaded):
             temp_path = tmp.name
 
         errors = []
+
+        # Word antiguo (.doc): usar texto local primero. Esto evita depender de
+        # cómo una ruta/modelo de Gemini interpreta el formato binario legacy.
+        if extension == "doc":
+            legacy_text = _extract_legacy_doc_text_local(temp_path)
+            if legacy_text:
+                local_errors = []
+                for profile in profiles:
+                    client = get_gemini_client(profile["api_key"])
+                    try:
+                        rescue_prompt = LEGACY_OPERATION_RESCUE_PROMPT + legacy_text[:120000]
+                        response = client.models.generate_content(
+                            model=profile["model"],
+                            contents=[rescue_prompt],
+                            config=types.GenerateContentConfig(response_mime_type="application/json"),
+                        )
+                        try:
+                            data = json.loads(response.text or "{}")
+                        except json.JSONDecodeError:
+                            data = {}
+                        if _extraction_has_content(data) and data.get("operaciones"):
+                            return data
+                        local_errors.append((profile["label"], profile["model"],
+                                             ValueError("La extracción local obtuvo texto, pero no operaciones contables.")))
+                    except Exception as exc:
+                        local_errors.append((profile["label"], profile["model"], exc))
+                errors.extend(local_errors)
+
         for profile in profiles:
             client = get_gemini_client(profile["api_key"])
             try:
@@ -2759,10 +2863,12 @@ if enviar_top and (pregunta_top.strip() or audio_top is not None):
                         tmp.write(audio_top.getvalue())
                         temp_audio = tmp.name
 
+                    audio_bytes = audio_top.getvalue()
+
                     def audio_contents(client):
-                        audio_file = _upload_gemini_file(client, temp_audio, "audio/wav")
+                        audio_part = types.Part.from_bytes(data=audio_bytes, mime_type="audio/wav")
                         return [
-                            audio_file,
+                            audio_part,
                             "Escucha el audio del estudiante, transcribe su pregunta y luego respóndela. "
                             "No inventes datos. Si hay una monografía o Excel cargado, usa su contexto. "
                             "Si no hay documento cargado, responde normalmente a la pregunta hablada. "
