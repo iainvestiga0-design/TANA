@@ -62,7 +62,7 @@ if not st.user.is_logged_in:
 # La identificación del rol es automática mediante el correo devuelto por Google.
 # El correo autorizado del creador se guarda en Streamlit Secrets y nunca se muestra.
 user_email = str(getattr(st.user, "email", "") or "").strip().lower()
-creator_email = str(st.secrets.get("TANA_CREATOR_EMAIL", "") or "").strip().lower()
+creator_email = str(st.secrets.get("TANA_CREATOR_EMAIL", "investigaia0@gmail.com") or "").strip().lower()
 user_role = "Creador" if creator_email and user_email == creator_email else "Estudiante"
 
 # Identificación visible, breve y automática. Nunca mostramos el correo completo.
