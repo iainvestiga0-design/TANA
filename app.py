@@ -434,7 +434,10 @@ st.markdown("""
 <style>
 /* Oculta el header/menú default de Streamlit para look de app */
 #MainMenu, header[data-testid="stHeader"] {visibility: hidden; height: 0;}
-.block-container {padding-top: 0.6rem; padding-bottom: 17rem; max-width: 980px;}
+div[data-testid="stDecoration"] {display: none !important;}
+div[data-testid="stToolbar"] {display: none !important;}
+div[data-testid="stAppViewContainer"] {padding-top: 0 !important;}
+.block-container {padding-top: 0rem; padding-bottom: 21rem; max-width: 980px;}
 
 /* ---- Sidebar tipo ChatGPT/Claude ---- */
 section[data-testid="stSidebar"] {background: #F7F9FB; border-right: 1px solid #E3E9EE;}
@@ -461,6 +464,21 @@ section[data-testid="stSidebar"] .block-container {padding-top: 1rem;}
                          line-height:1.55;}
 .tana-result-card {background:#fff; border:1px solid #DDE8EF; border-radius:12px; padding:12px 16px;
                     margin-top:10px; display:flex; align-items:center; gap:10px;}
+
+/* ---- Tarjeta final: éxito + estadísticas + descarga ---- */
+.tana-success-card {background:#EFFBF3; border:1px solid #CDEFDA; color:#166534; padding:14px 18px;
+                     border-radius:14px; margin: 18px 0 14px 0; font-size:14.5px; display:flex;
+                     align-items:center; gap:10px;}
+.tana-stats-row {display:flex; gap:12px; margin-bottom:14px;}
+.tana-stat-box {flex:1; background:#F5FAFC; border:1px solid #DDE8EF; border-radius:12px;
+                 padding:12px 16px; display:flex; align-items:center; gap:10px;}
+.tana-stat-box .num {font-size:19px; font-weight:800; color:#12304A; line-height:1.1;}
+.tana-stat-box .label {font-size:12px; color:#6B7B87;}
+div[data-testid="stDownloadButton"] button {
+    background:#16A34A !important; border-color:#16A34A !important; color:#fff !important;
+    border-radius:10px !important; font-weight:700;
+}
+div[data-testid="stDownloadButton"] button:hover {background:#15803D !important; border-color:#15803D !important;}
 .tana-result-card .name {font-weight:700; color:#12304A; font-size:13.5px;}
 
 /* ---- Barra de entrada inferior, FIJA de verdad ----
@@ -470,11 +488,9 @@ section[data-testid="stSidebar"] .block-container {padding-top: 1rem;}
    fijar exactamente ESE contenedor (y solo ese), sin afectar el resto
    de la página, que sigue haciendo scroll normal. Se listan varias
    variantes del selector para cubrir distintas versiones de Streamlit. */
-div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor),
-div[data-testid="stVerticalBlockBorderWrapper"]:has(.tana-inputbar-anchor),
-div[data-testid="stVerticalBlock"]:has(.tana-inputbar-anchor) {
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) {
     position: fixed !important;
-    bottom: 18px; left: 50%; transform: translateX(-50%);
+    bottom: 0; left: 50%; transform: translateX(-50%);
     width: min(940px, 94vw);
     z-index: 999;
     background: #fff;
@@ -482,70 +498,61 @@ div[data-testid="stVerticalBlock"]:has(.tana-inputbar-anchor) {
     border-radius: 22px;
     padding: 8px 14px 10px 14px;
     box-shadow: 0 6px 22px rgba(18,48,74,.09);
-    margin-bottom: 0;
-}
-
-/* Todo el contenido que aparece DESPUÉS de la barra fija conserva una
-   zona de seguridad para que respuestas, resultados y descargas nunca
-   queden ocultos detrás de la barra de preguntas/carga. */
-div[data-testid="stVerticalBlock"]:has(.tana-inputbar-anchor) ~ div[data-testid="stVerticalBlock"],
-div[data-testid="stVerticalBlockBorderWrapper"]:has(.tana-inputbar-anchor) ~ div[data-testid="stVerticalBlock"],
-div[data-testid="stVerticalBlock"]:has(.tana-inputbar-anchor) ~ div[data-testid="stVerticalBlockBorderWrapper"] {
-    margin-bottom: 170px !important;
+    margin-bottom: 60px;
 }
 
 /* ---- Unifica los 4 controles (adjuntar, texto, micro, enviar) en UNA
    sola barra visual, en vez de 4 cajas separadas. Se quita el borde y
    fondo propio de cada widget de Streamlit y se dejan "transparentes"
    dentro del contenedor blanco de arriba, alineados en una sola fila. ---- */
-div[data-testid="stVerticalBlock"]:has(.tana-inputbar-anchor) div[data-testid="stHorizontalBlock"] {
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) div[data-testid="stHorizontalBlock"] {
     align-items: center !important;
     gap: 6px !important;
 }
-div[data-testid="stVerticalBlock"]:has(.tana-inputbar-anchor) div[data-testid="column"] {
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) div[data-testid="column"] {
     display: flex; align-items: center; padding: 0 !important;
 }
 
 /* Campo de texto: sin borde propio, se funde con la barra */
-div[data-testid="stVerticalBlock"]:has(.tana-inputbar-anchor) div[data-testid="stTextInput"] > div {
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) div[data-testid="stTextInput"] > div {
     border: none !important; background: transparent !important; box-shadow: none !important;
 }
-div[data-testid="stVerticalBlock"]:has(.tana-inputbar-anchor) div[data-testid="stTextInput"] input {
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) div[data-testid="stTextInput"] input {
     background: transparent !important; font-size: 14.5px; padding-left: 4px;
 }
 
 /* Adjuntar archivo: se reduce a un botón circular tipo clip, sin la
    zona de "arrastra y suelta" ni los textos de ayuda de Streamlit */
-div[data-testid="stVerticalBlock"]:has(.tana-inputbar-anchor) [data-testid="stFileUploader"] {
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stFileUploader"] {
     width: 40px;
 }
-div[data-testid="stVerticalBlock"]:has(.tana-inputbar-anchor) [data-testid="stFileUploaderDropzoneInstructions"] {
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stFileUploaderDropzoneInstructions"] {
     display: none !important;
 }
-div[data-testid="stVerticalBlock"]:has(.tana-inputbar-anchor) [data-testid*="FileUploaderDropzone"] {
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid*="FileUploaderDropzone"] {
     border: none !important; background: transparent !important; padding: 0 !important;
     min-height: 0 !important; width: 40px; height: 40px;
     display: flex; align-items: center; justify-content: center;
 }
-div[data-testid="stVerticalBlock"]:has(.tana-inputbar-anchor) [data-testid*="FileUploaderDropzone"] button {
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid*="FileUploaderDropzone"] button {
     font-size: 0 !important; width: 38px; height: 38px; border-radius: 50%;
     border: 1px solid #DDE8EF !important; background: #F5FAFC !important; padding: 0 !important;
 }
-div[data-testid="stVerticalBlock"]:has(.tana-inputbar-anchor) [data-testid*="FileUploaderDropzone"] button::after {
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid*="FileUploaderDropzone"] button::after {
     content: "📎"; font-size: 17px;
 }
-div[data-testid="stVerticalBlock"]:has(.tana-inputbar-anchor) [data-testid="stFileUploaderFile"] {
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stFileUploaderFile"] {
     display: none !important; /* la ficha del archivo se muestra con nuestro propio chip, no la de Streamlit */
 }
 
 /* Micrófono: mismo tratamiento circular y transparente */
-div[data-testid="stVerticalBlock"]:has(.tana-inputbar-anchor) [data-testid*="AudioInput"] {
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid*="AudioInput"] {
     background: transparent !important; border: none !important; box-shadow: none !important;
     min-height: 0 !important;
 }
 
 /* Botón enviar: circular, color de marca */
-div[data-testid="stVerticalBlock"]:has(.tana-inputbar-anchor) button[kind="primary"] {
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) button[kind="primary"] {
     border-radius: 50% !important; width: 40px; height: 40px; padding: 0 !important;
 }
 
@@ -612,10 +619,10 @@ def _tana_chat_add(role, content):
 
 if not st.session_state["tana_chat"]:
     st.markdown(
-        '<div style="text-align:center; padding:18px 0 125px 0;">'
-        f'{"<img src=\'data:image/png;base64," + __import__("base64").b64encode(open(LOGO_PATH,"rb").read()).decode() + "\' width=64 style=\'border-radius:14px;\'>" if os.path.exists(LOGO_PATH) else ""}'
-        '<div style="font-size:26px;font-weight:800;color:#12304A;margin-top:14px;">¿Qué monografía resolvemos hoy?</div>'
-        '<div style="color:#6B7B87;font-size:14.5px;margin-top:6px;">'
+        '<div style="text-align:center; padding:2px 0 6px 0;">'
+        f'{"<img src=\'data:image/png;base64," + __import__("base64").b64encode(open(LOGO_PATH,"rb").read()).decode() + "\' width=52 style=\'border-radius:12px;\'>" if os.path.exists(LOGO_PATH) else ""}'
+        '<div style="font-size:23px;font-weight:800;color:#12304A;margin-top:8px;">¿Qué monografía resolvemos hoy?</div>'
+        '<div style="color:#6B7B87;font-size:14.5px;margin-top:5px;">'
         'Sube tu monografía abajo y TANA desarrolla los asientos, la HT y los estados financieros.</div>'
         '</div>',
         unsafe_allow_html=True,
@@ -1916,7 +1923,11 @@ if enviar_top and (pregunta_top.strip() or audio_top is not None) and st.session
                     if temp_audio and os.path.exists(temp_audio):
                         os.remove(temp_audio)
     st.rerun()
-st.success("TANA terminó el desarrollo contable. Tu Excel está listo para descargar.")
+if st.session_state.get("asientos_contables"):
+    st.markdown(
+        '<div class="tana-success-card">✅&nbsp; TANA terminó el desarrollo contable. Tu Excel está listo para descargar.</div>',
+        unsafe_allow_html=True,
+    )
 
 FONT = "Arial"
 wb = Workbook()
@@ -3149,10 +3160,15 @@ if _sig and st.session_state.get("tana_resuelto_signature") != _sig:
     st.rerun()
 
 if st.session_state.get("tana_excel_buffer"):
+    _n_asientos = len(st.session_state.get("asientos_contables", []) or [])
+    _n_validos = len(st.session_state.get("asientos_validos", []) or [])
     st.markdown(
-        '<div class="tana-bubble-assistant" style="max-width:340px;">'
-        '<div class="tana-result-card"><span style="font-size:22px;">📊</span>'
-        '<span class="name">TANA · Excel · Desarrollo</span></div></div>',
+        f'<div class="tana-stats-row">'
+        f'<div class="tana-stat-box"><span style="font-size:20px;">📄</span>'
+        f'<div><div class="num">{_n_asientos}</div><div class="label">Asientos generados</div></div></div>'
+        f'<div class="tana-stat-box"><span style="font-size:20px;">✅</span>'
+        f'<div><div class="num">{_n_validos}</div><div class="label">Registros validados</div></div></div>'
+        f'</div>',
         unsafe_allow_html=True,
     )
     st.download_button(
@@ -3164,6 +3180,8 @@ if st.session_state.get("tana_excel_buffer"):
             ("TANA_Asientos.xlsx" if st.session_state.get("tana_modo_trabajo") == "asientos" else "TANA_Contabilidad.xlsx")
         ),
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        type="primary",
+        use_container_width=True,
     )
     if "monografia_nombre" in st.session_state:
         st.caption("La hoja Monografia conserva el texto extraído para revisión.")
