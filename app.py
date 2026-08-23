@@ -1,4 +1,5 @@
 import json
+import ast
 
 # --- TANA: filtro de diagnóstico preciso ---
 def tana_filtrar_diagnostico_preciso(diagnostico):
@@ -899,6 +900,101 @@ REGLAS:
 - La información extraída servirá después para el motor contable de TANA.
 """
 
+def _extraer_candidato_json(texto):
+    """Extrae el primer objeto/lista JSON completo de una respuesta de Gemini.
+
+    Gemini puede devolver JSON válido precedido por Markdown o texto adicional.
+    Esta función no modifica el contenido interno; solo localiza el bloque raíz.
+    """
+    texto = str(texto or "").strip()
+    if not texto:
+        return ""
+    # Eliminar cercos Markdown frecuentes.
+    texto = re.sub(r"^\s*```(?:json)?\s*", "", texto, flags=re.IGNORECASE)
+    texto = re.sub(r"\s*```\s*$", "", texto)
+
+    inicio = None
+    apertura = None
+    for i, ch in enumerate(texto):
+        if ch in "[{":
+            inicio = i
+            apertura = ch
+            break
+    if inicio is None:
+        return texto
+
+    cierre = "]" if apertura == "[" else "}"
+    profundidad = 0
+    en_cadena = False
+    escape = False
+    comilla = ""
+    for i in range(inicio, len(texto)):
+        ch = texto[i]
+        if en_cadena:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == comilla:
+                en_cadena = False
+            continue
+        if ch in ('"', "'"):
+            en_cadena = True
+            comilla = ch
+            continue
+        if ch == apertura:
+            profundidad += 1
+        elif ch == cierre:
+            profundidad -= 1
+            if profundidad == 0:
+                return texto[inicio:i + 1]
+    return texto[inicio:]
+
+
+def _reparar_json_comun(texto):
+    """Hace reparaciones conservadoras sobre JSON casi-válido.
+
+    No intenta inventar datos. Solo corrige problemas sintácticos habituales:
+    comillas tipográficas, claves sin comillas y comas finales.
+    """
+    s = _extraer_candidato_json(texto)
+    s = s.replace("“", '"').replace("”", '"').replace("‘", "'").replace("’", "'")
+    # Claves sin comillas: {asientos: ...}, , fecha: ...
+    s = re.sub(r'([\{\[,])\s*([A-Za-z_][A-Za-z0-9_-]*)\s*:', r'\1"\2":', s)
+    # Comas finales antes de cerrar objeto/lista.
+    s = re.sub(r',\s*([}\]])', r'\1', s)
+    return s.strip()
+
+
+def _parsear_respuesta_json_gemini(texto):
+    """Convierte de forma robusta la respuesta estructurada de Gemini a Python.
+
+    Primero exige JSON real. Solo si falla aplica reparaciones sintácticas
+    conservadoras y, como último recurso, literal_eval para respuestas que
+    Gemini haya emitido con sintaxis de diccionario de Python.
+    """
+    original = str(texto or "").strip()
+    if not original:
+        raise json.JSONDecodeError("Respuesta JSON vacía", "", 0)
+
+    candidato = _extraer_candidato_json(original)
+    try:
+        return json.loads(candidato)
+    except json.JSONDecodeError as primer_error:
+        reparado = _reparar_json_comun(candidato)
+        try:
+            return json.loads(reparado)
+        except json.JSONDecodeError:
+            # Último recurso para respuestas tipo Python dict/list.
+            try:
+                python_like = re.sub(r'\\btrue\\b', 'True', reparado, flags=re.IGNORECASE)
+                python_like = re.sub(r'\\bfalse\\b', 'False', python_like, flags=re.IGNORECASE)
+                python_like = re.sub(r'\\bnull\\b', 'None', python_like, flags=re.IGNORECASE)
+                return ast.literal_eval(python_like)
+            except Exception:
+                raise primer_error
+
+
 def _gemini_error_message(exc):
     msg = str(exc)
     low = msg.lower()
@@ -1028,7 +1124,7 @@ def _json_extraction_from_text(client, model, document_text):
         model=model, contents=[prompt],
         config=types.GenerateContentConfig(response_mime_type="application/json"),
     )
-    return json.loads(response.text or "{}")
+    return _parsear_respuesta_json_gemini(response.text or "{}")
 
 
 def _rescue_extraction_with_gemini(client, model, gemini_file):
@@ -1083,7 +1179,7 @@ def extract_with_gemini(uploaded):
                             config=types.GenerateContentConfig(response_mime_type="application/json"),
                         )
                         try:
-                            data = json.loads(response.text or "{}")
+                            data = _parsear_respuesta_json_gemini(response.text or "{}")
                         except json.JSONDecodeError:
                             data = {}
                         if _extraction_has_content(data) and data.get("operaciones"):
@@ -1104,7 +1200,7 @@ def extract_with_gemini(uploaded):
                     config=types.GenerateContentConfig(response_mime_type="application/json"),
                 )
                 try:
-                    data = json.loads(response.text or "{}")
+                    data = _parsear_respuesta_json_gemini(response.text or "{}")
                 except json.JSONDecodeError:
                     data = _rescue_extraction_with_gemini(client, profile["model"], gemini_file)
                 if not _extraction_has_content(data):
@@ -2348,7 +2444,7 @@ def resolve_asientos_with_gemini():
         make_contents,
         types.GenerateContentConfig(response_mime_type="application/json"),
     )
-    data = json.loads(response.text or "{}")
+    data = _parsear_respuesta_json_gemini(response.text or "{}")
     data.setdefault("_tana_gemini_route", profile["label"])
     data.setdefault("_tana_gemini_model", profile["model"])
     return data, pcge_map
@@ -2469,7 +2565,7 @@ SOLICITUD EXACTA DEL ESTUDIANTE:
         lambda client: [prompt],
         types.GenerateContentConfig(response_mime_type="application/json"),
     )
-    data = json.loads(response.text or "{}")
+    data = _parsear_respuesta_json_gemini(response.text or "{}")
     return data, profile
 
 
@@ -2579,7 +2675,7 @@ SOLICITUD DEL ESTUDIANTE:
         lambda client: [prompt],
         types.GenerateContentConfig(response_mime_type="application/json"),
     )
-    data = json.loads(response.text or "{}")
+    data = _parsear_respuesta_json_gemini(response.text or "{}")
     return data, profile
 
 
