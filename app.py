@@ -67,29 +67,67 @@ creator_email = str(st.secrets.get("TANA_CREATOR_EMAIL", "iainvestiga0@gmail.com
 user_role = "Creador" if creator_email and user_email == creator_email else "Estudiante"
 
 # ============================================================
-# REGISTRO BÁSICO DE USUARIOS AUTENTICADOS
+# REGISTRO PERSISTENTE DE USUARIOS Y ACTIVIDAD
 # ============================================================
-# V1: guarda el registro en un JSON local del despliegue. Esto permite
-# comprobar el flujo y el listado sin tocar el motor contable. En una
-# siguiente etapa se puede conectar a una base persistente externa.
-USER_REGISTRY_PATH = os.path.join(os.path.dirname(__file__), "tana_users_registry.json")
+# V8: el registro puede almacenarse de forma persistente en Supabase.
+# Streamlit Cloud no garantiza persistencia de archivos locales entre
+# reinicios/despliegues, por eso Supabase es la fuente permanente.
+# Si todavía no se configuran los Secrets de Supabase, se conserva un
+# fallback local para no romper la aplicación durante la transición.
 
-def _load_user_registry():
+import urllib.request
+import urllib.error
+
+LOCAL_REGISTRY_PATH = os.path.join(os.path.dirname(__file__), "tana_users_registry.json")
+SUPABASE_URL = str(st.secrets.get("SUPABASE_URL", "") or "").strip().rstrip("/")
+SUPABASE_KEY = str(st.secrets.get("SUPABASE_SERVICE_ROLE_KEY", "") or "").strip()
+
+
+def _supabase_enabled():
+    return bool(SUPABASE_URL and SUPABASE_KEY)
+
+
+def _supabase_request(method, path, payload=None, params=""):
+    if not _supabase_enabled():
+        return None
+    url = f"{SUPABASE_URL}/rest/v1/{path}"
+    if params:
+        url += f"?{params}"
+    headers = {
+        "apikey": SUPABASE_KEY,
+        "Authorization": f"Bearer {SUPABASE_KEY}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    if method in ("POST", "PATCH"):
+        headers["Prefer"] = "return=representation"
     try:
-        if not os.path.exists(USER_REGISTRY_PATH):
+        data = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request(url, data=data, headers=headers, method=method)
+        with urllib.request.urlopen(req, timeout=15) as response:
+            raw = response.read().decode("utf-8")
+            return json.loads(raw) if raw else []
+    except Exception:
+        return None
+
+
+def _load_local_registry():
+    try:
+        if not os.path.exists(LOCAL_REGISTRY_PATH):
             return []
-        with open(USER_REGISTRY_PATH, "r", encoding="utf-8") as fh:
+        with open(LOCAL_REGISTRY_PATH, "r", encoding="utf-8") as fh:
             data = json.load(fh)
         return data if isinstance(data, list) else []
     except Exception:
         return []
 
-def _save_user_registry(data):
-    tmp_path = USER_REGISTRY_PATH + ".tmp"
+
+def _save_local_registry(data):
+    tmp_path = LOCAL_REGISTRY_PATH + ".tmp"
     try:
         with open(tmp_path, "w", encoding="utf-8") as fh:
             json.dump(data, fh, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, USER_REGISTRY_PATH)
+        os.replace(tmp_path, LOCAL_REGISTRY_PATH)
         return True
     except Exception:
         try:
@@ -99,8 +137,47 @@ def _save_user_registry(data):
             pass
         return False
 
+
+def _load_user_registry():
+    """Carga usuarios desde Supabase; usa JSON local solo como transición."""
+    if _supabase_enabled():
+        rows = _supabase_request(
+            "GET",
+            "tana_users",
+            params="select=email,role,first_seen,last_seen,visits,activity&order=last_seen.desc",
+        )
+        if isinstance(rows, list):
+            return rows
+    return _load_local_registry()
+
+
+def _upsert_supabase_user(user):
+    rows = _supabase_request("POST", "tana_users", payload=user)
+    return isinstance(rows, list)
+
+
+def _save_user_registry(data):
+    """Guarda el registro en Supabase de forma persistente; local como fallback."""
+    if _supabase_enabled():
+        ok = True
+        for user in data:
+            payload = {
+                "email": str(user.get("email", "")).strip().lower(),
+                "role": str(user.get("role", "Estudiante")),
+                "first_seen": user.get("first_seen"),
+                "last_seen": user.get("last_seen"),
+                "visits": int(user.get("visits", 0) or 0),
+                "activity": user.get("activity", []) if isinstance(user.get("activity", []), list) else [],
+            }
+            if not _upsert_supabase_user(payload):
+                ok = False
+        if ok:
+            return True
+    return _save_local_registry(data)
+
+
 def _record_user_activity(event_type, detail="", signature=""):
-    """Registra actividad del usuario autenticado y la guarda inmediatamente en el registro."""
+    """Registra actividad persistente del usuario autenticado."""
     if not user_email:
         return False
 
@@ -110,10 +187,8 @@ def _record_user_activity(event_type, detail="", signature=""):
         None,
     )
 
-    # Si por un reinicio/rerun el usuario todavía no aparece en el registro,
-    # no perdemos la actividad: lo creamos en este mismo momento.
+    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     if user is None:
-        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
         user = {
             "email": user_email,
             "role": user_role,
@@ -125,13 +200,12 @@ def _record_user_activity(event_type, detail="", signature=""):
         users.append(user)
     else:
         user["role"] = user_role
-        user["last_seen"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        user["last_seen"] = now
 
     activity = user.get("activity", [])
     if not isinstance(activity, list):
         activity = []
 
-    # Evita duplicados cuando Streamlit vuelve a ejecutar el script por un rerun.
     if signature:
         duplicate = any(
             str(item.get("event", "")) == str(event_type)
@@ -142,7 +216,6 @@ def _record_user_activity(event_type, detail="", signature=""):
         if duplicate:
             return True
 
-    now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     activity.append({
         "timestamp": now,
         "event": str(event_type),
@@ -150,28 +223,33 @@ def _record_user_activity(event_type, detail="", signature=""):
         "signature": str(signature)[:120],
     })
     user["activity"] = activity[-100:]
+    user["last_seen"] = now
     return _save_user_registry(users)
+
 
 def _register_current_user():
     if not user_email:
         return []
     users = _load_user_registry()
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    existing = next((u for u in users if str(u.get("email", "")).lower() == user_email), None)
+    existing = next((u for u in users if str(u.get("email", "")).strip().lower() == user_email), None)
     if existing is None:
-        users.append({
+        user = {
             "email": user_email,
             "role": user_role,
             "first_seen": now,
             "last_seen": now,
             "visits": 1,
-        })
+            "activity": [],
+        }
+        users.append(user)
     else:
         existing["role"] = user_role
         existing["last_seen"] = now
         existing["visits"] = int(existing.get("visits", 0) or 0) + 1
+        existing.setdefault("activity", [])
     _save_user_registry(users)
-    return users
+    return _load_user_registry()
 
 registered_users = _register_current_user()
 
