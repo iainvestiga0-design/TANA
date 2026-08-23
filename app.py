@@ -30,6 +30,40 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
+# ============================================================
+# AUTENTICACIÓN PÚBLICA DE TANA — GOOGLE OIDC
+# ============================================================
+# La configuración se mantiene en Streamlit Secrets ([auth]).
+# No se exponen aquí Client ID, Client Secret ni cookie_secret.
+# TANA no muestra la aplicación hasta que el usuario se autentica.
+
+if not st.user.is_logged_in:
+    st.markdown(
+        """
+        <div style="max-width:720px;margin:9vh auto 0 auto;text-align:center;">
+            <div style="font-size:4rem;line-height:1;">📊</div>
+            <h1 style="margin-bottom:.2rem;">TANA</h1>
+            <p style="font-size:1.15rem;margin-top:0;">Inteligencia Artificial Contable</p>
+            <p style="margin:2rem 0 1.2rem 0;">Inicia sesión con Google para ingresar a TANA.</p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    _, col, _ = st.columns([1, 2, 1])
+    with col:
+        st.button(
+            "🔐 Iniciar sesión con Google",
+            on_click=st.login,
+            use_container_width=True,
+        )
+    st.stop()
+
+# Usuario autenticado: la aplicación continúa normalmente.
+# El cierre de sesión se ofrece en la barra lateral sin alterar el flujo contable.
+with st.sidebar:
+    st.caption(f"Sesión: {getattr(st.user, 'email', getattr(st.user, 'name', 'Usuario'))}")
+    st.button("Cerrar sesión", on_click=st.logout, use_container_width=True)
+
 # Gemini
 from google import genai
 from google.genai import types
