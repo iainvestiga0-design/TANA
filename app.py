@@ -1702,6 +1702,144 @@ def _es_peticion_correccion(texto):
     ))
 
 
+
+def _corregir_excel_directamente_con_gemini(instruccion):
+    """Analiza TODO el Excel y devuelve cambios de celdas concretos.
+
+    Esta ruta es para Excel del estudiante: no exige Libro Diario ni intenta
+    convertir la hoja HT/EF/ES en asientos. Gemini propone únicamente cambios
+    explícitos de celdas, y TANA los aplica sobre una COPIA del libro original.
+    """
+    raw = st.session_state.get("tana_excel_origen_bytes")
+    if not raw:
+        raise ValueError("No hay un Excel original cargado para corregir.")
+
+    contexto = st.session_state.get("tana_excel_resumen_completo", "")
+    prompt = f"""Eres TANA, un sistema de revisión y corrección de Excel contable peruano.
+
+El estudiante te pide CORREGIR DIRECTAMENTE SU EXCEL. NO respondas que no puedes
+modificar archivos. Tu tarea aquí es proponer cambios concretos de celdas para que
+la aplicación pueda aplicarlos a una COPIA del Excel.
+
+REGLAS ABSOLUTAS:
+1. Analiza TODAS las hojas del Excel, no solamente el Libro Diario.
+2. La hoja puede llamarse HT, Hoja de Trabajo, Balance, Hoja1 o cualquier otro nombre.
+3. El nombre de la hoja es solo una pista; usa el contenido para localizarla.
+4. Si el estudiante indica una hoja y una cuenta/fila concreta, modifica ÚNICAMENTE
+   esa fila y las celdas estrictamente necesarias de esa fila.
+5. NO modifiques otras filas, otras hojas, formatos, fórmulas o valores no relacionados.
+6. Si el error es una fórmula desplazada/desalineada, devuelve la fórmula correcta
+   para la celda concreta, respetando las referencias relativas de esa fila.
+7. Si el estudiante pide "corrige solo esa fila", la respuesta debe contener solo
+   las celdas de esa fila.
+8. No inventes valores. Usa las demás hojas como evidencia cruzada (LD/HT/EF/ES,
+   aunque tengan otros nombres).
+9. Antes de proponer el cambio, comprueba que la celda actual y la fila coinciden
+   con la evidencia del Excel.
+10. Devuelve JSON válido, sin Markdown.
+
+FORMATO OBLIGATORIO:
+{{
+  "estado": "corregible" | "no_hay_evidencia",
+  "hoja": "nombre exacto de la hoja",
+  "fila": 0,
+  "cambios": [
+    {{
+      "celda": "C23",
+      "valor_actual": "valor o fórmula actual",
+      "valor_nuevo": "valor o fórmula nueva",
+      "motivo": "explicación breve"
+    }}
+  ],
+  "observacion": "qué se corrigió y por qué"
+}}
+
+Si no puedes demostrar con el contenido del Excel qué celda debe cambiar,
+usa estado "no_hay_evidencia" y no inventes una corrección.
+
+CONTENIDO DEL EXCEL, HOJA POR HOJA:
+{contexto[:100000]}
+
+SOLICITUD EXACTA DEL ESTUDIANTE:
+{instruccion}
+"""
+    response, profile = _generate_with_fallback(
+        lambda client: [prompt],
+        types.GenerateContentConfig(response_mime_type="application/json"),
+    )
+    data = json.loads(response.text or "{}")
+    return data, profile
+
+
+def _aplicar_cambios_celdas_excel(propuesta):
+    """Aplica cambios explícitos sobre una COPIA del Excel original."""
+    raw = st.session_state.get("tana_excel_origen_bytes")
+    if not raw:
+        raise ValueError("No hay Excel original cargado.")
+    if propuesta.get("estado") != "corregible":
+        raise ValueError(propuesta.get("observacion") or "No existe evidencia suficiente para corregir el Excel.")
+
+    hoja = str(propuesta.get("hoja") or "").strip()
+    fila = int(propuesta.get("fila") or 0)
+    cambios = propuesta.get("cambios") or []
+    if not hoja or fila < 1 or not cambios:
+        raise ValueError("La propuesta de corrección no contiene hoja, fila y cambios concretos.")
+
+    wb = openpyxl.load_workbook(io.BytesIO(raw), data_only=False)
+    if hoja not in wb.sheetnames:
+        raise ValueError(f"La hoja '{hoja}' no existe en el Excel original.")
+
+    # Seguridad: todos los cambios deben pertenecer a la fila indicada.
+    for cambio in cambios:
+        celda = str(cambio.get("celda") or "").strip()
+        m = re.fullmatch(r"([A-Za-z]+)(\d+)", celda)
+        if not m or int(m.group(2)) != fila:
+            raise ValueError(f"Cambio rechazado: {celda} no pertenece a la fila {fila}.")
+
+    ws = wb[hoja]
+    aplicados=[]
+    for cambio in cambios:
+        celda = str(cambio["celda"]).strip()
+        valor_actual = cambio.get("valor_actual")
+        valor_nuevo = cambio.get("valor_nuevo")
+        actual = ws[celda].value
+        # Si Gemini recibió una celda vacía, permitimos None/""; si no, exigimos
+        # coincidencia para evitar escribir encima de una versión distinta.
+        if valor_actual not in (None, ""):
+            if str(actual).strip() != str(valor_actual).strip():
+                raise ValueError(
+                    f"La celda {hoja}!{celda} cambió desde el diagnóstico. "
+                    f"Actual='{actual}' / esperado='{valor_actual}'. No se aplicó ningún cambio."
+                )
+        ws[celda] = valor_nuevo
+        aplicados.append((celda, actual, valor_nuevo, cambio.get("motivo", "")))
+
+    ws_rev = wb.create_sheet("Revision_TANA")
+    ws_rev["A1"] = "TANA — CORRECCIÓN DE CELDAS"
+    ws_rev["A2"] = "Estado"
+    ws_rev["B2"] = "CORRECCIÓN APLICADA"
+    ws_rev["A3"] = "Hoja"
+    ws_rev["B3"] = hoja
+    ws_rev["A4"] = "Fila corregida"
+    ws_rev["B4"] = fila
+    ws_rev["A6"] = "Celda"
+    ws_rev["B6"] = "Valor anterior"
+    ws_rev["C6"] = "Valor nuevo"
+    ws_rev["D6"] = "Motivo"
+    for i,(celda,antes,nuevo,motivo) in enumerate(aplicados,start=7):
+        ws_rev.cell(i,1,celda); ws_rev.cell(i,2,str(antes)); ws_rev.cell(i,3,str(nuevo)); ws_rev.cell(i,4,str(motivo))
+    ws_rev.column_dimensions["A"].width=15; ws_rev.column_dimensions["B"].width=30
+    ws_rev.column_dimensions["C"].width=30; ws_rev.column_dimensions["D"].width=80
+    ws_rev["A"+str(len(aplicados)+9)] = "Advertencia"
+    ws_rev["B"+str(len(aplicados)+9)] = "Soy una inteligencia artificial y puedo cometer errores. Revisa siempre el resultado antes de utilizarlo."
+
+    try:
+        wb.calculation.fullCalcOnLoad=True; wb.calculation.forceFullCalc=True; wb.calculation.calcMode="auto"
+    except Exception:
+        pass
+    out=io.BytesIO(); wb.save(out); out.seek(0)
+    return out.getvalue(), aplicados
+
 def _corregir_asientos_con_gemini(instruccion):
     """Pide una corrección controlada y devuelve TODOS los asientos corregidos."""
     actuales = st.session_state.get("asientos_contables", [])
@@ -1850,8 +1988,28 @@ def _revisar_bytes_excel_completo(raw):
 def _aplicar_correccion_si_corresponde(pregunta):
     if not _es_peticion_correccion(pregunta):
         return False
-    with st.spinner("TANA está revisando la corrección y regenerando el trabajo…"):
+    with st.spinner("TANA está localizando la fila y preparando un Excel nuevo…"):
         try:
+            # Si el estudiante cargó un Excel, corregimos directamente ese libro.
+            # No obligamos a convertir HT/EF/ES a asientos contables.
+            if st.session_state.get("tana_excel_origen_bytes"):
+                propuesta, profile = _corregir_excel_directamente_con_gemini(pregunta)
+                if propuesta.get("estado") != "corregible":
+                    _tana_chat_add("assistant", f"<b>⚠️ No hice cambios.</b><br>{propuesta.get('observacion','No encontré evidencia suficiente para una corrección segura.')}<br><br><small>El Excel original permanece intacto.</small>")
+                    return True
+                nuevo_buffer, aplicados = _aplicar_cambios_celdas_excel(propuesta)
+                # Segunda revisión del libro completo.
+                hojas_post, resumen_post = _revisar_bytes_excel_completo(nuevo_buffer)
+                st.session_state["tana_excel_buffer"] = nuevo_buffer
+                st.session_state["tana_excel_hojas"] = hojas_post
+                st.session_state["tana_excel_resumen_completo"] = resumen_post
+                st.session_state["tana_excel_revisado_post"] = True
+                st.session_state["tana_correcciones"] = st.session_state.get("tana_correcciones", 0) + 1
+                st.session_state["tana_correccion_version"] = st.session_state.get("tana_correccion_version", 1) + 1
+                detalle = "<br>".join(f"<b>{c}</b>: {a} → {n}<br><small>{m}</small>" for c,a,n,m in aplicados)
+                _tana_chat_add("assistant", f"<b>✅ Corrección aplicada en el Excel.</b><br><br><b>Hoja:</b> {propuesta.get('hoja')}<br><b>Fila:</b> {propuesta.get('fila')}<br><br>{detalle}<br><br><b>Nuevo Excel generado.</b><br>TANA volvió a revisar todas las hojas del archivo corregido.<br><br><small>El Excel original permanece intacto.</small>")
+                return True
+
             data, profile = _corregir_asientos_con_gemini(pregunta)
             nuevos = data.get("asientos", []) if isinstance(data, dict) else []
             observacion = data.get("observacion", "Corrección procesada.") if isinstance(data, dict) else "Corrección procesada."
