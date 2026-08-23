@@ -56,6 +56,7 @@ def tana_filtrar_diagnostico_preciso(diagnostico):
 import io
 import os
 import re
+import mimetypes
 import shutil
 import subprocess
 import tempfile
@@ -911,18 +912,77 @@ def _gemini_error_message(exc):
     return msg
 
 
+LEGACY_DOCUMENT_TEXT_PROMPT = """
+Lee TODO el contenido visible del documento que se te proporciona.
+Puede ser un archivo Word antiguo (.doc), Word moderno (.docx) u otro documento.
+No resuelvas la contabilidad y no hagas un resumen.
+Devuelve el texto completo y ordenado de la práctica, conservando fechas, operaciones,
+importes, cantidades, porcentajes, monedas, condiciones de pago y todo lo que se
+solicita al estudiante. Si hay tablas, reproduce sus filas y columnas de forma legible.
+No inventes información.
+"""
+
+
+def _upload_gemini_file(client, path, mime_type=None):
+    """Sube un archivo a Gemini con MIME explícito cuando el SDK lo permite."""
+    if mime_type:
+        upload_cfg = getattr(types, "UploadFileConfig", None)
+        if upload_cfg is not None:
+            try:
+                return client.files.upload(file=path, config=upload_cfg(mime_type=mime_type))
+            except Exception:
+                pass
+    return client.files.upload(file=path)
+
+
+def _extraction_has_content(data):
+    """Evita continuar y generar 0 asientos cuando la lectura del documento falló."""
+    if not isinstance(data, dict):
+        return False
+    if isinstance(data.get("operaciones"), list) and data.get("operaciones"):
+        return True
+    if any(str(data.get(k) or "").strip() for k in ("empresa", "tipo_documento", "periodo")):
+        return True
+    return bool(data.get("estado_inicial") or data.get("solicitudes") or data.get("datos_importantes"))
+
+
+def _json_extraction_from_text(client, model, document_text):
+    prompt = (EXTRACTION_PROMPT + "\n\nTEXTO COMPLETO EXTRAÍDO DEL DOCUMENTO:\n" + str(document_text or "")[:120000])
+    response = client.models.generate_content(
+        model=model, contents=[prompt],
+        config=types.GenerateContentConfig(response_mime_type="application/json"),
+    )
+    return json.loads(response.text or "{}")
+
+
+def _rescue_extraction_with_gemini(client, model, gemini_file):
+    """Ruta de rescate para Word: lectura textual completa y luego extracción estructurada."""
+    response = client.models.generate_content(
+        model=model, contents=[gemini_file, LEGACY_DOCUMENT_TEXT_PROMPT],
+        config=types.GenerateContentConfig(),
+    )
+    document_text = response.text or ""
+    if not document_text.strip():
+        raise ValueError("Gemini no devolvió texto legible del documento.")
+    return _json_extraction_from_text(client, model, document_text)
+
 def extract_with_gemini(uploaded):
     profiles = get_gemini_profiles()
     if not profiles:
         raise RuntimeError(
-            "TANA no tiene configurada ninguna GEMINI_API_KEY. "
-            "En Streamlit abre App settings → Secrets y agrega "
-            'GEMINI_API_KEY = "TU_CLAVE".'
+            "TANA no tiene configurada ninguna GEMINI_API_KEY. En Streamlit abre "
+            'App settings -> Secrets y agrega GEMINI_API_KEY = "TU_CLAVE".'
         )
 
     suffix = "." + uploaded.name.rsplit(".", 1)[-1].lower()
     temp_path = None
     uploaded_bytes = uploaded.getvalue()
+    extension = uploaded.name.rsplit(".", 1)[-1].lower() if "." in uploaded.name else ""
+    mime_type = mimetypes.guess_type(uploaded.name)[0]
+    if extension == "doc":
+        mime_type = "application/msword"
+    elif extension == "docx":
+        mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -932,23 +992,26 @@ def extract_with_gemini(uploaded):
         errors = []
         for profile in profiles:
             client = get_gemini_client(profile["api_key"])
-            gemini_file = None
             try:
-                # Cada perfil tiene su propio cliente/proyecto. El archivo se sube
-                # a ese proyecto y solo entonces se consume la generación.
-                gemini_file = client.files.upload(file=temp_path)
+                gemini_file = _upload_gemini_file(client, temp_path, mime_type)
                 response = client.models.generate_content(
                     model=profile["model"],
                     contents=[gemini_file, EXTRACTION_PROMPT],
                     config=types.GenerateContentConfig(response_mime_type="application/json"),
                 )
-                raw = response.text or ""
-                data = json.loads(raw)
+                try:
+                    data = json.loads(response.text or "{}")
+                except json.JSONDecodeError:
+                    data = _rescue_extraction_with_gemini(client, profile["model"], gemini_file)
+                if not _extraction_has_content(data):
+                    data = _rescue_extraction_with_gemini(client, profile["model"], gemini_file)
+                if not _extraction_has_content(data):
+                    raise ValueError(
+                        "TANA pudo abrir el archivo, pero no encontró operaciones o datos contables reconocibles."
+                    )
                 return data
             except Exception as exc:
                 errors.append((profile["label"], profile["model"], exc))
-                if not _is_gemini_fallback_error(exc):
-                    raise RuntimeError(_gemini_error_message(exc)) from exc
                 continue
 
         raise RuntimeError(_fallback_error_message(errors))
@@ -2200,6 +2263,11 @@ if "monografia_json" in st.session_state and "asientos_contables" not in st.sess
                 raise ValueError("La respuesta de Gemini no tiene una estructura de asientos válida.")
             if not isinstance(asientos_generados, list):
                 raise ValueError("La clave 'asientos' de Gemini no contiene una lista.")
+            if not asientos_generados:
+                raise ValueError(
+                    "TANA reconoció la práctica, pero no pudo identificar operaciones contables suficientes para generar asientos. "
+                    "No se generará un Excel vacío."
+                )
             asientos_generados = asegurar_cuenta_79_en_destinos(asientos_generados, pcge_map)
             asientos_generados = corregir_retiro_socio(asientos_generados, st.session_state.get("monografia_json", {}))
             valid, errors, warnings = validate_asientos({"asientos": asientos_generados}, pcge_map)
@@ -2648,7 +2716,7 @@ PREGUNTA:
 
 # La consulta y el audio se capturan arriba. Aquí solo se procesa la acción,
 # una vez que las funciones del tutor ya están definidas.
-if enviar_top and (pregunta_top.strip() or audio_top is not None) and (st.session_state.get("asientos_contables") or st.session_state.get("tana_excel_revisado") or st.session_state.get("monografia_json")):
+if enviar_top and (pregunta_top.strip() or audio_top is not None):
     if enviar_top and pregunta_top.strip():
         _record_user_activity("consulta_realizada", pregunta_top.strip())
         _tana_chat_add("user", pregunta_top.strip())
@@ -2682,12 +2750,7 @@ if enviar_top and (pregunta_top.strip() or audio_top is not None) and (st.sessio
     elif audio_top is not None:
         import hashlib
         _audio_sig = hashlib.sha1(audio_top.getvalue()).hexdigest()
-        if st.session_state.get("audio_tana_processed") == _audio_sig:
-            audio_top = None
-        else:
-            st.session_state["audio_tana_processed"] = _audio_sig
-        if audio_top is not None:
-            _record_user_activity("consulta_realizada", "Pregunta enviada por voz", _audio_sig)
+        if st.session_state.get("audio_tana_processed") != _audio_sig:
             _tana_chat_add("user", "🎤 Pregunta enviada por voz")
             with st.spinner("TANA está escuchando y preparando la respuesta…"):
                 temp_audio = None
@@ -2695,16 +2758,30 @@ if enviar_top and (pregunta_top.strip() or audio_top is not None) and (st.sessio
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
                         tmp.write(audio_top.getvalue())
                         temp_audio = tmp.name
+
                     def audio_contents(client):
-                        audio_file = client.files.upload(file=temp_audio)
-                        return [audio_file, "Escucha el audio del estudiante, transcribe su pregunta y luego respóndela. No inventes datos. Usa el siguiente contexto:\n" + _tana_contexto_tutor()]
-                    response, profile = _generate_with_fallback(audio_contents, types.GenerateContentConfig())
+                        audio_file = _upload_gemini_file(client, temp_audio, "audio/wav")
+                        return [
+                            audio_file,
+                            "Escucha el audio del estudiante, transcribe su pregunta y luego respóndela. "
+                            "No inventes datos. Si hay una monografía o Excel cargado, usa su contexto. "
+                            "Si no hay documento cargado, responde normalmente a la pregunta hablada. "
+                            "Devuelve únicamente la respuesta para el estudiante.\n\n"
+                            + _tana_contexto_tutor()
+                        ]
+
+                    response, profile = _generate_with_fallback(
+                        audio_contents, types.GenerateContentConfig()
+                    )
                     respuesta_audio = response.text or "No pude interpretar el audio."
                     st.session_state["respuesta_tana"] = respuesta_audio
                     st.session_state["respuesta_tana_ruta"] = profile["label"]
+                    st.session_state["audio_tana_processed"] = _audio_sig
+                    _record_user_activity("consulta_realizada", "Pregunta enviada por voz", _audio_sig)
                     _tana_chat_add("assistant", respuesta_audio)
                 except Exception as exc:
-                    st.error(f"No se pudo procesar el audio: {_gemini_error_message(exc)}")
+                    # El error queda en el historial y el audio NO se marca como procesado.
+                    _tana_chat_add("assistant", f"⚠️ No pude procesar el audio: {_gemini_error_message(exc)}")
                 finally:
                     if temp_audio and os.path.exists(temp_audio):
                         os.remove(temp_audio)
