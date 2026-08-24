@@ -3550,68 +3550,215 @@ def es_variacion_existencias(code):
 def es_cuenta79(code):
     return code[:2] == "79"
 
-def es_naturaleza(code):
-    # 69 (costo de ventas) y el elemento 9 se reclasifican íntegramente a
-    # R.Función; 79 es cuenta puente y no aparece en ningún resultado.
-    if not clasificar_resultado(code):
-        return False
-    if es_costo_ventas(code) or es_elemento9(code) or es_cuenta79(code):
-        return False
-    return True
 
-# Cuentas del Elemento 6 que ya tienen un destino explícito a 94/95.
-# Se detectan a partir de los asientos desarrollados por TANA, para que
-# el ERF no vuelva a incluir un gasto por naturaleza que ya fue llevado
-# a una cuenta de función.
 def detectar_cuentas_6_con_destino(asientos):
-    con_destino = set()
-    for asiento in asientos or []:
-        lineas = asiento.get("lineas", []) if isinstance(asiento, dict) else []
-        hay_94_95 = any(
-            str(x.get("codigo", "")).strip().startswith(("94", "95"))
-            for x in lineas if isinstance(x, dict)
-        )
-        if not hay_94_95:
-            continue
-        for x in lineas:
-            if not isinstance(x, dict):
-                continue
-            codigo = str(x.get("codigo", "")).strip()
-            if codigo[:1] == "6" and len(codigo) == 5:
-                con_destino.add(codigo)
-    return con_destino
-
-CUENTAS_6_CON_DESTINO = detectar_cuentas_6_con_destino(
-    st.session_state.get("asientos_contables", [])
-)
-
-def es_funcion(code):
     """
-    Clasificación EXACTA para Resultado por Función según la plantilla
-    revisada por el usuario:
+    Detecta cuentas de naturaleza (65/67) que realmente fueron llevadas a
+    cuentas por función (94/95).
 
-    OBLIGATORIAS:
-      - 70: ventas (detecta cualquier cuenta 70xxxxx presente).
-      - 69: costo de ventas (detecta cualquier cuenta 69xxxxx presente).
-      - 94 y 95: gastos por función.
+    La versión anterior marcaba una cuenta 6 como "con destino" solo porque
+    aparecía en el mismo asiento que una 94/95. Eso es demasiado amplio y
+    podía eliminar una 65/67 del ERF aunque su destino estuviera en otro
+    asiento, generando diferencias entre ERN y ERF.
 
-    ADICIONALES SOLO SI CORRESPONDE:
-      - 78: otros ingresos, si existe en la práctica.
-      - 65 y 67: solo si la cuenta existe y NO tiene destino a 94/95.
+    Ahora:
+      1) Identificamos asientos de destino por la presencia de 94/95 + 79
+         y/o glosas explícitas de "destino".
+      2) Calculamos el importe destinado.
+      3) Buscamos una combinación exacta de cuentas del elemento 6 cuyo
+         saldo deudor explique ese importe. Solo marcamos como destinadas
+         las cuentas 65/67 que pertenecen a una combinación única.
+      4) Si no existe una combinación inequívoca, no se elimina ninguna 65/67
+         del ERF: se conserva para no ocultar gasto real.
+    """
+    # Saldos deudores por cuenta del elemento 6.
+    saldos_6 = {}
+    for asiento in asientos or []:
+        for line in (asiento.get("lineas", []) if isinstance(asiento, dict) else []):
+            if not isinstance(line, dict):
+                continue
+            codigo = str(line.get("codigo", "")).strip()
+            if not re.fullmatch(r"6\d{4}", codigo):
+                continue
+            debe = _to_float(line.get("debe"), 0.0)
+            haber = _to_float(line.get("haber"), 0.0)
+            saldos_6[codigo] = saldos_6.get(codigo, 0.0) + debe - haber
 
-    NO pertenecen al ERF:
-      - 60, 61, 62, 63, 64, 66 y 68 por el solo hecho de ser
-        cuentas del elemento 6.
-      - 79: es cuenta puente de distribución y nunca se presenta
-        como componente del ERF.
+    # Solo nos interesan importes positivos.
+    saldos_6 = {c: round(v, 2) for c, v in saldos_6.items() if v > 0.009}
+    if not saldos_6:
+        return set()
+
+    importes_destino = []
+    for asiento in asientos or []:
+        if not isinstance(asiento, dict):
+            continue
+        lineas = asiento.get("lineas", []) or []
+        codigos = {str(x.get("codigo", "")).strip() for x in lineas if isinstance(x, dict)}
+        texto = " ".join(
+            str(asiento.get(k, "") or "") for k in ("glosa", "observacion", "documento")
+        ).lower()
+        tiene_94_95 = any(c.startswith(("94", "95")) for c in codigos)
+        tiene_79 = any(c.startswith("79") for c in codigos)
+        es_destino = (
+            tiene_94_95 and tiene_79
+        ) or (
+            tiene_94_95 and any(
+                palabra in texto for palabra in (
+                    "destino", "distribución", "distribucion",
+                    "por función", "por funcion", "imputación", "imputacion"
+                )
+            )
+        )
+        if not es_destino:
+            continue
+
+        total = 0.0
+        for line in lineas:
+            if not isinstance(line, dict):
+                continue
+            codigo = str(line.get("codigo", "")).strip()
+            if codigo.startswith(("94", "95")):
+                total += max(_to_float(line.get("debe"), 0.0), 0.0)
+        if total > 0.009:
+            importes_destino.append(round(total, 2))
+
+    if not importes_destino:
+        return set()
+
+    # Resolver cada importe de destino contra las cuentas 6.
+    # Se usa búsqueda de subconjuntos con centavos para prácticas pequeñas.
+    cuentas = sorted(saldos_6)
+    valores = [saldos_6[c] for c in cuentas]
+
+    def buscar_subconjunto_objetivo(objetivo, limite=2):
+        objetivo = round(objetivo, 2)
+        soluciones = []
+
+        # Orden descendente para encontrar rápidamente combinaciones plausibles.
+        pares = sorted(zip(cuentas, valores), key=lambda x: x[1], reverse=True)
+
+        def backtrack(i, restante, elegidas):
+            if len(soluciones) >= limite:
+                return
+            restante = round(restante, 2)
+            if abs(restante) < 0.01:
+                soluciones.append(tuple(elegidas))
+                return
+            if restante < -0.009 or i >= len(pares):
+                return
+
+            # Cota simple.
+            if sum(v for _, v in pares[i:]) + 0.009 < restante:
+                return
+
+            codigo, valor = pares[i]
+            if valor <= restante + 0.009:
+                backtrack(i + 1, restante - valor, elegidas + [codigo])
+            backtrack(i + 1, restante, elegidas)
+
+        backtrack(0, objetivo, [])
+        return soluciones
+
+    destinadas = set()
+    usados = set()
+
+    for importe in importes_destino:
+        # Excluir cuentas ya asignadas para no contar dos veces el mismo gasto.
+        cuentas_previas = cuentas[:]
+        if usados:
+            cuentas_previas = [c for c in cuentas_previas if c not in usados]
+
+        # Buscar sobre el conjunto restante.
+        pares = sorted(
+            ((c, saldos_6[c]) for c in cuentas_previas),
+            key=lambda x: x[1],
+            reverse=True,
+        )
+        soluciones = []
+
+        def backtrack_local(i, restante, elegidas):
+            if len(soluciones) >= 2:
+                return
+            restante = round(restante, 2)
+            if abs(restante) < 0.01:
+                soluciones.append(tuple(elegidas))
+                return
+            if restante < -0.009 or i >= len(pares):
+                return
+            if sum(v for _, v in pares[i:]) + 0.009 < restante:
+                return
+            codigo, valor = pares[i]
+            if valor <= restante + 0.009:
+                backtrack_local(i + 1, restante - valor, elegidas + [codigo])
+            backtrack_local(i + 1, restante, elegidas)
+
+        backtrack_local(0, importe, [])
+
+        # Solo aceptamos una solución inequívoca.
+        if len(soluciones) == 1:
+            sol = set(soluciones[0])
+            usados.update(sol)
+            destinadas.update(c for c in sol if c.startswith(("65", "67")))
+
+    return destinadas
+
+def es_naturaleza(code):
+    """
+    Clasificación para Resultado por Naturaleza.
+
+    Incluye:
+      - cuentas de naturaleza 6 y 7 que realmente forman el resultado;
+      - 87 Participaciones y 88 Impuesto a la Renta, cuando existan.
+
+    Excluye:
+      - 69, porque en la naturaleza se representa mediante 60/61;
+      - 79 y 89, cuentas puente/de cierre;
+      - cuentas 8 y cuentas del elemento 9 (94/95, etc.), que corresponden
+        a función, situación financiera o cierres.
     """
     if not code:
         return False
-    if code[:2] in {"70", "69", "78", "94", "95"}:
+    pref2 = code[:2]
+    if pref2 in {"69", "79", "89"}:
+        return False
+    if code[:1] == "9":
+        return pref2 in {"87", "88"}
+    if code[:1] == "8":
+        return False
+    return code[:1] in {"6", "7"}
+
+
+def es_funcion(code):
+    """
+    Clasificación para Resultado por Función.
+
+    Estructurales:
+      - 70 ventas
+      - 69 costo de ventas
+      - 94 y 95 gastos por función
+
+    Adicionales:
+      - 78 y 77 si existen como ingresos
+      - 65 y 67 solo cuando no se puede demostrar que fueron destinados
+        a 94/95
+      - 87 y 88 para que participaciones e impuesto también formen parte
+        del resultado final y concilien con ERN.
+
+    79 no se presenta en el ERF.
+    """
+    if not code:
+        return False
+    if code[:2] in {"70", "69", "78", "77", "94", "95", "87", "88"}:
         return True
     if code[:2] in {"65", "67"} and len(code) == 5:
         return code not in CUENTAS_6_CON_DESTINO
     return False
+
+
+CUENTAS_6_CON_DESTINO = detectar_cuentas_6_con_destino(
+    st.session_state.get("asientos_contables", [])
+)
 
 def es_balance(code):
     return not clasificar_resultado(code)
@@ -3856,6 +4003,30 @@ def _sum_ht_codes(codes, column):
     return '=' + '+'.join(formulas)
 
 
+def _signed_ht(prefix, credit_col="L", debit_col="K"):
+    """Saldo neto de una familia: crédito menos débito."""
+    return (
+        f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*'
+        f'HT!${credit_col}$4:${credit_col}${HT_LAST_ROW})'
+        f'-SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*'
+        f'HT!${debit_col}$4:${debit_col}${HT_LAST_ROW})'
+    )
+
+
+def _signed_ht_codes(codes, credit_col="L", debit_col="K"):
+    if not codes:
+        return '=0'
+    parts = []
+    for code in codes:
+        parts.append(
+            f'SUMPRODUCT((HT!$A$4:$A${HT_LAST_ROW}="{code}")*'
+            f'HT!${credit_col}$4:${credit_col}${HT_LAST_ROW})'
+            f'-SUMPRODUCT((HT!$A$4:$A${HT_LAST_ROW}="{code}")*'
+            f'HT!${debit_col}$4:${debit_col}${HT_LAST_ROW})'
+        )
+    return '=' + '+'.join(parts)
+
+
 def _set_report_value(ws, row, col, formula, bold=False):
     cell = ws.cell(row=row, column=col, value=formula)
     cell.font = BOLD if bold else BLACK
@@ -3908,17 +4079,19 @@ _report_header(ws8, 4)
 
 r = 5
 _write_label(ws8, r, 'INGRESOS OPERACIONALES', True); r += 1
+
 ventas_row = r
 _write_label(ws8, r, 'VENTAS')
-_write_amount(ws8, r, _sum_ht('70', 'N'), False)
+# Ingreso neto = HABER - DEBE. Así se contemplan también eventuales
+# devoluciones/rectificaciones sin romper la conciliación.
+_write_amount(ws8, r, _signed_ht('70', 'N', 'M'))
 r += 1
 
-# Líneas de detalle de ventas: solo se muestran cuando existen cuentas 70 adicionales.
 ventas_codes = sorted(c for c in cuentas_reporte if c.startswith('70'))
 if len(ventas_codes) > 1:
     for code in ventas_codes:
         _write_label(ws8, r, f'{code} - {pcge_map.get(code, code)}')
-        _write_amount(ws8, r, _sum_ht_codes([code], 'N'))
+        _write_amount(ws8, r, _signed_ht_codes([code], 'N', 'M'))
         r += 1
 
 ventas_total_row = r
@@ -3926,9 +4099,14 @@ _write_label(ws8, r, 'INGRESOS OPERACIONALES', True)
 _write_amount(ws8, r, f'=E{ventas_row}', True)
 r += 1
 
-_write_label(ws8, r, 'COSTO DE VENTA', True)
 costo_row = r
-_write_amount(ws8, r, _sum_ht('69', 'M'))
+_write_label(ws8, r, 'COSTO DE VENTA', True)
+# Gasto neto = DEBE - HABER.
+_write_amount(
+    ws8, r,
+    f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="69")*HT!$M$4:$M${HT_LAST_ROW})-'
+    f'SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="69")*HT!$N$4:$N${HT_LAST_ROW})'
+)
 r += 1
 
 utilidad_bruta_row = r
@@ -3937,21 +4115,29 @@ _write_amount(ws8, r, f'=E{ventas_total_row}-E{costo_row}', True)
 r += 2
 
 _write_label(ws8, r, 'GASTOS OPERACIONALES', True); r += 1
-
 gasto_operativo_rows = []
-# 95 y 94 son obligatorias en la estructura, aunque su saldo sea cero.
+
 for prefix, label in [('95', 'Gastos de venta'), ('94', 'Gastos de administración')]:
     rr = r
     _write_label(ws8, r, label.upper())
-    _write_amount(ws8, r, f'=-{_sum_ht(prefix, "M")[1:]}')
+    _write_amount(
+        ws8, r,
+        f'=-(SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*'
+        f'HT!$M$4:$M${HT_LAST_ROW})-SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*'
+        f'HT!$N$4:$N${HT_LAST_ROW}))'
+    )
     gasto_operativo_rows.append(rr)
     r += 1
 
-# 65: solo si existe y no fue destinada a 94/95.
+# 65: solo si existe y NO se pudo demostrar que fue destinada a 94/95.
 for code in sorted(c for c in cuentas_reporte if len(c) == 5 and c.startswith('65') and c not in CUENTAS_6_CON_DESTINO):
     rr = r
     _write_label(ws8, r, f'{code} - {pcge_map.get(code, code)}')
-    _write_amount(ws8, r, f'=-{_sum_ht_codes([code], "M")[1:]}')
+    _write_amount(
+        ws8, r,
+        f'=-(SUMPRODUCT((HT!$A$4:$A${HT_LAST_ROW}="{code}")*HT!$M$4:$M${HT_LAST_ROW})-'
+        f'SUMPRODUCT((HT!$A$4:$A${HT_LAST_ROW}="{code}")*HT!$N$4:$N${HT_LAST_ROW}))'
+    )
     gasto_operativo_rows.append(rr)
     r += 1
 
@@ -3963,28 +4149,29 @@ r += 2
 
 _write_label(ws8, r, 'OTROS INGRESOS Y GASTOS', True); r += 1
 
-# 78: se incorpora si existe.
 otros_78_row = None
 if _prefix_exists('78'):
     otros_78_row = r
     _write_label(ws8, r, 'OTROS INGRESOS')
-    _write_amount(ws8, r, _sum_ht('78', 'N'))
+    _write_amount(ws8, r, _signed_ht('78', 'N', 'M'))
     r += 1
 
-# Ingreso financiero 77, si existe.
 ingreso_fin_row = None
 if _prefix_exists('77'):
     ingreso_fin_row = r
     _write_label(ws8, r, 'INGRESO FINANCIERO')
-    _write_amount(ws8, r, _sum_ht('77', 'N'))
+    _write_amount(ws8, r, _signed_ht('77', 'N', 'M'))
     r += 1
 
-# 67: solo si existe y no tiene destino a 94/95; se presenta como gasto financiero.
 gasto_fin_rows = []
 for code in sorted(c for c in cuentas_reporte if len(c) == 5 and c.startswith('67') and c not in CUENTAS_6_CON_DESTINO):
     rr = r
     _write_label(ws8, r, f'{code} - {pcge_map.get(code, code)}')
-    _write_amount(ws8, r, f'=-{_sum_ht_codes([code], "M")[1:]}')
+    _write_amount(
+        ws8, r,
+        f'=-(SUMPRODUCT((HT!$A$4:$A${HT_LAST_ROW}="{code}")*HT!$M$4:$M${HT_LAST_ROW})-'
+        f'SUMPRODUCT((HT!$A$4:$A${HT_LAST_ROW}="{code}")*HT!$N$4:$N${HT_LAST_ROW}))'
+    )
     gasto_fin_rows.append(rr)
     r += 1
 
@@ -3999,16 +4186,22 @@ parts += [f'+E{x}' for x in gasto_fin_rows]
 _write_amount(ws8, r, '=' + ''.join(parts), True)
 r += 1
 
-# Participaciones: solo si existe elemento 87; si no existe, se mantiene 0.
 part_row = r
 _write_label(ws8, r, 'PARTICIPACIONES')
-_write_amount(ws8, r, f'=-{_sum_ht("87", "M")[1:]}')
+_write_amount(
+    ws8, r,
+    f'=-(SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="87")*HT!$M$4:$M${HT_LAST_ROW})-'
+    f'SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="87")*HT!$N$4:$N${HT_LAST_ROW}))'
+)
 r += 1
 
-# Impuesto a la renta: solo si existe elemento 88; si no existe, 0.
 impuesto_row = r
 _write_label(ws8, r, 'IMPUESTO A LA RENTA')
-_write_amount(ws8, r, f'=-{_sum_ht("88", "M")[1:]}')
+_write_amount(
+    ws8, r,
+    f'=-(SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="88")*HT!$M$4:$M${HT_LAST_ROW})-'
+    f'SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="88")*HT!$N$4:$N${HT_LAST_ROW}))'
+)
 r += 1
 
 resultado_erf_row = r
@@ -4016,7 +4209,6 @@ _write_label(ws8, r, 'RESULTADO DEL EJERCICIO', True)
 _write_amount(ws8, r, f'=E{resultado_antes_part_row}+E{part_row}+E{impuesto_row}', True)
 r += 2
 
-# Control interno: no se muestra en el informe, pero permite comprobar que ERF = ERN.
 control_erf_row = r
 _write_label(ws8, r, 'CONTROL INTERNO ERF')
 _write_amount(ws8, r, '=0')
@@ -4039,13 +4231,11 @@ _report_header(ws7, 4)
 r = 5
 _write_label(ws7, r, 'INGRESOS OPERACIONALES', True); r += 1
 
-# Ventas y otros ingresos: se detectan por prefijo, sin inventar cuentas.
 ventas_ern_row = r
 _write_label(ws7, r, 'VENTAS')
-_write_amount(ws7, r, _sum_ht('70', 'L'))
+_write_amount(ws7, r, _signed_ht('70', 'L', 'K'))
 r += 1
 
-# Ingresos por naturaleza que efectivamente existan. La 74 es gasto.
 for prefix, label in [
     ('71', 'Variación de la producción almacenada'),
     ('72', 'Producción de activo inmovilizado'),
@@ -4057,7 +4247,7 @@ for prefix, label in [
 ]:
     if _prefix_exists(prefix):
         _write_label(ws7, r, label.upper())
-        _write_amount(ws7, r, _sum_ht(prefix, 'L'))
+        _write_amount(ws7, r, _signed_ht(prefix, 'L', 'K'))
         r += 1
 
 ventas_total_ern_row = r
@@ -4066,8 +4256,8 @@ _write_amount(ws7, r, f'=SUM(E{ventas_ern_row}:E{r-1})', True)
 r += 2
 
 _write_label(ws7, r, 'COSTO Y GASTOS POR NATURALEZA', True); r += 1
-
 naturaleza_rows = []
+
 for prefix, label in [
     ('60', 'Compras'),
     ('61', 'Variación de existencias'),
@@ -4083,29 +4273,51 @@ for prefix, label in [
     if _prefix_exists(prefix):
         rr = r
         _write_label(ws7, r, label.upper())
-        _write_amount(ws7, r, _sum_ht(prefix, 'K'))
+        # Gasto neto = DEBE - HABER. Si hubiera una reversión (saldo acreedor),
+        # se resta del gasto en vez de ignorarla.
+        _write_amount(ws7, r, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*'
+                              f'HT!$K$4:$K${HT_LAST_ROW})-SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*'
+                              f'HT!$L$4:$L${HT_LAST_ROW})')
         naturaleza_rows.append(rr)
         r += 1
 
 total_gastos_ern_row = r
 _write_label(ws7, r, 'TOTAL COSTO Y GASTOS', True)
 _write_amount(ws7, r, '=' + '+'.join(f'E{x}' for x in naturaleza_rows) if naturaleza_rows else '=0', True)
+r += 1
+
+# Participaciones e impuesto: se incorporan también en ERN cuando existen,
+# para que el resultado final sea exactamente conciliable con ERF.
+ern_part_row = r
+_write_label(ws7, r, 'PARTICIPACIONES')
+_write_amount(
+    ws7, r,
+    f'=-(SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="87")*HT!$K$4:$K${HT_LAST_ROW})-'
+    f'SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="87")*HT!$L$4:$L${HT_LAST_ROW}))'
+)
+r += 1
+
+ern_impuesto_row = r
+_write_label(ws7, r, 'IMPUESTO A LA RENTA')
+_write_amount(
+    ws7, r,
+    f'=-(SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="88")*HT!$K$4:$K${HT_LAST_ROW})-'
+    f'SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="88")*HT!$L$4:$L${HT_LAST_ROW}))'
+)
 r += 2
 
 resultado_ern_row = r
 _write_label(ws7, r, 'RESULTADO DEL EJERCICIO', True)
-_write_amount(ws7, r, f'=E{ventas_total_ern_row}-E{total_gastos_ern_row}', True)
+_write_amount(ws7, r, f'=E{ventas_total_ern_row}-E{total_gastos_ern_row}+E{ern_part_row}+E{ern_impuesto_row}', True)
 ERN_RESULTADO_ROW = r
 r += 1
 
-# Control interno oculto.
 control_ern_row = r
 _write_label(ws7, r, 'CONTROL INTERNO ERN')
 _write_amount(ws7, r, f'=E{resultado_ern_row}-ERF!E{resultado_erf_row}')
 ws7.cell(r, 6, f'=IF(ABS(E{r})<0.01,"CUADRADO","REVISAR")')
 _hide_control_row(ws7, control_ern_row)
 
-# Ahora que ERN_RESULTADO_ROW ya existe, completamos el control cruzado del ERF.
 ws8.cell(control_erf_row, 5, f'=E{resultado_erf_row}-ERN!E{ERN_RESULTADO_ROW}')
 ws8.cell(control_erf_row, 5).number_format = '#,##0.00;(#,##0.00);"-"'
 
