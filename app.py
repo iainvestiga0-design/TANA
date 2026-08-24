@@ -1,5 +1,6 @@
 import json
 import ast
+import hashlib
 
 # --- TANA: filtro de diagnóstico preciso ---
 def tana_filtrar_diagnostico_preciso(diagnostico):
@@ -1019,6 +1020,48 @@ No inventes información.
 """
 
 
+def _extract_docx_text_local(path):
+    """Extrae texto y tablas de DOCX sin depender de metadatos binarios.
+
+    La salida se usa como base estable para la extracción contable. Si el DOCX
+    no contiene texto suficiente, la ruta principal de Gemini sigue disponible.
+    """
+    try:
+        from docx import Document
+        doc = Document(path)
+        partes = []
+        for p in doc.paragraphs:
+            txt = re.sub(r"\s+", " ", str(p.text or "")).strip()
+            if txt:
+                partes.append(txt)
+        for table in doc.tables:
+            for row in table.rows:
+                celdas = []
+                for cell in row.cells:
+                    txt = re.sub(r"\s+", " ", str(cell.text or "")).strip()
+                    celdas.append(txt)
+                if any(celdas):
+                    partes.append(" | ".join(celdas))
+        return "\n".join(partes).strip()
+    except Exception:
+        return ""
+
+
+def _extract_pdf_text_local(path):
+    """Extrae texto de PDF cuando existe capa textual; si es escaneado, devuelve vacío."""
+    try:
+        reader = PdfReader(path)
+        partes = []
+        for page in reader.pages:
+            txt = page.extract_text() or ""
+            txt = re.sub(r"\s+", " ", txt).strip()
+            if txt:
+                partes.append(txt)
+        return "\n".join(partes).strip()
+    except Exception:
+        return ""
+
+
 def _extract_legacy_doc_text_local(path):
     """Extrae texto de Word antiguo .doc usando antiword cuando está disponible.
 
@@ -1119,10 +1162,18 @@ def _extraction_has_content(data):
 
 
 def _json_extraction_from_text(client, model, document_text):
-    prompt = (EXTRACTION_PROMPT + "\n\nTEXTO COMPLETO EXTRAÍDO DEL DOCUMENTO:\n" + str(document_text or "")[:120000])
+    # La semilla debe depender del contenido textual normalizado y no de la
+    # representación binaria del archivo. Así, el mismo documento guardado
+    # desde otro dispositivo no cambia de ruta de decisión por metadatos.
+    text = re.sub(r"\s+", " ", str(document_text or "")).strip()
+    prompt = (EXTRACTION_PROMPT + "\n\nTEXTO COMPLETO DE LA PRÁCTICA:\n" + text[:120000])
     response = client.models.generate_content(
         model=model, contents=[prompt],
-        config=types.GenerateContentConfig(response_mime_type="application/json"),
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            temperature=0.0,
+            seed=_deterministic_seed(text),
+        ),
     )
     return _parsear_respuesta_json_gemini(response.text or "{}")
 
@@ -1137,6 +1188,57 @@ def _rescue_extraction_with_gemini(client, model, gemini_file):
     if not document_text.strip():
         raise ValueError("Gemini no devolvió texto legible del documento.")
     return _json_extraction_from_text(client, model, document_text)
+
+def _canonicalize_for_hash(value):
+    """Normaliza datos extraídos para que la semilla sea estable.
+
+    La misma práctica puede llegar como archivos binariamente distintos por
+    metadatos de Word, dispositivo o fecha de guardado. Para la contabilidad
+    no deben importar esos detalles. También normalizamos el orden de las
+    operaciones y los importes numéricos antes de calcular la huella.
+    """
+    if isinstance(value, dict):
+        out = {}
+        for key in sorted(value.keys(), key=str):
+            if key in {"operaciones", "estado_inicial", "solicitudes", "datos_importantes"}:
+                continue
+            out[str(key)] = _canonicalize_for_hash(value[key])
+
+        if isinstance(value.get("operaciones"), list):
+            ops = [_canonicalize_for_hash(x) for x in value.get("operaciones", [])]
+            ops.sort(key=lambda x: (
+                str(x.get("numero", "")),
+                str(x.get("fecha", "")),
+                str(x.get("descripcion", "")),
+                str(x.get("importe", "")),
+            ))
+            out["operaciones"] = ops
+        for key in ("estado_inicial", "solicitudes", "datos_importantes"):
+            if key in value:
+                items = [_canonicalize_for_hash(x) for x in (value.get(key) or [])]
+                if isinstance(items, list):
+                    items.sort(key=lambda x: json.dumps(x, ensure_ascii=False, sort_keys=True, default=str))
+                out[key] = items
+        return out
+    if isinstance(value, list):
+        return [_canonicalize_for_hash(x) for x in value]
+    if isinstance(value, float):
+        return round(value, 2)
+    if isinstance(value, int) and not isinstance(value, bool):
+        return int(value)
+    if value is None:
+        return None
+    return re.sub(r"\s+", " ", str(value)).strip()
+
+
+def _deterministic_seed(value):
+    """Semilla estable derivada de contenido contable normalizado."""
+    import hashlib
+    canonical = _canonicalize_for_hash(value)
+    payload = json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    raw = payload.encode("utf-8", errors="ignore")
+    return int.from_bytes(hashlib.sha256(raw).digest()[:4], "big") % 2147483647
+
 
 def extract_with_gemini(uploaded):
     profiles = get_gemini_profiles()
@@ -1163,6 +1265,26 @@ def extract_with_gemini(uploaded):
 
         errors = []
 
+        # DOCX/PDF con capa textual: usar una representación textual estable
+        # antes de enviar el archivo binario. Así los metadatos de Word o el
+        # dispositivo desde el que se guardó el archivo no cambian la extracción.
+        local_text = ""
+        if extension == "docx":
+            local_text = _extract_docx_text_local(temp_path)
+        elif extension == "pdf":
+            local_text = _extract_pdf_text_local(temp_path)
+
+        if local_text and len(local_text.strip()) >= 80:
+            for profile in profiles:
+                client = get_gemini_client(profile["api_key"])
+                try:
+                    data = _json_extraction_from_text(client, profile["model"], local_text)
+                    if _extraction_has_content(data) and data.get("operaciones"):
+                        return data
+                    errors.append((profile["label"], profile["model"], ValueError("La extracción textual no identificó operaciones contables.")))
+                except Exception as exc:
+                    errors.append((profile["label"], profile["model"], exc))
+
         # Word antiguo (.doc): usar texto local primero. Esto evita depender de
         # cómo una ruta/modelo de Gemini interpreta el formato binario legacy.
         if extension == "doc":
@@ -1176,7 +1298,7 @@ def extract_with_gemini(uploaded):
                         response = client.models.generate_content(
                             model=profile["model"],
                             contents=[rescue_prompt],
-                            config=types.GenerateContentConfig(response_mime_type="application/json"),
+                            config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.0, seed=_deterministic_seed(legacy_text)),
                         )
                         try:
                             data = _parsear_respuesta_json_gemini(response.text or "{}")
@@ -1197,7 +1319,7 @@ def extract_with_gemini(uploaded):
                 response = client.models.generate_content(
                     model=profile["model"],
                     contents=[gemini_file, EXTRACTION_PROMPT],
-                    config=types.GenerateContentConfig(response_mime_type="application/json"),
+                    config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.0, seed=_deterministic_seed({"extension": extension, "bytes": uploaded_bytes.hex()})),
                 )
                 try:
                     data = _parsear_respuesta_json_gemini(response.text or "{}")
@@ -1750,7 +1872,8 @@ profiles_status = get_gemini_profiles()
 # El archivo se procesa automáticamente al cargarse. No se muestra un botón
 # intermedio: la lógica contable original permanece intacta.
 if uploaded_file:
-    file_signature = f"{uploaded_file.name}|{getattr(uploaded_file, 'size', 0)}"
+    _uploaded_bytes_for_signature = uploaded_file.getvalue()
+    file_signature = f"{uploaded_file.name}|{len(_uploaded_bytes_for_signature)}|{hashlib.sha256(_uploaded_bytes_for_signature).hexdigest()[:16]}"
 def _money(value):
     try:
         if value is None or value == "":
@@ -2075,6 +2198,12 @@ if uploaded_file is not None and enviar_top and st.session_state.get("tana_file_
             try:
                 extracted = extract_with_gemini(uploaded_file)
                 st.session_state["monografia_json"] = extracted
+                st.session_state["tana_content_hash"] = hashlib.sha256(
+                    json.dumps(
+                        _canonicalize_for_hash(extracted),
+                        ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str
+                    ).encode("utf-8")
+                ).hexdigest()
                 st.session_state["monografia_texto"] = extraction_to_text(extracted)
                 st.session_state["monografia_nombre"] = uploaded_file.name
                 st.session_state["tana_file_signature"] = file_signature
@@ -2625,16 +2754,30 @@ def resolve_asientos_with_gemini():
         .replace("{pcge}", json.dumps(pcge_5, ensure_ascii=False))
         .replace(
             "{operaciones}",
-            json.dumps(st.session_state.get("monografia_json", {}), ensure_ascii=False),
+            json.dumps(
+                _canonicalize_for_hash(st.session_state.get("monografia_json", {})),
+                ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ),
         )
     )
 
     def make_contents(_client):
         return [prompt]
 
+    # La semilla contable NO usa el hash binario del archivo. Dos copias de la
+    # misma práctica pueden tener metadatos distintos y, aun así, deben producir
+    # exactamente los mismos asientos. La semilla se calcula sobre la extracción
+    # contable normalizada.
+    canonical_monografia = _canonicalize_for_hash(
+        st.session_state.get("monografia_json", {})
+    )
+    accounting_seed = _deterministic_seed(canonical_monografia)
+    st.session_state["tana_practice_fingerprint"] = hashlib.sha256(
+        json.dumps(canonical_monografia, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    ).hexdigest()[:16]
     response, profile = _generate_with_fallback(
         make_contents,
-        types.GenerateContentConfig(response_mime_type="application/json"),
+        types.GenerateContentConfig(response_mime_type="application/json", temperature=0.0, seed=accounting_seed),
     )
     data = _parsear_respuesta_json_gemini(response.text or "{}")
     data.setdefault("_tana_gemini_route", profile["label"])
@@ -2662,6 +2805,19 @@ if "monografia_json" in st.session_state and "asientos_contables" not in st.sess
                 )
             asientos_generados = asegurar_cuenta_79_en_destinos(asientos_generados, pcge_map)
             asientos_generados = corregir_retiro_socio(asientos_generados, st.session_state.get("monografia_json", {}))
+
+            # Normalización determinista: todos los importes operativos de TANA
+            # quedan a 2 decimales antes de construir HT. Esto evita que pequeñas
+            # variaciones de representación de Gemini terminen alterando los estados.
+            for _asiento in asientos_generados:
+                if not isinstance(_asiento, dict):
+                    continue
+                for _linea in _asiento.get("lineas", []) or []:
+                    if not isinstance(_linea, dict):
+                        continue
+                    _linea["debe"] = round(max(_to_float(_linea.get("debe"), 0.0), 0.0), 2)
+                    _linea["haber"] = round(max(_to_float(_linea.get("haber"), 0.0), 0.0), 2)
+
             valid, errors, warnings = validate_asientos({"asientos": asientos_generados}, pcge_map)
             st.session_state["asientos_contables"] = asientos_generados
             st.session_state["asientos_validos"] = valid
@@ -3847,12 +4003,15 @@ for code in cuentas_reporte:
     # Saldos ajustados: SOLO cuentas de balance (elemento 1 al 5).
     # Las cuentas de resultados (elemento 6-9) no se muestran aquí;
     # su saldo neto se refleja directamente en R.Naturaleza/R.Función.
+    # Para cuentas de balance con ajustes, el saldo ajustado es el NETO
+    # después de aplicar Debe/Haber del bloque de ajustes. Nunca se borra
+    # una cuenta completa solo porque tenga un ajuste parcial.
     if clasificar_resultado(code):
         sa_debe, sa_haber = 0.0, 0.0
-    elif aj_deudor or aj_acreedor:
-        sa_debe, sa_haber = 0.0, 0.0
     else:
-        sa_debe, sa_haber = deudor, acreedor
+        saldo_ajustado_neto = (deudor + aj_deudor) - (acreedor + aj_acreedor)
+        sa_debe = max(saldo_ajustado_neto, 0.0)
+        sa_haber = max(-saldo_ajustado_neto, 0.0)
     ws6.cell(r, 9, sa_debe)
     ws6.cell(r, 10, sa_haber)
 
@@ -3860,7 +4019,9 @@ for code in cuentas_reporte:
     # IMPORTANTE: para Naturaleza usamos el saldo después de 69 <-> 61;
     # para Función NO debemos borrar 69 ni las cuentas del elemento 9,
     # porque esas cuentas son precisamente las que alimentan el ERF.
-    neto = (deudor + aj_deudor) - (acreedor + aj_acreedor)
+    # Cálculo determinista a centavos. Los estados nunca deben depender de
+    # redondeos intermedios ni de una nueva interpretación de la IA.
+    neto = round((deudor + aj_deudor) - (acreedor + aj_acreedor), 2)
     neto_deudor = max(neto, 0.0)
     neto_acreedor = max(-neto, 0.0)
 
