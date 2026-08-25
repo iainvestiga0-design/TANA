@@ -588,6 +588,21 @@ TANA_BANCOS_SUBDIVISIONARIAS = {
     "banco gnb": "10420",
 }
 
+# Nombre de referencia (para mostrar) de cada código de TANA_BANCOS_SUBDIVISIONARIAS,
+# en el orden en que se muestran al motor de Gemini.
+TANA_BANCOS_NOMBRES = {
+    "10411": "Banco de la Nación",
+    "10412": "Banco de Crédito del Perú (BCP)",
+    "10413": "Interbank",
+    "10414": "Scotiabank",
+    "10415": "BBVA",
+    "10416": "BanBif",
+    "10417": "Banco Pichincha",
+    "10418": "Banco Falabella",
+    "10419": "Banco Ripley",
+    "10420": "Banco GNB",
+}
+
 
 # ============================================================
 # GEMINI: lectura multimodal de monografías
@@ -2266,6 +2281,40 @@ código; y al final todas las cuentas de Patrimonio (elemento 5) en el HABER,
 de menor a mayor código. No intercales cuentas de distintos grupos.
 NO MODIFIQUES la lógica de HT, ERF, ERN, ESF, destinos ni distribución existente.
 
+REGLA CRÍTICA — NO AGREGUES PARTIDAS DISTINTAS EN UNA SOLA LÍNEA:
+El balance de la monografía trae varias partidas individuales (por ejemplo,
+varios bancos, varias existencias/productos, varias cuentas por pagar). Cada
+una de esas partidas individuales DEBE registrarse en su PROPIA línea del
+asiento, con su propio código de 5 dígitos. Está PROHIBIDO sumar dos o más
+partidas distintas del balance en una sola línea/código (por ejemplo, sumar
+"Caja" + "Banco de la Nación" + "Banco BCP" en una sola línea "10411" es un
+error grave). El total del asiento sigue siendo la suma de todas esas líneas
+individuales.
+
+SUB-CUENTAS BANCARIAS (elemento 104, cuentas corrientes):
+Cuando el balance mencione más de una cuenta corriente bancaria, usa una
+sub-cuenta de 5 dígitos DISTINTA para cada banco, según esta tabla fija:
+{tabla_bancos}
+Si el balance menciona "cuenta de detracciones" del Banco de la Nación (u otra
+cuenta corriente para fines específicos, distinta de la cuenta operativa),
+usa el código 10421 ("Cuentas corrientes para fines específicos"), NUNCA
+10411. Si el balance menciona un banco que no está en la tabla, usa 10411
+solo si es la única cuenta corriente del balance; si hay más de una y no
+está en la tabla, dale el siguiente código libre 104xx que exista en el
+PCGE adjunto, en el orden en que aparecen en el balance.
+
+SUB-CUENTAS DE MERCADERÍAS / EXISTENCIAS POR PRODUCTO (elemento 2011, Costo):
+Cuando el balance liste más de un producto/existencia distinto dentro de la
+misma partida de mercaderías (por ejemplo, "Queso Fresco", "Queso Suizo",
+"Queso Mantecoso", o "Leche Fresca", "Leche Descremada", "Suero"), asigna
+un código de 5 dígitos DISTINTO a cada producto, en el orden en que aparecen
+en el balance: el primero 20111, el segundo 20112, el tercero 20113, el
+cuarto 20115, y así sucesivamente usando los códigos 2011x disponibles en el
+PCGE adjunto (salta 20114, que en el PCGE ya significa "Valor razonable" y
+NO debe usarse para un producto). En cada línea, coloca el nombre real del
+producto (ej. "Queso Suizo") en "denominacion" y/o "concepto", para que quede
+identificable en el libro diario aunque el código PCGE diga "Costo".
+
 Eres el motor contable de TANA, una aplicación de contabilidad peruana.
 
 Tienes dos fuentes obligatorias:
@@ -2843,6 +2892,13 @@ def resolve_asientos_with_gemini():
     prompt = (
         ASIENTOS_PROMPT
         .replace("{pcge}", json.dumps(pcge_5, ensure_ascii=False))
+        .replace(
+            "{tabla_bancos}",
+            "\n".join(
+                f"  {codigo} = {nombre}"
+                for codigo, nombre in sorted(TANA_BANCOS_NOMBRES.items())
+            ),
+        )
         .replace(
             "{operaciones}",
             json.dumps(
