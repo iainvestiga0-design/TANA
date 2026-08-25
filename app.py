@@ -570,6 +570,25 @@ if user_role == "Creador":
 from google import genai
 from google.genai import types
 
+
+# TANA - SUBDIVISIONARIAS BANCARIAS (5 DIGITOS)
+TANA_BANCOS_SUBDIVISIONARIAS = {
+    "banco de la nación": "10411",
+    "banco de la nacion": "10411",
+    "banco de crédito del perú": "10412",
+    "banco de credito del peru": "10412",
+    "bcp": "10412",
+    "interbank": "10413",
+    "scotiabank": "10414",
+    "bbva": "10415",
+    "banbif": "10416",
+    "banco pichincha": "10417",
+    "banco falabella": "10418",
+    "banco ripley": "10419",
+    "banco gnb": "10420",
+}
+
+
 # ============================================================
 # GEMINI: lectura multimodal de monografías
 # ============================================================
@@ -2232,6 +2251,16 @@ if "monografia_json" in st.session_state:
 # ============================================================
 
 ASIENTOS_PROMPT = """
+REGLA ADICIONAL — ASIENTO DE APERTURA:
+Si la monografía proporciona un balance inicial, balance de comprobación,
+estado de situación financiera inicial o saldos de apertura, debes registrar
+primero el asiento de apertura correspondiente antes de la operación 1.
+Incluye las cuentas y montos iniciales que realmente aparecen en la práctica.
+Si existen dos empresas, cada empresa debe tener su propio asiento de apertura
+y su propio libro. No mezcles sus saldos. El asiento de apertura debe cuadrar
+Debe = Haber y debe alimentar el mismo flujo contable existente de la aplicación.
+NO MODIFIQUES la lógica de HT, ERF, ERN, ESF, destinos ni distribución existente.
+
 Eres el motor contable de TANA, una aplicación de contabilidad peruana.
 
 Tienes dos fuentes obligatorias:
