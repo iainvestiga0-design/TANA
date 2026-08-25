@@ -1,4 +1,6 @@
 import json
+import ast
+import hashlib
 
 # --- TANA: filtro de diagnóstico preciso ---
 def tana_filtrar_diagnostico_preciso(diagnostico):
@@ -56,6 +58,7 @@ def tana_filtrar_diagnostico_preciso(diagnostico):
 import io
 import os
 import re
+import mimetypes
 import shutil
 import subprocess
 import tempfile
@@ -865,25 +868,6 @@ Devuelve únicamente JSON válido con esta estructura:
   "tipo_documento": "",
   "periodo": "",
   "estado_inicial": [],
-  "balances_iniciales": [
-    {
-      "empresa": "",
-      "fecha_balance": "",
-      "moneda": "PEN",
-      "cuentas": [
-        {
-          "descripcion": "",
-          "codigo_pcge": "",
-          "importe": null,
-          "naturaleza": "deudora/acreedora",
-          "clasificacion": "activo/pasivo/patrimonio",
-          "observacion": ""
-        }
-      ],
-      "total_activo": null,
-      "total_pasivo_patrimonio": null
-    }
-  ],
   "operaciones": [
     {
       "numero": 1,
@@ -913,15 +897,104 @@ REGLAS:
 - Si un dato no aparece, usa null o "".
 - Separa cada operación en un elemento.
 - Incluye el estado financiero inicial si existe.
-- SI EL DOCUMENTO PRESENTA UNO O MÁS BALANCES INICIALES, NO LOS RESUMAS NI LOS OMITAS:
-  extrae cada empresa por separado en "balances_iniciales", con todas las partidas, importes,
-  totales y fechas. Conserva las descripciones textuales aunque todavía no puedas asignar
-  un código PCGE.
-- Identifica expresamente si el ejercicio corresponde a fusión, fusión por constitución,
-  transformación, absorción, escisión, disolución u otra reorganización societaria.
 - Incluye todo lo que el ejercicio pide realizar en "solicitudes".
 - La información extraída servirá después para el motor contable de TANA.
 """
+
+def _extraer_candidato_json(texto):
+    """Extrae el primer objeto/lista JSON completo de una respuesta de Gemini.
+
+    Gemini puede devolver JSON válido precedido por Markdown o texto adicional.
+    Esta función no modifica el contenido interno; solo localiza el bloque raíz.
+    """
+    texto = str(texto or "").strip()
+    if not texto:
+        return ""
+    # Eliminar cercos Markdown frecuentes.
+    texto = re.sub(r"^\s*```(?:json)?\s*", "", texto, flags=re.IGNORECASE)
+    texto = re.sub(r"\s*```\s*$", "", texto)
+
+    inicio = None
+    apertura = None
+    for i, ch in enumerate(texto):
+        if ch in "[{":
+            inicio = i
+            apertura = ch
+            break
+    if inicio is None:
+        return texto
+
+    cierre = "]" if apertura == "[" else "}"
+    profundidad = 0
+    en_cadena = False
+    escape = False
+    comilla = ""
+    for i in range(inicio, len(texto)):
+        ch = texto[i]
+        if en_cadena:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == comilla:
+                en_cadena = False
+            continue
+        if ch in ('"', "'"):
+            en_cadena = True
+            comilla = ch
+            continue
+        if ch == apertura:
+            profundidad += 1
+        elif ch == cierre:
+            profundidad -= 1
+            if profundidad == 0:
+                return texto[inicio:i + 1]
+    return texto[inicio:]
+
+
+def _reparar_json_comun(texto):
+    """Hace reparaciones conservadoras sobre JSON casi-válido.
+
+    No intenta inventar datos. Solo corrige problemas sintácticos habituales:
+    comillas tipográficas, claves sin comillas y comas finales.
+    """
+    s = _extraer_candidato_json(texto)
+    s = s.replace("“", '"').replace("”", '"').replace("‘", "'").replace("’", "'")
+    # Claves sin comillas: {asientos: ...}, , fecha: ...
+    s = re.sub(r'([\{\[,])\s*([A-Za-z_][A-Za-z0-9_-]*)\s*:', r'\1"\2":', s)
+    # Comas finales antes de cerrar objeto/lista.
+    s = re.sub(r',\s*([}\]])', r'\1', s)
+    return s.strip()
+
+
+def _parsear_respuesta_json_gemini(texto):
+    """Convierte de forma robusta la respuesta estructurada de Gemini a Python.
+
+    Primero exige JSON real. Solo si falla aplica reparaciones sintácticas
+    conservadoras y, como último recurso, literal_eval para respuestas que
+    Gemini haya emitido con sintaxis de diccionario de Python.
+    """
+    original = str(texto or "").strip()
+    if not original:
+        raise json.JSONDecodeError("Respuesta JSON vacía", "", 0)
+
+    candidato = _extraer_candidato_json(original)
+    try:
+        return json.loads(candidato)
+    except json.JSONDecodeError as primer_error:
+        reparado = _reparar_json_comun(candidato)
+        try:
+            return json.loads(reparado)
+        except json.JSONDecodeError:
+            # Último recurso para respuestas tipo Python dict/list.
+            try:
+                python_like = re.sub(r'\\btrue\\b', 'True', reparado, flags=re.IGNORECASE)
+                python_like = re.sub(r'\\bfalse\\b', 'False', python_like, flags=re.IGNORECASE)
+                python_like = re.sub(r'\\bnull\\b', 'None', python_like, flags=re.IGNORECASE)
+                return ast.literal_eval(python_like)
+            except Exception:
+                raise primer_error
+
 
 def _gemini_error_message(exc):
     msg = str(exc)
@@ -936,18 +1009,254 @@ def _gemini_error_message(exc):
     return msg
 
 
+LEGACY_DOCUMENT_TEXT_PROMPT = """
+Lee TODO el contenido visible del documento que se te proporciona.
+Puede ser un archivo Word antiguo (.doc), Word moderno (.docx) u otro documento.
+No resuelvas la contabilidad y no hagas un resumen.
+Devuelve el texto completo y ordenado de la práctica, conservando fechas, operaciones,
+importes, cantidades, porcentajes, monedas, condiciones de pago y todo lo que se
+solicita al estudiante. Si hay tablas, reproduce sus filas y columnas de forma legible.
+No inventes información.
+"""
+
+
+def _extract_docx_text_local(path):
+    """Extrae texto y tablas de DOCX sin depender de metadatos binarios.
+
+    La salida se usa como base estable para la extracción contable. Si el DOCX
+    no contiene texto suficiente, la ruta principal de Gemini sigue disponible.
+    """
+    try:
+        from docx import Document
+        doc = Document(path)
+        partes = []
+        for p in doc.paragraphs:
+            txt = re.sub(r"\s+", " ", str(p.text or "")).strip()
+            if txt:
+                partes.append(txt)
+        for table in doc.tables:
+            for row in table.rows:
+                celdas = []
+                for cell in row.cells:
+                    txt = re.sub(r"\s+", " ", str(cell.text or "")).strip()
+                    celdas.append(txt)
+                if any(celdas):
+                    partes.append(" | ".join(celdas))
+        return "\n".join(partes).strip()
+    except Exception:
+        return ""
+
+
+def _extract_pdf_text_local(path):
+    """Extrae texto de PDF cuando existe capa textual; si es escaneado, devuelve vacío."""
+    try:
+        reader = PdfReader(path)
+        partes = []
+        for page in reader.pages:
+            txt = page.extract_text() or ""
+            txt = re.sub(r"\s+", " ", txt).strip()
+            if txt:
+                partes.append(txt)
+        return "\n".join(partes).strip()
+    except Exception:
+        return ""
+
+
+def _extract_legacy_doc_text_local(path):
+    """Extrae texto de Word antiguo .doc usando antiword cuando está disponible.
+
+    Gemini puede aceptar application/msword en algunas rutas, pero para .doc
+    antiguo es mucho más estable convertirlo primero a texto plano localmente.
+    """
+    try:
+        proc = subprocess.run(
+            ["antiword", "-t", path],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=45,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError, OSError):
+        return ""
+    text = (proc.stdout or "").replace("\\x00", " ").strip()
+    if proc.returncode != 0 and not text:
+        return ""
+    return text
+
+
+LEGACY_OPERATION_RESCUE_PROMPT = """
+Eres el extractor de prácticas contables de TANA.
+
+A continuación recibirás el texto completo de una práctica contable, extraído
+localmente de un Word antiguo (.doc). El texto puede perder parte del formato,
+pero debes reconstruir la estructura por el contenido.
+
+IMPORTANTE:
+- NO resuelvas los asientos todavía.
+- NO hagas un resumen.
+- Identifica TODAS las operaciones contables de la práctica.
+- Cada compra, venta, cobro, pago, aporte, préstamo, gasto, adquisición,
+  depreciación, remuneración, ajuste, transferencia, etc. que deba registrarse
+  debe aparecer como una operación independiente.
+- Conserva fechas, importes, cantidades, porcentajes, documentos, nombres,
+  condiciones y formas de pago.
+- Si una operación no tiene importe explícito, conserva la descripción y usa
+  null para el importe.
+- No inventes operaciones.
+
+Devuelve SOLO JSON válido con esta estructura:
+{
+  "empresa": "",
+  "tipo_documento": "",
+  "periodo": "",
+  "estado_inicial": [],
+  "operaciones": [
+    {
+      "numero": 1,
+      "fecha": "",
+      "descripcion": "",
+      "importe": null,
+      "moneda": "PEN",
+      "cantidad": null,
+      "precio_unitario": null,
+      "porcentaje": null,
+      "documento": "",
+      "forma_pago": "",
+      "medio_pago": "",
+      "tercero": "",
+      "cuenta_bancaria": "",
+      "datos_adicionales": ""
+    }
+  ],
+  "solicitudes": [],
+  "datos_importantes": []
+}
+
+TEXTO COMPLETO DE LA PRÁCTICA:
+"""
+
+
+def _upload_gemini_file(client, path, mime_type=None):
+    """Sube un archivo a Gemini con MIME explícito cuando el SDK lo permite."""
+    if mime_type:
+        upload_cfg = getattr(types, "UploadFileConfig", None)
+        if upload_cfg is not None:
+            try:
+                return client.files.upload(file=path, config=upload_cfg(mime_type=mime_type))
+            except Exception:
+                pass
+    return client.files.upload(file=path)
+
+
+def _extraction_has_content(data):
+    """Evita continuar y generar 0 asientos cuando la lectura del documento falló."""
+    if not isinstance(data, dict):
+        return False
+    if isinstance(data.get("operaciones"), list) and data.get("operaciones"):
+        return True
+    if any(str(data.get(k) or "").strip() for k in ("empresa", "tipo_documento", "periodo")):
+        return True
+    return bool(data.get("estado_inicial") or data.get("solicitudes") or data.get("datos_importantes"))
+
+
+def _json_extraction_from_text(client, model, document_text):
+    # La semilla debe depender del contenido textual normalizado y no de la
+    # representación binaria del archivo. Así, el mismo documento guardado
+    # desde otro dispositivo no cambia de ruta de decisión por metadatos.
+    text = re.sub(r"\s+", " ", str(document_text or "")).strip()
+    prompt = (EXTRACTION_PROMPT + "\n\nTEXTO COMPLETO DE LA PRÁCTICA:\n" + text[:120000])
+    response = client.models.generate_content(
+        model=model, contents=[prompt],
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            temperature=0.0,
+            seed=_deterministic_seed(text),
+        ),
+    )
+    return _parsear_respuesta_json_gemini(response.text or "{}")
+
+
+def _rescue_extraction_with_gemini(client, model, gemini_file):
+    """Ruta de rescate para Word: lectura textual completa y luego extracción estructurada."""
+    response = client.models.generate_content(
+        model=model, contents=[gemini_file, LEGACY_DOCUMENT_TEXT_PROMPT],
+        config=types.GenerateContentConfig(),
+    )
+    document_text = response.text or ""
+    if not document_text.strip():
+        raise ValueError("Gemini no devolvió texto legible del documento.")
+    return _json_extraction_from_text(client, model, document_text)
+
+def _canonicalize_for_hash(value):
+    """Normaliza datos extraídos para que la semilla sea estable.
+
+    La misma práctica puede llegar como archivos binariamente distintos por
+    metadatos de Word, dispositivo o fecha de guardado. Para la contabilidad
+    no deben importar esos detalles. También normalizamos el orden de las
+    operaciones y los importes numéricos antes de calcular la huella.
+    """
+    if isinstance(value, dict):
+        out = {}
+        for key in sorted(value.keys(), key=str):
+            if key in {"operaciones", "estado_inicial", "solicitudes", "datos_importantes"}:
+                continue
+            out[str(key)] = _canonicalize_for_hash(value[key])
+
+        if isinstance(value.get("operaciones"), list):
+            ops = [_canonicalize_for_hash(x) for x in value.get("operaciones", [])]
+            ops.sort(key=lambda x: (
+                str(x.get("numero", "")),
+                str(x.get("fecha", "")),
+                str(x.get("descripcion", "")),
+                str(x.get("importe", "")),
+            ))
+            out["operaciones"] = ops
+        for key in ("estado_inicial", "solicitudes", "datos_importantes"):
+            if key in value:
+                items = [_canonicalize_for_hash(x) for x in (value.get(key) or [])]
+                if isinstance(items, list):
+                    items.sort(key=lambda x: json.dumps(x, ensure_ascii=False, sort_keys=True, default=str))
+                out[key] = items
+        return out
+    if isinstance(value, list):
+        return [_canonicalize_for_hash(x) for x in value]
+    if isinstance(value, float):
+        return round(value, 2)
+    if isinstance(value, int) and not isinstance(value, bool):
+        return int(value)
+    if value is None:
+        return None
+    return re.sub(r"\s+", " ", str(value)).strip()
+
+
+def _deterministic_seed(value):
+    """Semilla estable derivada de contenido contable normalizado."""
+    import hashlib
+    canonical = _canonicalize_for_hash(value)
+    payload = json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    raw = payload.encode("utf-8", errors="ignore")
+    return int.from_bytes(hashlib.sha256(raw).digest()[:4], "big") % 2147483647
+
+
 def extract_with_gemini(uploaded):
     profiles = get_gemini_profiles()
     if not profiles:
         raise RuntimeError(
-            "TANA no tiene configurada ninguna GEMINI_API_KEY. "
-            "En Streamlit abre App settings → Secrets y agrega "
-            'GEMINI_API_KEY = "TU_CLAVE".'
+            "TANA no tiene configurada ninguna GEMINI_API_KEY. En Streamlit abre "
+            'App settings -> Secrets y agrega GEMINI_API_KEY = "TU_CLAVE".'
         )
 
     suffix = "." + uploaded.name.rsplit(".", 1)[-1].lower()
     temp_path = None
     uploaded_bytes = uploaded.getvalue()
+    extension = uploaded.name.rsplit(".", 1)[-1].lower() if "." in uploaded.name else ""
+    mime_type = mimetypes.guess_type(uploaded.name)[0]
+    if extension == "doc":
+        mime_type = "application/msword"
+    elif extension == "docx":
+        mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -955,25 +1264,76 @@ def extract_with_gemini(uploaded):
             temp_path = tmp.name
 
         errors = []
+
+        # DOCX/PDF con capa textual: usar una representación textual estable
+        # antes de enviar el archivo binario. Así los metadatos de Word o el
+        # dispositivo desde el que se guardó el archivo no cambian la extracción.
+        local_text = ""
+        if extension == "docx":
+            local_text = _extract_docx_text_local(temp_path)
+        elif extension == "pdf":
+            local_text = _extract_pdf_text_local(temp_path)
+
+        if local_text and len(local_text.strip()) >= 80:
+            for profile in profiles:
+                client = get_gemini_client(profile["api_key"])
+                try:
+                    data = _json_extraction_from_text(client, profile["model"], local_text)
+                    if _extraction_has_content(data) and data.get("operaciones"):
+                        return data
+                    errors.append((profile["label"], profile["model"], ValueError("La extracción textual no identificó operaciones contables.")))
+                except Exception as exc:
+                    errors.append((profile["label"], profile["model"], exc))
+
+        # Word antiguo (.doc): usar texto local primero. Esto evita depender de
+        # cómo una ruta/modelo de Gemini interpreta el formato binario legacy.
+        if extension == "doc":
+            legacy_text = _extract_legacy_doc_text_local(temp_path)
+            if legacy_text:
+                local_errors = []
+                for profile in profiles:
+                    client = get_gemini_client(profile["api_key"])
+                    try:
+                        rescue_prompt = LEGACY_OPERATION_RESCUE_PROMPT + legacy_text[:120000]
+                        response = client.models.generate_content(
+                            model=profile["model"],
+                            contents=[rescue_prompt],
+                            config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.0, seed=_deterministic_seed(legacy_text)),
+                        )
+                        try:
+                            data = _parsear_respuesta_json_gemini(response.text or "{}")
+                        except json.JSONDecodeError:
+                            data = {}
+                        if _extraction_has_content(data) and data.get("operaciones"):
+                            return data
+                        local_errors.append((profile["label"], profile["model"],
+                                             ValueError("La extracción local obtuvo texto, pero no operaciones contables.")))
+                    except Exception as exc:
+                        local_errors.append((profile["label"], profile["model"], exc))
+                errors.extend(local_errors)
+
         for profile in profiles:
             client = get_gemini_client(profile["api_key"])
-            gemini_file = None
             try:
-                # Cada perfil tiene su propio cliente/proyecto. El archivo se sube
-                # a ese proyecto y solo entonces se consume la generación.
-                gemini_file = client.files.upload(file=temp_path)
+                gemini_file = _upload_gemini_file(client, temp_path, mime_type)
                 response = client.models.generate_content(
                     model=profile["model"],
                     contents=[gemini_file, EXTRACTION_PROMPT],
-                    config=types.GenerateContentConfig(response_mime_type="application/json"),
+                    config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.0, seed=_deterministic_seed({"extension": extension, "bytes": uploaded_bytes.hex()})),
                 )
-                raw = response.text or ""
-                data = json.loads(raw)
+                try:
+                    data = _parsear_respuesta_json_gemini(response.text or "{}")
+                except json.JSONDecodeError:
+                    data = _rescue_extraction_with_gemini(client, profile["model"], gemini_file)
+                if not _extraction_has_content(data):
+                    data = _rescue_extraction_with_gemini(client, profile["model"], gemini_file)
+                if not _extraction_has_content(data):
+                    raise ValueError(
+                        "TANA pudo abrir el archivo, pero no encontró operaciones o datos contables reconocibles."
+                    )
                 return data
             except Exception as exc:
                 errors.append((profile["label"], profile["model"], exc))
-                if not _is_gemini_fallback_error(exc):
-                    raise RuntimeError(_gemini_error_message(exc)) from exc
                 continue
 
         raise RuntimeError(_fallback_error_message(errors))
@@ -1512,7 +1872,8 @@ profiles_status = get_gemini_profiles()
 # El archivo se procesa automáticamente al cargarse. No se muestra un botón
 # intermedio: la lógica contable original permanece intacta.
 if uploaded_file:
-    file_signature = f"{uploaded_file.name}|{getattr(uploaded_file, 'size', 0)}"
+    _uploaded_bytes_for_signature = uploaded_file.getvalue()
+    file_signature = f"{uploaded_file.name}|{len(_uploaded_bytes_for_signature)}|{hashlib.sha256(_uploaded_bytes_for_signature).hexdigest()[:16]}"
 def _money(value):
     try:
         if value is None or value == "":
@@ -1520,6 +1881,198 @@ def _money(value):
         return Decimal(str(value).replace(",", ""))
     except (InvalidOperation, ValueError):
         return None
+
+
+def _agregar_hoja_control_contable(wb, asientos, ht_last_row, ern_resultado_row, erf_resultado_row,
+                                   esf_control_row, esf_sheet="ESF", ern_sheet="ERN", erf_sheet="ERF"):
+    """
+    Auditoría determinista de la salida de TANA.
+    No depende de Gemini para decidir si los totales matemáticos cuadran.
+    Las fórmulas se calculan al abrir el Excel.
+    """
+    if "VALIDACION" in wb.sheetnames:
+        del wb["VALIDACION"]
+
+    ws = wb.create_sheet("VALIDACION")
+    _title = "VALIDACIÓN CONTABLE AUTOMÁTICA"
+    ws["A1"] = _title
+    ws["A1"].font = Font(name=FONT, bold=True, size=14, color="1F4E78")
+    ws.merge_cells("A1:D1")
+
+    ws["A3"] = "CONTROL"
+    ws["B3"] = "RESULTADO"
+    ws["C3"] = "DIFERENCIA"
+    ws["D3"] = "INTERPRETACIÓN"
+    style_header(ws, 3, 1, 4)
+
+    rows = []
+
+    # 1) Asientos: suma global.
+    max_ac = max(2, 1 + sum(len(a.get("lineas", []) or []) for a in (asientos or [])))
+    rows.append(("1. Debe = Haber de todos los asientos",
+                 f"=IF(ABS(SUM(Asientos_Contables!$I$2:$I${max_ac})-SUM(Asientos_Contables!$J$2:$J${max_ac}))<0.01,\"CUADRADO\",\"REVISAR\")",
+                 f"=SUM(Asientos_Contables!$I$2:$I${max_ac})-SUM(Asientos_Contables!$J$2:$J${max_ac})",
+                 "El total Debe y Haber debe ser igual."))
+
+    # 2) HT: suma de movimientos.
+    rows.append(("2. HT — suma Debe = Haber",
+                 f"=IF(ABS(SUM(HT!$C$4:$C${ht_last_row})-SUM(HT!$D$4:$D${ht_last_row}))<0.01,\"CUADRADO\",\"REVISAR\")",
+                 f"=SUM(HT!$C$4:$C${ht_last_row})-SUM(HT!$D$4:$D${ht_last_row})",
+                 "La suma de movimientos de la Hoja de Trabajo debe cuadrar."))
+
+    # 3) HT: saldos ajustados.
+    rows.append(("3. HT — saldos ajustados Debe = Haber",
+                 f"=IF(ABS(SUM(HT!$I$4:$I${ht_last_row})-SUM(HT!$J$4:$J${ht_last_row}))<0.01,\"CUADRADO\",\"REVISAR\")",
+                 f"=SUM(HT!$I$4:$I${ht_last_row})-SUM(HT!$J$4:$J${ht_last_row})",
+                 "Los saldos ajustados deben mantener la igualdad."))
+
+    # 4) ERN vs ERF.
+    rows.append(("4. ERN = ERF — resultado del ejercicio",
+                 f"=IF(ABS(ERN!$E${ern_resultado_row}-ERF!$E${erf_resultado_row})<0.01,\"CUADRADO\",\"REVISAR\")",
+                 f"=ERN!$E${ern_resultado_row}-ERF!$E${erf_resultado_row}",
+                 "Ambos estados deben llegar al mismo resultado."))
+
+    # 5) ESF.
+    rows.append(("5. ESF — Activo = Pasivo + Patrimonio",
+                 f"=IF(ABS(ESF!$J${esf_control_row})<0.01,\"CUADRADO\",\"REVISAR\")",
+                 f"=ESF!$J${esf_control_row}",
+                 "La diferencia del ESF debe ser 0.00."))
+
+    # 6) ERN resultado no vacío / numérico.
+    rows.append(("6. ERN — resultado calculado",
+                 f"=IF(ISNUMBER(ERN!$E${ern_resultado_row}),\"CALCULADO\",\"REVISAR\")",
+                 f"=ERN!$E${ern_resultado_row}",
+                 "El resultado por naturaleza debe existir."))
+
+    # 7) ERF resultado no vacío / numérico.
+    rows.append(("7. ERF — resultado calculado",
+                 f"=IF(ISNUMBER(ERF!$E${erf_resultado_row}),\"CALCULADO\",\"REVISAR\")",
+                 f"=ERF!$E${erf_resultado_row}",
+                 "El resultado por función debe existir."))
+
+    for i, (label, status, diff, note) in enumerate(rows, start=4):
+        ws.cell(i, 1, label)
+        ws.cell(i, 2, status)
+        ws.cell(i, 3, diff)
+        ws.cell(i, 4, note)
+        ws.cell(i, 1).font = BLACK
+        ws.cell(i, 2).font = BOLD
+        ws.cell(i, 3).number_format = '#,##0.00;(#,##0.00);"-"'
+        ws.cell(i, 4).font = GRAY
+
+    final_row = 4 + len(rows)
+    ws.cell(final_row, 1, "CONTROL FINAL")
+    # Los dos primeros controles son globales; los estados se validan de forma independiente.
+    ws.cell(final_row, 2, f'=IF(COUNTIF(B4:B{final_row-1},"REVISAR")=0,"✅ VALIDADO","⚠️ REVISAR")')
+    ws.cell(final_row, 1).font = BOLD
+    ws.cell(final_row, 2).font = Font(name=FONT, bold=True, size=11)
+    ws.cell(final_row, 3, "El control se recalcula al abrir el Excel.")
+    ws.merge_cells(start_row=final_row, start_column=3, end_row=final_row, end_column=4)
+
+    # Diagnóstico previo que sí puede calcularse sin Excel.
+    pre_row = final_row + 2
+    ws.cell(pre_row, 1, "REVISIÓN PREVIA DE ASIENTOS")
+    ws.cell(pre_row, 1).font = BOLD
+    if st.session_state.get("errores_asientos"):
+        ws.cell(pre_row + 1, 1, "⚠️ Se detectaron errores en los asientos antes de generar el Excel.")
+        for j, err in enumerate(st.session_state.get("errores_asientos", [])[:20], start=2):
+            ws.cell(pre_row + j, 1, err)
+    else:
+        ws.cell(pre_row + 1, 1, "✅ Los asientos pasan la validación básica de códigos, importes y Debe/Haber.")
+
+    # ==================== ETAPA 2: AUDITORÍA Y TRAZABILIDAD ====================
+    # Hoja adicional: no altera cálculos existentes. Relaciona cada línea
+    # del asiento con su origen y deja visibles los controles clave.
+    if "AUDITORIA_TANA" in wb.sheetnames:
+        del wb["AUDITORIA_TANA"]
+    wa = wb.create_sheet("AUDITORIA_TANA")
+
+    wa["A1"] = "AUDITORÍA Y TRAZABILIDAD TANA"
+    wa["A1"].font = Font(name=FONT, bold=True, size=14, color="1F4E78")
+    wa.merge_cells("A1:I1")
+    wa["A3"] = "Trazabilidad"
+    wa["A3"].font = BOLD
+    wa["A4"] = "Cada línea se enlaza al asiento y a la cuenta que TANA utilizó. Esta hoja es informativa y no modifica los cálculos."
+    wa.merge_cells("A4:I4")
+
+    audit_headers = ["Asiento", "Fecha", "Glosa / Operación", "Cuenta", "Debe", "Haber", "Diferencia", "Estado", "Origen"]
+    for col, h in enumerate(audit_headers, 1):
+        c = wa.cell(6, col, h)
+        c.font = BOLD
+
+    audit_row = 7
+    for a_idx, asiento in enumerate(asientos or [], start=1):
+        numero = asiento.get("numero", a_idx)
+        fecha = asiento.get("fecha", "")
+        glosa = asiento.get("glosa") or asiento.get("descripcion") or asiento.get("operacion") or ""
+        origen = asiento.get("origen") or asiento.get("fuente") or "Práctica procesada por TANA"
+        for linea in (asiento.get("lineas", []) or []):
+            codigo = str(linea.get("codigo", "")).strip()
+            debe = linea.get("debe", 0) or 0
+            haber = linea.get("haber", 0) or 0
+            try:
+                diff = float(debe) - float(haber)
+            except Exception:
+                diff = ""
+            wa.cell(audit_row, 1, numero)
+            wa.cell(audit_row, 2, fecha)
+            wa.cell(audit_row, 3, glosa)
+            wa.cell(audit_row, 4, codigo)
+            wa.cell(audit_row, 5, debe)
+            wa.cell(audit_row, 6, haber)
+            wa.cell(audit_row, 7, diff)
+            wa.cell(audit_row, 8, '=IF(ABS(G%d)<0.01,"OK","REVISAR")' % audit_row)
+            wa.cell(audit_row, 9, origen)
+            audit_row += 1
+
+    # Resumen de controles con referencias a VALIDACION.
+    summary_row = audit_row + 2
+    wa.cell(summary_row, 1, "RESUMEN DE CONTROLES")
+    wa.cell(summary_row, 1).font = BOLD
+    for col, h in enumerate(["Control", "Resultado", "Diferencia", "Lectura"], 1):
+        wa.cell(summary_row + 1, col, h).font = BOLD
+
+    controls = [
+        ("Debe = Haber de asientos", "=VALIDACION!B4", "=VALIDACION!C4", "Debe ser 0.00."),
+        ("HT movimientos", "=VALIDACION!B5", "=VALIDACION!C5", "Debe ser 0.00."),
+        ("HT saldos ajustados", "=VALIDACION!B6", "=VALIDACION!C6", "Debe ser 0.00."),
+        ("ERN = ERF", "=VALIDACION!B7", "=VALIDACION!C7", "Debe ser 0.00."),
+        ("ESF", "=VALIDACION!B8", "=VALIDACION!C8", "Activo debe coincidir con Pasivo + Patrimonio."),
+        ("Resultado ERN", "=VALIDACION!B9", "=VALIDACION!C9", "Debe existir un resultado numérico."),
+        ("Resultado ERF", "=VALIDACION!B10", "=VALIDACION!C10", "Debe existir un resultado numérico."),
+        ("Control final", "=VALIDACION!B11", "", "Resumen final de la validación."),
+    ]
+    for r, (control, result, diff, lectura) in enumerate(controls, start=summary_row+2):
+        wa.cell(r,1,control)
+        wa.cell(r,2,result)
+        wa.cell(r,3,diff)
+        wa.cell(r,4,lectura)
+
+    wa.cell(summary_row + len(controls) + 3, 1, "NOTA")
+    wa.cell(summary_row + len(controls) + 3, 2,
+            "La auditoría identifica el asiento y la cuenta origen de cada línea; los cálculos contables originales permanecen sin cambios.")
+    wa.merge_cells(start_row=summary_row + len(controls) + 3, start_column=2,
+                   end_row=summary_row + len(controls) + 3, end_column=9)
+
+    widths = [12, 14, 42, 16, 16, 16, 16, 14, 34]
+    for idx, width in enumerate(widths, 1):
+        wa.column_dimensions[chr(64+idx)].width = width
+    wa.freeze_panes = "A7"
+
+    # La auditoría debe acompañar al Excel final.
+    # Se añade a las hojas públicas sin ocultar ni modificar las anteriores.
+    try:
+        if "AUDITORIA_TANA" not in HOJAS_PUBLICAS:
+            HOJAS_PUBLICAS.append("AUDITORIA_TANA")
+    except Exception:
+        pass
+
+    ws.column_dimensions["A"].width = 48
+    ws.column_dimensions["B"].width = 18
+    ws.column_dimensions["C"].width = 18
+    ws.column_dimensions["D"].width = 62
+    ws.freeze_panes = "A4"
+    return ws.title
 
 def validate_asientos(data, pcge_map):
     errors = []
@@ -1645,6 +2198,12 @@ if uploaded_file is not None and enviar_top and st.session_state.get("tana_file_
             try:
                 extracted = extract_with_gemini(uploaded_file)
                 st.session_state["monografia_json"] = extracted
+                st.session_state["tana_content_hash"] = hashlib.sha256(
+                    json.dumps(
+                        _canonicalize_for_hash(extracted),
+                        ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str
+                    ).encode("utf-8")
+                ).hexdigest()
                 st.session_state["monografia_texto"] = extraction_to_text(extracted)
                 st.session_state["monografia_nombre"] = uploaded_file.name
                 st.session_state["tana_file_signature"] = file_signature
@@ -1694,19 +2253,6 @@ REGLAS OBLIGATORIAS:
 - Si un importe o tratamiento contable no puede determinarse con seguridad,
   NO inventes: marca la línea/asiento con "requiere_revision": true y explica por qué.
 - No agregues información que no esté sustentada por la monografía o por las reglas contables necesarias para registrar la operación.
-
-REGLA CRÍTICA: BALANCES INICIALES / ASIENTOS DE APERTURA
-- Si la monografía entrega un balance al inicio, ese balance ES parte del proceso contable y NO puede quedar solo como texto de referencia.
-- Antes de registrar la operación 1, debes convertir cada balance inicial entregado en uno o más ASIENTOS DE APERTURA, incluyendo TODAS las cuentas y TODOS los importes del balance.
-- Si existen varias empresas participantes, registra el asiento de apertura de CADA empresa por separado, identificando claramente la empresa en la glosa.
-- Los activos y gastos con saldo deudor van al DEBE; los pasivos, patrimonio e ingresos con saldo acreedor van al HABER, según la naturaleza y el PCGE.
-- Las depreciaciones acumuladas y otras cuentas correctoras deben registrarse en el lado que corresponda según su naturaleza contable; NO las omitas por aparecer entre paréntesis.
-- El asiento de apertura de cada empresa debe cuadrar exactamente con el balance presentado: Debe = Haber.
-- No empieces el Libro Diario directamente con la primera operación si existe un balance inicial.
-- En reorganizaciones societarias (fusión, fusión por constitución, transformación, etc.), además de los asientos de apertura, desarrolla las etapas contables de cierre/transferencia/constitución que el enunciado solicite. No reduzcas el ejercicio únicamente a las operaciones posteriores al balance.
-- Los balances iniciales deben quedar reflejados en el Libro Diario y, por consecuencia, en la Hoja de Trabajo/Balance de Comprobación.
-- Si el balance inicial contiene una cuenta cuya equivalencia exacta a 5 dígitos del PCGE no puede determinarse, marca esa línea con requiere_revision=true y explica el motivo; NO la omitas.
-
 - La glosa debe ser breve y profesional.
 - Los importes deben ser números positivos; el lado se expresa con debe/haber.
 
@@ -2208,18 +2754,32 @@ def resolve_asientos_with_gemini():
         .replace("{pcge}", json.dumps(pcge_5, ensure_ascii=False))
         .replace(
             "{operaciones}",
-            json.dumps(st.session_state.get("monografia_json", {}), ensure_ascii=False),
+            json.dumps(
+                _canonicalize_for_hash(st.session_state.get("monografia_json", {})),
+                ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ),
         )
     )
 
     def make_contents(_client):
         return [prompt]
 
+    # La semilla contable NO usa el hash binario del archivo. Dos copias de la
+    # misma práctica pueden tener metadatos distintos y, aun así, deben producir
+    # exactamente los mismos asientos. La semilla se calcula sobre la extracción
+    # contable normalizada.
+    canonical_monografia = _canonicalize_for_hash(
+        st.session_state.get("monografia_json", {})
+    )
+    accounting_seed = _deterministic_seed(canonical_monografia)
+    st.session_state["tana_practice_fingerprint"] = hashlib.sha256(
+        json.dumps(canonical_monografia, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    ).hexdigest()[:16]
     response, profile = _generate_with_fallback(
         make_contents,
-        types.GenerateContentConfig(response_mime_type="application/json"),
+        types.GenerateContentConfig(response_mime_type="application/json", temperature=0.0, seed=accounting_seed),
     )
-    data = json.loads(response.text or "{}")
+    data = _parsear_respuesta_json_gemini(response.text or "{}")
     data.setdefault("_tana_gemini_route", profile["label"])
     data.setdefault("_tana_gemini_model", profile["model"])
     return data, pcge_map
@@ -2238,8 +2798,26 @@ if "monografia_json" in st.session_state and "asientos_contables" not in st.sess
                 raise ValueError("La respuesta de Gemini no tiene una estructura de asientos válida.")
             if not isinstance(asientos_generados, list):
                 raise ValueError("La clave 'asientos' de Gemini no contiene una lista.")
+            if not asientos_generados:
+                raise ValueError(
+                    "TANA reconoció la práctica, pero no pudo identificar operaciones contables suficientes para generar asientos. "
+                    "No se generará un Excel vacío."
+                )
             asientos_generados = asegurar_cuenta_79_en_destinos(asientos_generados, pcge_map)
             asientos_generados = corregir_retiro_socio(asientos_generados, st.session_state.get("monografia_json", {}))
+
+            # Normalización determinista: todos los importes operativos de TANA
+            # quedan a 2 decimales antes de construir HT. Esto evita que pequeñas
+            # variaciones de representación de Gemini terminen alterando los estados.
+            for _asiento in asientos_generados:
+                if not isinstance(_asiento, dict):
+                    continue
+                for _linea in _asiento.get("lineas", []) or []:
+                    if not isinstance(_linea, dict):
+                        continue
+                    _linea["debe"] = round(max(_to_float(_linea.get("debe"), 0.0), 0.0), 2)
+                    _linea["haber"] = round(max(_to_float(_linea.get("haber"), 0.0), 0.0), 2)
+
             valid, errors, warnings = validate_asientos({"asientos": asientos_generados}, pcge_map)
             st.session_state["asientos_contables"] = asientos_generados
             st.session_state["asientos_validos"] = valid
@@ -2335,7 +2913,7 @@ SOLICITUD EXACTA DEL ESTUDIANTE:
         lambda client: [prompt],
         types.GenerateContentConfig(response_mime_type="application/json"),
     )
-    data = json.loads(response.text or "{}")
+    data = _parsear_respuesta_json_gemini(response.text or "{}")
     return data, profile
 
 
@@ -2445,7 +3023,7 @@ SOLICITUD DEL ESTUDIANTE:
         lambda client: [prompt],
         types.GenerateContentConfig(response_mime_type="application/json"),
     )
-    data = json.loads(response.text or "{}")
+    data = _parsear_respuesta_json_gemini(response.text or "{}")
     return data, profile
 
 
@@ -2686,7 +3264,7 @@ PREGUNTA:
 
 # La consulta y el audio se capturan arriba. Aquí solo se procesa la acción,
 # una vez que las funciones del tutor ya están definidas.
-if enviar_top and (pregunta_top.strip() or audio_top is not None) and (st.session_state.get("asientos_contables") or st.session_state.get("tana_excel_revisado") or st.session_state.get("monografia_json")):
+if enviar_top and (pregunta_top.strip() or audio_top is not None):
     if enviar_top and pregunta_top.strip():
         _record_user_activity("consulta_realizada", pregunta_top.strip())
         _tana_chat_add("user", pregunta_top.strip())
@@ -2720,12 +3298,7 @@ if enviar_top and (pregunta_top.strip() or audio_top is not None) and (st.sessio
     elif audio_top is not None:
         import hashlib
         _audio_sig = hashlib.sha1(audio_top.getvalue()).hexdigest()
-        if st.session_state.get("audio_tana_processed") == _audio_sig:
-            audio_top = None
-        else:
-            st.session_state["audio_tana_processed"] = _audio_sig
-        if audio_top is not None:
-            _record_user_activity("consulta_realizada", "Pregunta enviada por voz", _audio_sig)
+        if st.session_state.get("audio_tana_processed") != _audio_sig:
             _tana_chat_add("user", "🎤 Pregunta enviada por voz")
             with st.spinner("TANA está escuchando y preparando la respuesta…"):
                 temp_audio = None
@@ -2733,16 +3306,32 @@ if enviar_top and (pregunta_top.strip() or audio_top is not None) and (st.sessio
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
                         tmp.write(audio_top.getvalue())
                         temp_audio = tmp.name
+
+                    audio_bytes = audio_top.getvalue()
+
                     def audio_contents(client):
-                        audio_file = client.files.upload(file=temp_audio)
-                        return [audio_file, "Escucha el audio del estudiante, transcribe su pregunta y luego respóndela. No inventes datos. Usa el siguiente contexto:\n" + _tana_contexto_tutor()]
-                    response, profile = _generate_with_fallback(audio_contents, types.GenerateContentConfig())
+                        audio_part = types.Part.from_bytes(data=audio_bytes, mime_type="audio/wav")
+                        return [
+                            audio_part,
+                            "Escucha el audio del estudiante, transcribe su pregunta y luego respóndela. "
+                            "No inventes datos. Si hay una monografía o Excel cargado, usa su contexto. "
+                            "Si no hay documento cargado, responde normalmente a la pregunta hablada. "
+                            "Devuelve únicamente la respuesta para el estudiante.\n\n"
+                            + _tana_contexto_tutor()
+                        ]
+
+                    response, profile = _generate_with_fallback(
+                        audio_contents, types.GenerateContentConfig()
+                    )
                     respuesta_audio = response.text or "No pude interpretar el audio."
                     st.session_state["respuesta_tana"] = respuesta_audio
                     st.session_state["respuesta_tana_ruta"] = profile["label"]
+                    st.session_state["audio_tana_processed"] = _audio_sig
+                    _record_user_activity("consulta_realizada", "Pregunta enviada por voz", _audio_sig)
                     _tana_chat_add("assistant", respuesta_audio)
                 except Exception as exc:
-                    st.error(f"No se pudo procesar el audio: {_gemini_error_message(exc)}")
+                    # El error queda en el historial y el audio NO se marca como procesado.
+                    _tana_chat_add("assistant", f"⚠️ No pude procesar el audio: {_gemini_error_message(exc)}")
                 finally:
                     if temp_audio and os.path.exists(temp_audio):
                         os.remove(temp_audio)
@@ -3117,68 +3706,215 @@ def es_variacion_existencias(code):
 def es_cuenta79(code):
     return code[:2] == "79"
 
-def es_naturaleza(code):
-    # 69 (costo de ventas) y el elemento 9 se reclasifican íntegramente a
-    # R.Función; 79 es cuenta puente y no aparece en ningún resultado.
-    if not clasificar_resultado(code):
-        return False
-    if es_costo_ventas(code) or es_elemento9(code) or es_cuenta79(code):
-        return False
-    return True
 
-# Cuentas del Elemento 6 que ya tienen un destino explícito a 94/95.
-# Se detectan a partir de los asientos desarrollados por TANA, para que
-# el ERF no vuelva a incluir un gasto por naturaleza que ya fue llevado
-# a una cuenta de función.
 def detectar_cuentas_6_con_destino(asientos):
-    con_destino = set()
-    for asiento in asientos or []:
-        lineas = asiento.get("lineas", []) if isinstance(asiento, dict) else []
-        hay_94_95 = any(
-            str(x.get("codigo", "")).strip().startswith(("94", "95"))
-            for x in lineas if isinstance(x, dict)
-        )
-        if not hay_94_95:
-            continue
-        for x in lineas:
-            if not isinstance(x, dict):
-                continue
-            codigo = str(x.get("codigo", "")).strip()
-            if codigo[:1] == "6" and len(codigo) == 5:
-                con_destino.add(codigo)
-    return con_destino
-
-CUENTAS_6_CON_DESTINO = detectar_cuentas_6_con_destino(
-    st.session_state.get("asientos_contables", [])
-)
-
-def es_funcion(code):
     """
-    Clasificación EXACTA para Resultado por Función según la plantilla
-    revisada por el usuario:
+    Detecta cuentas de naturaleza (65/67) que realmente fueron llevadas a
+    cuentas por función (94/95).
 
-    OBLIGATORIAS:
-      - 70: ventas (detecta cualquier cuenta 70xxxxx presente).
-      - 69: costo de ventas (detecta cualquier cuenta 69xxxxx presente).
-      - 94 y 95: gastos por función.
+    La versión anterior marcaba una cuenta 6 como "con destino" solo porque
+    aparecía en el mismo asiento que una 94/95. Eso es demasiado amplio y
+    podía eliminar una 65/67 del ERF aunque su destino estuviera en otro
+    asiento, generando diferencias entre ERN y ERF.
 
-    ADICIONALES SOLO SI CORRESPONDE:
-      - 78: otros ingresos, si existe en la práctica.
-      - 65 y 67: solo si la cuenta existe y NO tiene destino a 94/95.
+    Ahora:
+      1) Identificamos asientos de destino por la presencia de 94/95 + 79
+         y/o glosas explícitas de "destino".
+      2) Calculamos el importe destinado.
+      3) Buscamos una combinación exacta de cuentas del elemento 6 cuyo
+         saldo deudor explique ese importe. Solo marcamos como destinadas
+         las cuentas 65/67 que pertenecen a una combinación única.
+      4) Si no existe una combinación inequívoca, no se elimina ninguna 65/67
+         del ERF: se conserva para no ocultar gasto real.
+    """
+    # Saldos deudores por cuenta del elemento 6.
+    saldos_6 = {}
+    for asiento in asientos or []:
+        for line in (asiento.get("lineas", []) if isinstance(asiento, dict) else []):
+            if not isinstance(line, dict):
+                continue
+            codigo = str(line.get("codigo", "")).strip()
+            if not re.fullmatch(r"6\d{4}", codigo):
+                continue
+            debe = _to_float(line.get("debe"), 0.0)
+            haber = _to_float(line.get("haber"), 0.0)
+            saldos_6[codigo] = saldos_6.get(codigo, 0.0) + debe - haber
 
-    NO pertenecen al ERF:
-      - 60, 61, 62, 63, 64, 66 y 68 por el solo hecho de ser
-        cuentas del elemento 6.
-      - 79: es cuenta puente de distribución y nunca se presenta
-        como componente del ERF.
+    # Solo nos interesan importes positivos.
+    saldos_6 = {c: round(v, 2) for c, v in saldos_6.items() if v > 0.009}
+    if not saldos_6:
+        return set()
+
+    importes_destino = []
+    for asiento in asientos or []:
+        if not isinstance(asiento, dict):
+            continue
+        lineas = asiento.get("lineas", []) or []
+        codigos = {str(x.get("codigo", "")).strip() for x in lineas if isinstance(x, dict)}
+        texto = " ".join(
+            str(asiento.get(k, "") or "") for k in ("glosa", "observacion", "documento")
+        ).lower()
+        tiene_94_95 = any(c.startswith(("94", "95")) for c in codigos)
+        tiene_79 = any(c.startswith("79") for c in codigos)
+        es_destino = (
+            tiene_94_95 and tiene_79
+        ) or (
+            tiene_94_95 and any(
+                palabra in texto for palabra in (
+                    "destino", "distribución", "distribucion",
+                    "por función", "por funcion", "imputación", "imputacion"
+                )
+            )
+        )
+        if not es_destino:
+            continue
+
+        total = 0.0
+        for line in lineas:
+            if not isinstance(line, dict):
+                continue
+            codigo = str(line.get("codigo", "")).strip()
+            if codigo.startswith(("94", "95")):
+                total += max(_to_float(line.get("debe"), 0.0), 0.0)
+        if total > 0.009:
+            importes_destino.append(round(total, 2))
+
+    if not importes_destino:
+        return set()
+
+    # Resolver cada importe de destino contra las cuentas 6.
+    # Se usa búsqueda de subconjuntos con centavos para prácticas pequeñas.
+    cuentas = sorted(saldos_6)
+    valores = [saldos_6[c] for c in cuentas]
+
+    def buscar_subconjunto_objetivo(objetivo, limite=2):
+        objetivo = round(objetivo, 2)
+        soluciones = []
+
+        # Orden descendente para encontrar rápidamente combinaciones plausibles.
+        pares = sorted(zip(cuentas, valores), key=lambda x: x[1], reverse=True)
+
+        def backtrack(i, restante, elegidas):
+            if len(soluciones) >= limite:
+                return
+            restante = round(restante, 2)
+            if abs(restante) < 0.01:
+                soluciones.append(tuple(elegidas))
+                return
+            if restante < -0.009 or i >= len(pares):
+                return
+
+            # Cota simple.
+            if sum(v for _, v in pares[i:]) + 0.009 < restante:
+                return
+
+            codigo, valor = pares[i]
+            if valor <= restante + 0.009:
+                backtrack(i + 1, restante - valor, elegidas + [codigo])
+            backtrack(i + 1, restante, elegidas)
+
+        backtrack(0, objetivo, [])
+        return soluciones
+
+    destinadas = set()
+    usados = set()
+
+    for importe in importes_destino:
+        # Excluir cuentas ya asignadas para no contar dos veces el mismo gasto.
+        cuentas_previas = cuentas[:]
+        if usados:
+            cuentas_previas = [c for c in cuentas_previas if c not in usados]
+
+        # Buscar sobre el conjunto restante.
+        pares = sorted(
+            ((c, saldos_6[c]) for c in cuentas_previas),
+            key=lambda x: x[1],
+            reverse=True,
+        )
+        soluciones = []
+
+        def backtrack_local(i, restante, elegidas):
+            if len(soluciones) >= 2:
+                return
+            restante = round(restante, 2)
+            if abs(restante) < 0.01:
+                soluciones.append(tuple(elegidas))
+                return
+            if restante < -0.009 or i >= len(pares):
+                return
+            if sum(v for _, v in pares[i:]) + 0.009 < restante:
+                return
+            codigo, valor = pares[i]
+            if valor <= restante + 0.009:
+                backtrack_local(i + 1, restante - valor, elegidas + [codigo])
+            backtrack_local(i + 1, restante, elegidas)
+
+        backtrack_local(0, importe, [])
+
+        # Solo aceptamos una solución inequívoca.
+        if len(soluciones) == 1:
+            sol = set(soluciones[0])
+            usados.update(sol)
+            destinadas.update(c for c in sol if c.startswith(("65", "67")))
+
+    return destinadas
+
+def es_naturaleza(code):
+    """
+    Clasificación para Resultado por Naturaleza.
+
+    Incluye:
+      - cuentas de naturaleza 6 y 7 que realmente forman el resultado;
+      - 87 Participaciones y 88 Impuesto a la Renta, cuando existan.
+
+    Excluye:
+      - 69, porque en la naturaleza se representa mediante 60/61;
+      - 79 y 89, cuentas puente/de cierre;
+      - cuentas 8 y cuentas del elemento 9 (94/95, etc.), que corresponden
+        a función, situación financiera o cierres.
     """
     if not code:
         return False
-    if code[:2] in {"70", "69", "78", "94", "95"}:
+    pref2 = code[:2]
+    if pref2 in {"69", "79", "89"}:
+        return False
+    if code[:1] == "9":
+        return pref2 in {"87", "88"}
+    if code[:1] == "8":
+        return False
+    return code[:1] in {"6", "7"}
+
+
+def es_funcion(code):
+    """
+    Clasificación para Resultado por Función.
+
+    Estructurales:
+      - 70 ventas
+      - 69 costo de ventas
+      - 94 y 95 gastos por función
+
+    Adicionales:
+      - 78 y 77 si existen como ingresos
+      - 65 y 67 solo cuando no se puede demostrar que fueron destinados
+        a 94/95
+      - 87 y 88 para que participaciones e impuesto también formen parte
+        del resultado final y concilien con ERN.
+
+    79 no se presenta en el ERF.
+    """
+    if not code:
+        return False
+    if code[:2] in {"70", "69", "78", "77", "94", "95", "87", "88"}:
         return True
     if code[:2] in {"65", "67"} and len(code) == 5:
         return code not in CUENTAS_6_CON_DESTINO
     return False
+
+
+CUENTAS_6_CON_DESTINO = detectar_cuentas_6_con_destino(
+    st.session_state.get("asientos_contables", [])
+)
 
 def es_balance(code):
     return not clasificar_resultado(code)
@@ -3267,12 +4003,15 @@ for code in cuentas_reporte:
     # Saldos ajustados: SOLO cuentas de balance (elemento 1 al 5).
     # Las cuentas de resultados (elemento 6-9) no se muestran aquí;
     # su saldo neto se refleja directamente en R.Naturaleza/R.Función.
+    # Para cuentas de balance con ajustes, el saldo ajustado es el NETO
+    # después de aplicar Debe/Haber del bloque de ajustes. Nunca se borra
+    # una cuenta completa solo porque tenga un ajuste parcial.
     if clasificar_resultado(code):
         sa_debe, sa_haber = 0.0, 0.0
-    elif aj_deudor or aj_acreedor:
-        sa_debe, sa_haber = 0.0, 0.0
     else:
-        sa_debe, sa_haber = deudor, acreedor
+        saldo_ajustado_neto = (deudor + aj_deudor) - (acreedor + aj_acreedor)
+        sa_debe = max(saldo_ajustado_neto, 0.0)
+        sa_haber = max(-saldo_ajustado_neto, 0.0)
     ws6.cell(r, 9, sa_debe)
     ws6.cell(r, 10, sa_haber)
 
@@ -3280,7 +4019,9 @@ for code in cuentas_reporte:
     # IMPORTANTE: para Naturaleza usamos el saldo después de 69 <-> 61;
     # para Función NO debemos borrar 69 ni las cuentas del elemento 9,
     # porque esas cuentas son precisamente las que alimentan el ERF.
-    neto = (deudor + aj_deudor) - (acreedor + aj_acreedor)
+    # Cálculo determinista a centavos. Los estados nunca deben depender de
+    # redondeos intermedios ni de una nueva interpretación de la IA.
+    neto = round((deudor + aj_deudor) - (acreedor + aj_acreedor), 2)
     neto_deudor = max(neto, 0.0)
     neto_acreedor = max(-neto, 0.0)
 
@@ -3327,6 +4068,49 @@ for c in range(3, 19):
     letter = get_column_letter(c)
     ws6.cell(r, c, f'=SUM({letter}4:{letter}{HT_LAST_ROW})').font = BOLD
     ws6.cell(r, c).number_format = '#,##0.00;(#,##0.00);"-"'
+
+# ------------------------------------------------------------
+# DIFERENCIA / RESTA — línea de cierre de la Hoja de Trabajo
+# ------------------------------------------------------------
+# La plantilla de referencia del usuario muestra una línea adicional debajo
+# de TOTAL para hacer explícita la resta entre los dos lados de cada bloque.
+# TANA antes dejaba esa diferencia implícita en los estados, lo que hacía
+# difícil localizar un descuadre. Aquí se calcula de forma determinista y
+# visible, sin inventar cuentas ni modificar los movimientos originales.
+#
+# En R.NAT y R.FUNCIÓN la diferencia es el resultado neto: lado acreedor
+# menos lado deudor cuando los ingresos superan a los gastos, o viceversa.
+# En E.S.F. se coloca la diferencia en el lado menor para mostrar qué importe
+# debe explicar el patrimonio/resultado.
+HT_DIF_ROW = r + 1
+ws6.cell(HT_DIF_ROW, 2, "DIFERENCIA / RESTA").font = BOLD
+ws6.cell(HT_DIF_ROW, 2).fill = PatternFill('solid', fgColor='FFF2CC')
+
+# Ajustes: deben cuadrar por sí mismos.
+ws6.cell(HT_DIF_ROW, 7, f'=ABS(G{HT_TOTAL_ROW}-H{HT_TOTAL_ROW})')
+ws6.cell(HT_DIF_ROW, 8, f'=ABS(G{HT_TOTAL_ROW}-H{HT_TOTAL_ROW})')
+# Saldos ajustados: misma lógica de diferencia visible.
+ws6.cell(HT_DIF_ROW, 9, f'=ABS(I{HT_TOTAL_ROW}-J{HT_TOTAL_ROW})')
+ws6.cell(HT_DIF_ROW, 10, f'=ABS(I{HT_TOTAL_ROW}-J{HT_TOTAL_ROW})')
+
+# Resultado por naturaleza: la diferencia se coloca en el lado menor.
+ws6.cell(HT_DIF_ROW, 11, f'=MAX(L{HT_TOTAL_ROW}-K{HT_TOTAL_ROW},0)')
+ws6.cell(HT_DIF_ROW, 12, f'=MAX(K{HT_TOTAL_ROW}-L{HT_TOTAL_ROW},0)')
+# Resultado por función.
+ws6.cell(HT_DIF_ROW, 13, f'=MAX(N{HT_TOTAL_ROW}-M{HT_TOTAL_ROW},0)')
+ws6.cell(HT_DIF_ROW, 14, f'=MAX(M{HT_TOTAL_ROW}-N{HT_TOTAL_ROW},0)')
+# Estado de situación: si Activo > Pasivo+Patrimonio se muestra la diferencia
+# en el lado pasivo; si ocurre lo contrario, se muestra en activo.
+ws6.cell(HT_DIF_ROW, 15, f'=MAX(P{HT_TOTAL_ROW}-O{HT_TOTAL_ROW},0)')
+ws6.cell(HT_DIF_ROW, 16, f'=MAX(O{HT_TOTAL_ROW}-P{HT_TOTAL_ROW},0)')
+
+for c in range(3, 19):
+    ws6.cell(HT_DIF_ROW, c).number_format = '#,##0.00;(#,##0.00);"-"'
+    ws6.cell(HT_DIF_ROW, c).fill = PatternFill('solid', fgColor='FFF2CC')
+    ws6.cell(HT_DIF_ROW, c).font = BOLD
+
+# La línea de diferencia es informativa y no se vuelve a sumar al TOTAL.
+ws6.cell(HT_DIF_ROW, 18, f'=ABS(Q{HT_TOTAL_ROW}-R{HT_TOTAL_ROW})')
 
 ws6.freeze_panes = "A4"
 autofit(ws6, [11, 44, 14, 14, 14, 14, 13, 13, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14])
@@ -3378,6 +4162,30 @@ def _sum_ht_codes(codes, column):
         for code in codes
     ]
     return '=' + '+'.join(formulas)
+
+
+def _signed_ht(prefix, credit_col="L", debit_col="K"):
+    """Saldo neto de una familia: crédito menos débito."""
+    return (
+        f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*'
+        f'HT!${credit_col}$4:${credit_col}${HT_LAST_ROW})'
+        f'-SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*'
+        f'HT!${debit_col}$4:${debit_col}${HT_LAST_ROW})'
+    )
+
+
+def _signed_ht_codes(codes, credit_col="L", debit_col="K"):
+    if not codes:
+        return '=0'
+    parts = []
+    for code in codes:
+        parts.append(
+            f'SUMPRODUCT((HT!$A$4:$A${HT_LAST_ROW}="{code}")*'
+            f'HT!${credit_col}$4:${credit_col}${HT_LAST_ROW})'
+            f'-SUMPRODUCT((HT!$A$4:$A${HT_LAST_ROW}="{code}")*'
+            f'HT!${debit_col}$4:${debit_col}${HT_LAST_ROW})'
+        )
+    return '=' + '+'.join(parts)
 
 
 def _set_report_value(ws, row, col, formula, bold=False):
@@ -3432,17 +4240,19 @@ _report_header(ws8, 4)
 
 r = 5
 _write_label(ws8, r, 'INGRESOS OPERACIONALES', True); r += 1
+
 ventas_row = r
 _write_label(ws8, r, 'VENTAS')
-_write_amount(ws8, r, _sum_ht('70', 'N'), False)
+# Ingreso neto = HABER - DEBE. Así se contemplan también eventuales
+# devoluciones/rectificaciones sin romper la conciliación.
+_write_amount(ws8, r, _signed_ht('70', 'N', 'M'))
 r += 1
 
-# Líneas de detalle de ventas: solo se muestran cuando existen cuentas 70 adicionales.
 ventas_codes = sorted(c for c in cuentas_reporte if c.startswith('70'))
 if len(ventas_codes) > 1:
     for code in ventas_codes:
         _write_label(ws8, r, f'{code} - {pcge_map.get(code, code)}')
-        _write_amount(ws8, r, _sum_ht_codes([code], 'N'))
+        _write_amount(ws8, r, _signed_ht_codes([code], 'N', 'M'))
         r += 1
 
 ventas_total_row = r
@@ -3450,9 +4260,14 @@ _write_label(ws8, r, 'INGRESOS OPERACIONALES', True)
 _write_amount(ws8, r, f'=E{ventas_row}', True)
 r += 1
 
-_write_label(ws8, r, 'COSTO DE VENTA', True)
 costo_row = r
-_write_amount(ws8, r, _sum_ht('69', 'M'))
+_write_label(ws8, r, 'COSTO DE VENTA', True)
+# Gasto neto = DEBE - HABER.
+_write_amount(
+    ws8, r,
+    f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="69")*HT!$M$4:$M${HT_LAST_ROW})-'
+    f'SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="69")*HT!$N$4:$N${HT_LAST_ROW})'
+)
 r += 1
 
 utilidad_bruta_row = r
@@ -3461,21 +4276,29 @@ _write_amount(ws8, r, f'=E{ventas_total_row}-E{costo_row}', True)
 r += 2
 
 _write_label(ws8, r, 'GASTOS OPERACIONALES', True); r += 1
-
 gasto_operativo_rows = []
-# 95 y 94 son obligatorias en la estructura, aunque su saldo sea cero.
+
 for prefix, label in [('95', 'Gastos de venta'), ('94', 'Gastos de administración')]:
     rr = r
     _write_label(ws8, r, label.upper())
-    _write_amount(ws8, r, f'=-{_sum_ht(prefix, "M")[1:]}')
+    _write_amount(
+        ws8, r,
+        f'=-(SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*'
+        f'HT!$M$4:$M${HT_LAST_ROW})-SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*'
+        f'HT!$N$4:$N${HT_LAST_ROW}))'
+    )
     gasto_operativo_rows.append(rr)
     r += 1
 
-# 65: solo si existe y no fue destinada a 94/95.
+# 65: solo si existe y NO se pudo demostrar que fue destinada a 94/95.
 for code in sorted(c for c in cuentas_reporte if len(c) == 5 and c.startswith('65') and c not in CUENTAS_6_CON_DESTINO):
     rr = r
     _write_label(ws8, r, f'{code} - {pcge_map.get(code, code)}')
-    _write_amount(ws8, r, f'=-{_sum_ht_codes([code], "M")[1:]}')
+    _write_amount(
+        ws8, r,
+        f'=-(SUMPRODUCT((HT!$A$4:$A${HT_LAST_ROW}="{code}")*HT!$M$4:$M${HT_LAST_ROW})-'
+        f'SUMPRODUCT((HT!$A$4:$A${HT_LAST_ROW}="{code}")*HT!$N$4:$N${HT_LAST_ROW}))'
+    )
     gasto_operativo_rows.append(rr)
     r += 1
 
@@ -3487,28 +4310,29 @@ r += 2
 
 _write_label(ws8, r, 'OTROS INGRESOS Y GASTOS', True); r += 1
 
-# 78: se incorpora si existe.
 otros_78_row = None
 if _prefix_exists('78'):
     otros_78_row = r
     _write_label(ws8, r, 'OTROS INGRESOS')
-    _write_amount(ws8, r, _sum_ht('78', 'N'))
+    _write_amount(ws8, r, _signed_ht('78', 'N', 'M'))
     r += 1
 
-# Ingreso financiero 77, si existe.
 ingreso_fin_row = None
 if _prefix_exists('77'):
     ingreso_fin_row = r
     _write_label(ws8, r, 'INGRESO FINANCIERO')
-    _write_amount(ws8, r, _sum_ht('77', 'N'))
+    _write_amount(ws8, r, _signed_ht('77', 'N', 'M'))
     r += 1
 
-# 67: solo si existe y no tiene destino a 94/95; se presenta como gasto financiero.
 gasto_fin_rows = []
 for code in sorted(c for c in cuentas_reporte if len(c) == 5 and c.startswith('67') and c not in CUENTAS_6_CON_DESTINO):
     rr = r
     _write_label(ws8, r, f'{code} - {pcge_map.get(code, code)}')
-    _write_amount(ws8, r, f'=-{_sum_ht_codes([code], "M")[1:]}')
+    _write_amount(
+        ws8, r,
+        f'=-(SUMPRODUCT((HT!$A$4:$A${HT_LAST_ROW}="{code}")*HT!$M$4:$M${HT_LAST_ROW})-'
+        f'SUMPRODUCT((HT!$A$4:$A${HT_LAST_ROW}="{code}")*HT!$N$4:$N${HT_LAST_ROW}))'
+    )
     gasto_fin_rows.append(rr)
     r += 1
 
@@ -3523,16 +4347,22 @@ parts += [f'+E{x}' for x in gasto_fin_rows]
 _write_amount(ws8, r, '=' + ''.join(parts), True)
 r += 1
 
-# Participaciones: solo si existe elemento 87; si no existe, se mantiene 0.
 part_row = r
 _write_label(ws8, r, 'PARTICIPACIONES')
-_write_amount(ws8, r, f'=-{_sum_ht("87", "M")[1:]}')
+_write_amount(
+    ws8, r,
+    f'=-(SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="87")*HT!$M$4:$M${HT_LAST_ROW})-'
+    f'SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="87")*HT!$N$4:$N${HT_LAST_ROW}))'
+)
 r += 1
 
-# Impuesto a la renta: solo si existe elemento 88; si no existe, 0.
 impuesto_row = r
 _write_label(ws8, r, 'IMPUESTO A LA RENTA')
-_write_amount(ws8, r, f'=-{_sum_ht("88", "M")[1:]}')
+_write_amount(
+    ws8, r,
+    f'=-(SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="88")*HT!$M$4:$M${HT_LAST_ROW})-'
+    f'SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="88")*HT!$N$4:$N${HT_LAST_ROW}))'
+)
 r += 1
 
 resultado_erf_row = r
@@ -3540,7 +4370,6 @@ _write_label(ws8, r, 'RESULTADO DEL EJERCICIO', True)
 _write_amount(ws8, r, f'=E{resultado_antes_part_row}+E{part_row}+E{impuesto_row}', True)
 r += 2
 
-# Control interno: no se muestra en el informe, pero permite comprobar que ERF = ERN.
 control_erf_row = r
 _write_label(ws8, r, 'CONTROL INTERNO ERF')
 _write_amount(ws8, r, '=0')
@@ -3563,13 +4392,11 @@ _report_header(ws7, 4)
 r = 5
 _write_label(ws7, r, 'INGRESOS OPERACIONALES', True); r += 1
 
-# Ventas y otros ingresos: se detectan por prefijo, sin inventar cuentas.
 ventas_ern_row = r
 _write_label(ws7, r, 'VENTAS')
-_write_amount(ws7, r, _sum_ht('70', 'L'))
+_write_amount(ws7, r, _signed_ht('70', 'L', 'K'))
 r += 1
 
-# Ingresos por naturaleza que efectivamente existan. La 74 es gasto.
 for prefix, label in [
     ('71', 'Variación de la producción almacenada'),
     ('72', 'Producción de activo inmovilizado'),
@@ -3581,7 +4408,7 @@ for prefix, label in [
 ]:
     if _prefix_exists(prefix):
         _write_label(ws7, r, label.upper())
-        _write_amount(ws7, r, _sum_ht(prefix, 'L'))
+        _write_amount(ws7, r, _signed_ht(prefix, 'L', 'K'))
         r += 1
 
 ventas_total_ern_row = r
@@ -3590,8 +4417,8 @@ _write_amount(ws7, r, f'=SUM(E{ventas_ern_row}:E{r-1})', True)
 r += 2
 
 _write_label(ws7, r, 'COSTO Y GASTOS POR NATURALEZA', True); r += 1
-
 naturaleza_rows = []
+
 for prefix, label in [
     ('60', 'Compras'),
     ('61', 'Variación de existencias'),
@@ -3607,29 +4434,51 @@ for prefix, label in [
     if _prefix_exists(prefix):
         rr = r
         _write_label(ws7, r, label.upper())
-        _write_amount(ws7, r, _sum_ht(prefix, 'K'))
+        # Gasto neto = DEBE - HABER. Si hubiera una reversión (saldo acreedor),
+        # se resta del gasto en vez de ignorarla.
+        _write_amount(ws7, r, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*'
+                              f'HT!$K$4:$K${HT_LAST_ROW})-SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*'
+                              f'HT!$L$4:$L${HT_LAST_ROW})')
         naturaleza_rows.append(rr)
         r += 1
 
 total_gastos_ern_row = r
 _write_label(ws7, r, 'TOTAL COSTO Y GASTOS', True)
 _write_amount(ws7, r, '=' + '+'.join(f'E{x}' for x in naturaleza_rows) if naturaleza_rows else '=0', True)
+r += 1
+
+# Participaciones e impuesto: se incorporan también en ERN cuando existen,
+# para que el resultado final sea exactamente conciliable con ERF.
+ern_part_row = r
+_write_label(ws7, r, 'PARTICIPACIONES')
+_write_amount(
+    ws7, r,
+    f'=-(SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="87")*HT!$K$4:$K${HT_LAST_ROW})-'
+    f'SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="87")*HT!$L$4:$L${HT_LAST_ROW}))'
+)
+r += 1
+
+ern_impuesto_row = r
+_write_label(ws7, r, 'IMPUESTO A LA RENTA')
+_write_amount(
+    ws7, r,
+    f'=-(SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="88")*HT!$K$4:$K${HT_LAST_ROW})-'
+    f'SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="88")*HT!$L$4:$L${HT_LAST_ROW}))'
+)
 r += 2
 
 resultado_ern_row = r
 _write_label(ws7, r, 'RESULTADO DEL EJERCICIO', True)
-_write_amount(ws7, r, f'=E{ventas_total_ern_row}-E{total_gastos_ern_row}', True)
+_write_amount(ws7, r, f'=E{ventas_total_ern_row}-E{total_gastos_ern_row}+E{ern_part_row}+E{ern_impuesto_row}', True)
 ERN_RESULTADO_ROW = r
 r += 1
 
-# Control interno oculto.
 control_ern_row = r
 _write_label(ws7, r, 'CONTROL INTERNO ERN')
 _write_amount(ws7, r, f'=E{resultado_ern_row}-ERF!E{resultado_erf_row}')
 ws7.cell(r, 6, f'=IF(ABS(E{r})<0.01,"CUADRADO","REVISAR")')
 _hide_control_row(ws7, control_ern_row)
 
-# Ahora que ERN_RESULTADO_ROW ya existe, completamos el control cruzado del ERF.
 ws8.cell(control_erf_row, 5, f'=E{resultado_erf_row}-ERN!E{ERN_RESULTADO_ROW}')
 ws8.cell(control_erf_row, 5).number_format = '#,##0.00;(#,##0.00);"-"'
 
@@ -3925,6 +4774,25 @@ if "monografia_texto" in st.session_state:
     ws_mono.freeze_panes = "A4"
 
 # ============================================================
+# VALIDACIÓN CONTABLE AUTOMÁTICA
+# ============================================================
+# Se agrega al Excel final para que el estudiante pueda ver los controles
+# matemáticos antes de utilizar el resultado.
+try:
+    _agregar_hoja_control_contable(
+        wb,
+        st.session_state.get("asientos_contables", []) or [],
+        HT_LAST_ROW,
+        ERN_RESULTADO_ROW,
+        resultado_erf_row,
+        control_esf_row,
+    )
+except Exception as _control_exc:
+    # La auditoría nunca debe impedir que TANA genere el Excel.
+    # Si falla su construcción, queda registrada en el chat/diagnóstico.
+    st.session_state["tana_control_contable_error"] = str(_control_exc)
+
+# ============================================================
 # PRESENTACIÓN DEL EXCEL FINAL
 # ============================================================
 # Las hojas auxiliares siguen existiendo durante la construcción porque
@@ -3932,7 +4800,7 @@ if "monografia_texto" in st.session_state:
 # al usuario. El archivo final muestra únicamente los reportes solicitados.
 if st.session_state.get("tana_modo_trabajo") == "asientos":
     # Modo básico: el estudiante pidió únicamente asientos / libro diario.
-    HOJAS_PUBLICAS = ["Asientos_Contables"]
+    HOJAS_PUBLICAS = ["Asientos_Contables", "VALIDACION", "AUDITORIA_TANA"]
 else:
     HOJAS_PUBLICAS = [
         "Asientos_Contables",
@@ -3941,6 +4809,8 @@ else:
         "ESF",
         "ERF",
         "ERN",
+        "VALIDACION",
+        "AUDITORIA_TANA",
     ]
 
 for ws in wb.worksheets:
