@@ -2259,6 +2259,11 @@ Incluye las cuentas y montos iniciales que realmente aparecen en la práctica.
 Si existen dos empresas, cada empresa debe tener su propio asiento de apertura
 y su propio libro. No mezcles sus saldos. El asiento de apertura debe cuadrar
 Debe = Haber y debe alimentar el mismo flujo contable existente de la aplicación.
+Dentro del asiento de apertura, ordena las líneas SIEMPRE así: primero todas
+las cuentas de Activo (elementos 1, 2 y 3) en el DEBE, de menor a mayor código;
+luego todas las cuentas de Pasivo (elemento 4) en el HABER, de menor a mayor
+código; y al final todas las cuentas de Patrimonio (elemento 5) en el HABER,
+de menor a mayor código. No intercales cuentas de distintos grupos.
 NO MODIFIQUES la lógica de HT, ERF, ERN, ESF, destinos ni distribución existente.
 
 Eres el motor contable de TANA, una aplicación de contabilidad peruana.
@@ -2767,6 +2772,63 @@ def corregir_retiro_socio(asientos, monografia_json):
     resultado.extend([dist, pago])
     return resultado
 
+
+def _es_asiento_apertura(asiento):
+    """
+    Identifica si un asiento es un asiento de apertura (balance inicial),
+    sin depender de que Gemini lo marque de forma consistente.
+
+    Señal principal: operacion_numero == 0 (así lo pide ASIENTOS_PROMPT:
+    "antes de la operación 1"). Señal de respaldo: la glosa/documento
+    menciona "apertura" o "balance inicial".
+    """
+    opnum = str(asiento.get("operacion_numero", "")).strip()
+    if opnum == "0":
+        return True
+    texto = " ".join(
+        str(asiento.get(k, "")) for k in ("glosa", "documento", "observacion")
+    ).lower()
+    return "apertura" in texto or "balance inicial" in texto
+
+
+def ordenar_lineas_asiento_apertura(asientos):
+    """
+    Corrige el orden de las líneas dentro de cada asiento de APERTURA para
+    que sigan siempre la convención contable: primero todas las cuentas de
+    Activo (elementos 1-3), luego Pasivo (elemento 4) y al final Patrimonio
+    (elemento 5) — en cada grupo, ascendente por código de cuenta.
+
+    Esto es una corrección DETERMINISTA en Python: no depende de que Gemini
+    "recuerde" el orden en cada respuesta, que es la causa raíz de que a
+    veces saliera mezclado (p. ej. 10, 50, 33, 42...).
+
+    No toca asientos de operaciones normales, solo los de apertura.
+    """
+    def orden_key(linea):
+        codigo = str(linea.get("codigo", "")).strip()
+        elemento = codigo[:1]
+        if elemento in ("1", "2", "3"):
+            grupo = 0  # Activo
+        elif elemento == "4":
+            grupo = 1  # Pasivo
+        elif elemento == "5":
+            grupo = 2  # Patrimonio
+        else:
+            grupo = 3  # cualquier otra cosa, al final, por seguridad
+        return (grupo, codigo)
+
+    for asiento in asientos:
+        if not isinstance(asiento, dict) or not _es_asiento_apertura(asiento):
+            continue
+        lineas = asiento.get("lineas", [])
+        if isinstance(lineas, list) and lineas:
+            asiento["lineas"] = sorted(
+                lineas,
+                key=lambda l: orden_key(l) if isinstance(l, dict) else (9, "")
+            )
+    return asientos
+
+
 def resolve_asientos_with_gemini():
     if not get_gemini_profiles():
         raise RuntimeError("No está configurada ninguna GEMINI_API_KEY en Streamlit Secrets.")
@@ -2834,6 +2896,7 @@ if "monografia_json" in st.session_state and "asientos_contables" not in st.sess
                 )
             asientos_generados = asegurar_cuenta_79_en_destinos(asientos_generados, pcge_map)
             asientos_generados = corregir_retiro_socio(asientos_generados, st.session_state.get("monografia_json", {}))
+            asientos_generados = ordenar_lineas_asiento_apertura(asientos_generados)
 
             # Normalización determinista: todos los importes operativos de TANA
             # quedan a 2 decimales antes de construir HT. Esto evita que pequeñas
@@ -3202,6 +3265,7 @@ def _aplicar_correccion_si_corresponde(pregunta):
             # claramente como NO VALIDADA hasta que el usuario la revise.
             nuevos = asegurar_cuenta_79_en_destinos(nuevos, pcge_map)
             nuevos = corregir_retiro_socio(nuevos, st.session_state.get("monografia_json", {}))
+            nuevos = ordenar_lineas_asiento_apertura(nuevos)
             valid, errors, warnings = validate_asientos({"asientos": nuevos}, pcge_map)
 
             if st.session_state.get("tana_excel_origen_bytes"):
