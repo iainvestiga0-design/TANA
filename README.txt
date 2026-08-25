@@ -1,28 +1,22 @@
-TANA V10 CORREGIDA — LECTURA DE PRÁCTICAS + VOZ
+TANA V18 - HT DETERMINISTA, EXTRACCIÓN ESTABLE Y RESULTADOS REPRODUCIBLES
 
-Esta versión parte de la V10 de actividad persistente en Supabase y corrige dos problemas observados en la prueba:
+Cambios principales:
+1. Gemini usa temperatura 0 en la extracción y desarrollo contable.
+2. La semilla de generación se deriva del contenido exacto de la práctica. La misma práctica genera la misma semilla aunque se use otra cuenta o dispositivo.
+3. Los importes de los asientos se normalizan a 2 decimales antes de construir la HT.
+4. Los SALDOS AJUSTADOS de cuentas de balance se calculan como saldo neto después de aplicar los ajustes. Un ajuste parcial ya no elimina toda la cuenta.
+5. ERN, ERF y ESF se alimentan de la misma HT y sus cálculos son deterministas.
+6. Se mantiene la lógica contable 69<->61 y Elemento 9<->79.
+7. Se mantiene el registro persistente de usuarios por correo.
 
-1. PRÁCTICAS WORD / DOC
-- Mantiene PDF, DOC, DOCX, XLS, XLSX, JPG, JPEG y PNG.
-- Para Word antiguo (.doc) se envía el MIME application/msword cuando el SDK lo permite.
-- Si la extracción estructurada devuelve 0 operaciones o JSON vacío, TANA hace una segunda lectura: primero recupera el texto completo del documento y después vuelve a estructurarlo.
-- TANA ya no continúa silenciosamente con una práctica vacía.
-- Si Gemini reconoce la práctica pero devuelve 0 asientos, TANA no genera ni ofrece un Excel vacío.
+Objetivo de esta versión:
+La misma práctica debe producir los mismos importes y estados de forma consistente. TANA no debe compensar artificialmente un descuadre real de la práctica.
 
-2. VOZ
-- El procesamiento por voz ya no depende de que existan asientos previamente generados.
-- El audio se sube con MIME audio/wav cuando el SDK lo permite.
-- El audio solo se marca como procesado después de obtener una respuesta.
-- Si Gemini falla, el error queda visible en el historial y el mismo audio no se marca como procesado.
-- TANA puede responder por voz incluso si todavía no hay una monografía cargada.
 
-SUPABASE
-No se modifica el esquema de Supabase. Se conserva:
-- tana_users
-- tana_activity
-
-STREAMLIT SECRETS
-Mantener los Secrets actuales. No incluir claves secretas en este ZIP ni en GitHub.
-
-IMPORTANTE
-Esta versión no cambia la lógica contable de PCGE, HT, ERN, ERF, ESF ni el sistema de actividad persistente que ya quedó funcionando.
+CAMBIO CLAVE V18
+- La semilla de extracción y de asientos ya no depende de los metadatos binarios del archivo cuando TANA puede obtener una representación textual estable.
+- DOCX y PDF con texto se normalizan localmente antes de la extracción.
+- La semilla contable se calcula sobre la monografía normalizada, no sobre el archivo subido.
+- La misma práctica debe producir los mismos asientos y los mismos importes aunque se suba desde otro dispositivo o correo, siempre que la extracción textual sea equivalente.
+- La HT conserva los saldos parciales después de los ajustes; no elimina una cuenta completa por tener una contrapartida parcial.
+- ERN, ERF y ESF siguen tomando como fuente la misma HT.
