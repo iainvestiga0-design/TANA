@@ -570,6 +570,40 @@ if user_role == "Creador":
 from google import genai
 from google.genai import types
 
+
+# TANA - SUBDIVISIONARIAS BANCARIAS (5 DIGITOS)
+TANA_BANCOS_SUBDIVISIONARIAS = {
+    "banco de la nación": "10411",
+    "banco de la nacion": "10411",
+    "banco de crédito del perú": "10412",
+    "banco de credito del peru": "10412",
+    "bcp": "10412",
+    "interbank": "10413",
+    "scotiabank": "10414",
+    "bbva": "10415",
+    "banbif": "10416",
+    "banco pichincha": "10417",
+    "banco falabella": "10418",
+    "banco ripley": "10419",
+    "banco gnb": "10420",
+}
+
+# Nombre de referencia (para mostrar) de cada código de TANA_BANCOS_SUBDIVISIONARIAS,
+# en el orden en que se muestran al motor de Gemini.
+TANA_BANCOS_NOMBRES = {
+    "10411": "Banco de la Nación",
+    "10412": "Banco de Crédito del Perú (BCP)",
+    "10413": "Interbank",
+    "10414": "Scotiabank",
+    "10415": "BBVA",
+    "10416": "BanBif",
+    "10417": "Banco Pichincha",
+    "10418": "Banco Falabella",
+    "10419": "Banco Ripley",
+    "10420": "Banco GNB",
+}
+
+
 # ============================================================
 # GEMINI: lectura multimodal de monografías
 # ============================================================
@@ -867,17 +901,7 @@ Devuelve únicamente JSON válido con esta estructura:
   "empresa": "",
   "tipo_documento": "",
   "periodo": "",
-  "estado_inicial": [
-    {
-      "empresa": "",
-      "fecha": "",
-      "lado": "activo|pasivo|patrimonio",
-      "cuenta": "",
-      "codigo": "",
-      "importe": null,
-      "descripcion": ""
-    }
-  ],
+  "estado_inicial": [],
   "operaciones": [
     {
       "numero": 1,
@@ -906,10 +930,7 @@ REGLAS:
   documentos, nombres y condiciones.
 - Si un dato no aparece, usa null o "".
 - Separa cada operación en un elemento.
-- Incluye el estado financiero inicial si existe y separa cada partida en un elemento de "estado_inicial".
-- En cada partida conserva, cuando el documento lo permita: empresa, fecha, lado (activo, pasivo o patrimonio), cuenta, código, importe y descripción.
-- Si el documento contiene más de una empresa, identifica la empresa de cada partida.
-- No omitas saldos iniciales: serán utilizados para generar los asientos de apertura.
+- Incluye el estado financiero inicial si existe.
 - Incluye todo lo que el ejercicio pide realizar en "solicitudes".
 - La información extraída servirá después para el motor contable de TANA.
 """
@@ -1963,6 +1984,36 @@ def _agregar_hoja_control_contable(wb, asientos, ht_last_row, ern_resultado_row,
                  f"=ERF!$E${erf_resultado_row}",
                  "El resultado por función debe existir."))
 
+    # 8) Aviso informativo: cuántas empresas distintas hay en este libro.
+    # HT/ERF/ERN/ESF de esta versión de TANA consolidan TODOS los asientos
+    # en un solo juego de estados financieros. Si la práctica tiene más de
+    # una empresa (p. ej. una fusión), este control avisa que los saldos
+    # de HT/ESF están mezclando ambas empresas y que hay que revisarlos
+    # por separado con la columna "Empresa" de Asientos_Contables.
+    empresas_vistas = []
+    for a in (asientos or []):
+        emp = str((a or {}).get("empresa", "")).strip()
+        if emp and emp not in empresas_vistas:
+            empresas_vistas.append(emp)
+    if len(empresas_vistas) > 1:
+        rows.append((
+            "8. Empresas detectadas en este libro",
+            f"⚠️ {len(empresas_vistas)} EMPRESAS EN UN SOLO LIBRO",
+            "",
+            "Este libro mezcla los asientos de: " + "; ".join(empresas_vistas) +
+            ". HT, ERF, ERN y ESF muestran los saldos CONSOLIDADOS de todas "
+            "ellas, no por separado. Usa la columna \"Empresa\" de "
+            "Asientos_Contables para filtrar y revisar cada empresa "
+            "individualmente.",
+        ))
+    elif len(empresas_vistas) == 1:
+        rows.append((
+            "8. Empresa detectada en este libro",
+            f"✅ {empresas_vistas[0]}",
+            "",
+            "Todos los asientos de este libro pertenecen a la misma empresa.",
+        ))
+
     for i, (label, status, diff, note) in enumerate(rows, start=4):
         ws.cell(i, 1, label)
         ws.cell(i, 2, status)
@@ -2245,6 +2296,67 @@ if "monografia_json" in st.session_state:
 # ============================================================
 
 ASIENTOS_PROMPT = """
+REGLA ADICIONAL — ASIENTO DE APERTURA:
+Si la monografía proporciona un balance inicial, balance de comprobación,
+estado de situación financiera inicial o saldos de apertura, debes registrar
+primero el asiento de apertura correspondiente antes de la operación 1.
+Incluye las cuentas y montos iniciales que realmente aparecen en la práctica.
+Si existen dos empresas, cada empresa debe tener su propio asiento de apertura
+y su propio libro. No mezcles sus saldos. El asiento de apertura debe cuadrar
+Debe = Haber y debe alimentar el mismo flujo contable existente de la aplicación.
+Dentro del asiento de apertura, ordena las líneas SIEMPRE así: primero todas
+las cuentas de Activo (elementos 1, 2 y 3) en el DEBE, de menor a mayor código;
+luego todas las cuentas de Pasivo (elemento 4) en el HABER, de menor a mayor
+código; y al final todas las cuentas de Patrimonio (elemento 5) en el HABER,
+de menor a mayor código. No intercales cuentas de distintos grupos.
+NO MODIFIQUES la lógica de HT, ERF, ERN, ESF, destinos ni distribución existente.
+
+REGLA CRÍTICA — NO AGREGUES PARTIDAS DISTINTAS EN UNA SOLA LÍNEA:
+El balance de la monografía trae varias partidas individuales (por ejemplo,
+varios bancos, varias existencias/productos, varias cuentas por pagar). Cada
+una de esas partidas individuales DEBE registrarse en su PROPIA línea del
+asiento, con su propio código de 5 dígitos. Está PROHIBIDO sumar dos o más
+partidas distintas del balance en una sola línea/código (por ejemplo, sumar
+"Caja" + "Banco de la Nación" + "Banco BCP" en una sola línea "10411" es un
+error grave). El total del asiento sigue siendo la suma de todas esas líneas
+individuales.
+
+SUB-CUENTAS BANCARIAS (elemento 104, cuentas corrientes):
+Cuando el balance mencione más de una cuenta corriente bancaria, usa una
+sub-cuenta de 5 dígitos DISTINTA para cada banco, según esta tabla fija:
+{tabla_bancos}
+Si el balance menciona "cuenta de detracciones" del Banco de la Nación (u otra
+cuenta corriente para fines específicos, distinta de la cuenta operativa),
+usa el código 10421 ("Cuentas corrientes para fines específicos"), NUNCA
+10411. Si el balance menciona un banco que no está en la tabla, usa 10411
+solo si es la única cuenta corriente del balance; si hay más de una y no
+está en la tabla, dale el siguiente código libre 104xx que exista en el
+PCGE adjunto, en el orden en que aparecen en el balance.
+
+SUB-CUENTAS DE MERCADERÍAS / EXISTENCIAS POR PRODUCTO (elemento 2011, Costo):
+Cuando el balance liste más de un producto/existencia distinto dentro de la
+misma partida de mercaderías (por ejemplo, "Queso Fresco", "Queso Suizo",
+"Queso Mantecoso", o "Leche Fresca", "Leche Descremada", "Suero"), asigna
+un código de 5 dígitos DISTINTO a cada producto, en el orden en que aparecen
+en el balance: el primero 20111, el segundo 20112, el tercero 20113, el
+cuarto 20115, y así sucesivamente usando los códigos 2011x disponibles en el
+PCGE adjunto (salta 20114, que en el PCGE ya significa "Valor razonable" y
+NO debe usarse para un producto). En cada línea, coloca el nombre real del
+producto (ej. "Queso Suizo") en "denominacion" y/o "concepto", para que quede
+identificable en el libro diario aunque el código PCGE diga "Costo".
+
+REGLA CRÍTICA — CAMPO "empresa" EN CADA ASIENTO:
+Si la monografía involucra más de una empresa (por ejemplo una fusión, donde
+cada empresa tiene su propio balance inicial), TODOS los asientos —incluido
+el de apertura y cada operación posterior— deben llevar el campo "empresa"
+con el nombre EXACTO de la empresa a la que pertenecen, tal como aparece en
+la monografía (ej. "Leche Fresca Cajamarquina S.R.L."). Nunca dejes "empresa"
+vacío en una práctica con más de una empresa, y nunca mezcles en un mismo
+asiento cuentas o saldos que pertenezcan a empresas distintas: cada operación
+de cada empresa es un asiento independiente con su propio campo "empresa".
+Si la práctica tiene una sola empresa, usa su nombre igualmente en todos los
+asientos (o cadena vacía si la monografía no la nombra).
+
 Eres el motor contable de TANA, una aplicación de contabilidad peruana.
 
 Tienes dos fuentes obligatorias:
@@ -2252,18 +2364,7 @@ Tienes dos fuentes obligatorias:
 2) El PCGE de TANA que se adjunta abajo.
 
 OBJETIVO:
-Desarrollar los asientos contables de TODAS las operaciones detectadas Y, cuando la monografía incluya balances, estados iniciales, saldos de apertura, patrimonio transferido o la constitución de una nueva empresa, generar también los ASIENTOS DE APERTURA correspondientes.
-
-REGLA OBLIGATORIA DE ASIENTOS DE APERTURA:
-- Revisa el campo "estado_inicial" antes de registrar las operaciones.
-- Si existen activos, pasivos y patrimonio que representan el balance inicial de una empresa o de la empresa resultante, genera un asiento independiente de apertura.
-- En el asiento de apertura: los activos van al DEBE; los pasivos y el patrimonio van al HABER.
-- Incluye todas las partidas reconocidas y no omitas depreciaciones, provisiones, sobregiros u otras cuentas correctoras/obligaciones cuando estén expresamente presentes en el documento.
-- Si la práctica es una fusión, transformación, escisión, constitución u otra reorganización, identifica la entidad cuyo patrimonio se está abriendo. Cuando se constituya una nueva empresa por transferencia de patrimonios, registra el asiento de apertura de la nueva entidad con los activos recibidos al DEBE y los pasivos asumidos y el patrimonio/capital correspondiente al HABER, solo con importes sustentados por la práctica.
-- Si el documento muestra saldos de varias empresas participantes, NO mezcles automáticamente sus aperturas como si fueran operaciones ordinarias: respeta la entidad, la fecha y el proceso solicitado.
-- El asiento de apertura debe cuadrar exactamente. Si falta información para determinar la contrapartida patrimonial, marca requiere_revision y explica la diferencia; no inventes importes.
-- Identifica estos asientos con una glosa que contenga "Apertura" y usa operacion_numero: 0 cuando no provenga de una operación numerada.
-- El asiento de apertura se genera una sola vez por cada entidad o proceso contable que deba abrirse, antes de los asientos de operaciones posteriores.
+Desarrollar los asientos contables de TODAS las operaciones detectadas.
 
 REGLAS OBLIGATORIAS:
 - Usa EXCLUSIVAMENTE códigos de cuenta que existan en el PCGE proporcionado.
@@ -2294,6 +2395,7 @@ Devuelve SOLO JSON válido con esta estructura:
       "fecha": "2026-04-02",
       "glosa": "...",
       "documento": "...",
+      "empresa": "...",
       "operacion_numero": 1,
       "requiere_revision": false,
       "observacion": "",
@@ -2314,7 +2416,7 @@ Devuelve SOLO JSON válido con esta estructura:
 PCGE DE TANA:
 {pcge}
 
-INFORMACIÓN COMPLETA EXTRAÍDA DE LA MONOGRAFÍA, INCLUYENDO ESTADO INICIAL Y OPERACIONES:
+OPERACIONES DE LA MONOGRAFÍA:
 {operaciones}
 """
 
@@ -2762,6 +2864,140 @@ def corregir_retiro_socio(asientos, monografia_json):
     resultado.extend([dist, pago])
     return resultado
 
+
+def _es_asiento_apertura(asiento):
+    """
+    Identifica si un asiento es un asiento de apertura (balance inicial),
+    sin depender de que Gemini lo marque de forma consistente.
+
+    Señal principal: operacion_numero == 0 (así lo pide ASIENTOS_PROMPT:
+    "antes de la operación 1"). Señal de respaldo: la glosa/documento
+    menciona "apertura" o "balance inicial".
+    """
+    opnum = str(asiento.get("operacion_numero", "")).strip()
+    if opnum == "0":
+        return True
+    texto = " ".join(
+        str(asiento.get(k, "")) for k in ("glosa", "documento", "observacion")
+    ).lower()
+    return "apertura" in texto or "balance inicial" in texto
+
+
+def ordenar_lineas_asiento_apertura(asientos):
+    """
+    Corrige el orden de las líneas dentro de cada asiento de APERTURA para
+    que sigan siempre la convención contable: primero todas las cuentas de
+    Activo (elementos 1-3), luego Pasivo (elemento 4) y al final Patrimonio
+    (elemento 5) — en cada grupo, ascendente por código de cuenta.
+
+    Esto es una corrección DETERMINISTA en Python: no depende de que Gemini
+    "recuerde" el orden en cada respuesta, que es la causa raíz de que a
+    veces saliera mezclado (p. ej. 10, 50, 33, 42...).
+
+    No toca asientos de operaciones normales, solo los de apertura.
+    """
+    def orden_key(linea):
+        codigo = str(linea.get("codigo", "")).strip()
+        elemento = codigo[:1]
+        if elemento in ("1", "2", "3"):
+            grupo = 0  # Activo
+        elif elemento == "4":
+            grupo = 1  # Pasivo
+        elif elemento == "5":
+            grupo = 2  # Patrimonio
+        else:
+            grupo = 3  # cualquier otra cosa, al final, por seguridad
+        return (grupo, codigo)
+
+    for asiento in asientos:
+        if not isinstance(asiento, dict) or not _es_asiento_apertura(asiento):
+            continue
+        lineas = asiento.get("lineas", [])
+        if isinstance(lineas, list) and lineas:
+            asiento["lineas"] = sorted(
+                lineas,
+                key=lambda l: orden_key(l) if isinstance(l, dict) else (9, "")
+            )
+    return asientos
+
+
+def normalizar_empresa_por_asiento(asientos):
+    """
+    Rellena el campo "empresa" cuando Gemini lo dejó vacío, y devuelve
+    también la lista de empresas detectadas (para poder avisar al
+    estudiante si un mismo libro está mezclando más de una empresa,
+    algo que en una práctica de fusión NO debe ocurrir).
+
+    Estrategia:
+    1) Toma como "conocidas" las empresas que sí vinieron con el campo
+       "empresa" ya lleno.
+    2) Si además hay asientos de apertura cuya glosa dice
+       "apertura de <Empresa>", esa empresa también se considera conocida.
+    3) Para cada asiento sin "empresa", intenta encontrar el nombre de una
+       empresa conocida (o su última palabra significativa, p. ej.
+       "Chotanos" de "Productos Lácteos Chotanos S.A.C.") dentro de su
+       glosa/documento/observación.
+    4) Si solo hay UNA empresa conocida en toda la práctica, se la asigna
+       a cualquier asiento que siga sin "empresa".
+    5) Lo que no se pudo determinar queda con "empresa": "" (no se
+       inventa), para que quede visible en el Excel en vez de mezclarse
+       silenciosamente con otra empresa.
+    """
+    conocidas = []
+    for a in asientos:
+        if not isinstance(a, dict):
+            continue
+        emp = str(a.get("empresa", "")).strip()
+        if emp and emp not in conocidas:
+            conocidas.append(emp)
+
+    for a in asientos:
+        if not isinstance(a, dict):
+            continue
+        glosa = str(a.get("glosa", ""))
+        # Primero intentamos capturar el nombre completo incluyendo el sufijo
+        # societario habitual (S.A.C., S.R.L., S.A., S.A.A., E.I.R.L.), que
+        # contiene puntos y por eso no se puede cortar en el primer punto.
+        m = re.search(
+            r"apertura de ([A-ZÁÉÍÓÚÑ].+?(?:S\.A\.C\.|S\.R\.L\.|S\.A\.A\.|E\.I\.R\.L\.|S\.A\.))",
+            glosa, re.IGNORECASE,
+        )
+        if not m:
+            # Sin sufijo reconocible: cortamos en la primera coma o punto.
+            m = re.search(r"apertura de ([A-ZÁÉÍÓÚÑ][^,\.]{2,80})", glosa, re.IGNORECASE)
+        if m:
+            nombre = m.group(1).strip()
+            if nombre and nombre not in conocidas:
+                conocidas.append(nombre)
+
+    def palabra_clave(nombre):
+        # Última palabra "significativa" del razón social, ignorando
+        # sufijos societarios habituales (S.A.C., S.R.L., S.A., etc.)
+        tokens = [t for t in re.split(r"\s+", nombre) if t]
+        sufijos = {"s.a.c.", "s.r.l.", "s.a.", "s.a.a.", "e.i.r.l."}
+        tokens = [t for t in tokens if t.lower().strip(".") not in {s.strip(".") for s in sufijos}]
+        return tokens[-1] if tokens else nombre
+
+    for a in asientos:
+        if not isinstance(a, dict):
+            continue
+        if str(a.get("empresa", "")).strip():
+            continue
+        texto = " ".join(
+            str(a.get(k, "")) for k in ("glosa", "documento", "observacion")
+        ).lower()
+        asignado = ""
+        for nombre in conocidas:
+            if nombre.lower() in texto or palabra_clave(nombre).lower() in texto:
+                asignado = nombre
+                break
+        if not asignado and len(conocidas) == 1:
+            asignado = conocidas[0]
+        a["empresa"] = asignado
+
+    return asientos, conocidas
+
+
 def resolve_asientos_with_gemini():
     if not get_gemini_profiles():
         raise RuntimeError("No está configurada ninguna GEMINI_API_KEY en Streamlit Secrets.")
@@ -2776,6 +3012,13 @@ def resolve_asientos_with_gemini():
     prompt = (
         ASIENTOS_PROMPT
         .replace("{pcge}", json.dumps(pcge_5, ensure_ascii=False))
+        .replace(
+            "{tabla_bancos}",
+            "\n".join(
+                f"  {codigo} = {nombre}"
+                for codigo, nombre in sorted(TANA_BANCOS_NOMBRES.items())
+            ),
+        )
         .replace(
             "{operaciones}",
             json.dumps(
@@ -2829,6 +3072,9 @@ if "monografia_json" in st.session_state and "asientos_contables" not in st.sess
                 )
             asientos_generados = asegurar_cuenta_79_en_destinos(asientos_generados, pcge_map)
             asientos_generados = corregir_retiro_socio(asientos_generados, st.session_state.get("monografia_json", {}))
+            asientos_generados = ordenar_lineas_asiento_apertura(asientos_generados)
+            asientos_generados, empresas_detectadas = normalizar_empresa_por_asiento(asientos_generados)
+            st.session_state["tana_empresas_detectadas"] = empresas_detectadas
 
             # Normalización determinista: todos los importes operativos de TANA
             # quedan a 2 decimales antes de construir HT. Esto evita que pequeñas
@@ -3197,6 +3443,9 @@ def _aplicar_correccion_si_corresponde(pregunta):
             # claramente como NO VALIDADA hasta que el usuario la revise.
             nuevos = asegurar_cuenta_79_en_destinos(nuevos, pcge_map)
             nuevos = corregir_retiro_socio(nuevos, st.session_state.get("monografia_json", {}))
+            nuevos = ordenar_lineas_asiento_apertura(nuevos)
+            nuevos, empresas_detectadas = normalizar_empresa_por_asiento(nuevos)
+            st.session_state["tana_empresas_detectadas"] = empresas_detectadas
             valid, errors, warnings = validate_asientos({"asientos": nuevos}, pcge_map)
 
             if st.session_state.get("tana_excel_origen_bytes"):
@@ -4743,7 +4992,7 @@ ws9.freeze_panes='B5'
 # ============================================================
 if "asientos_contables" in st.session_state:
     ws_ac = wb.create_sheet("Asientos_Contables")
-    ac_headers = ["N° Asiento", "Fecha", "Glosa", "Documento", "Operación", "Código", "Denominación", "Concepto", "Debe S/", "Haber S/"]
+    ac_headers = ["N° Asiento", "Fecha", "Glosa", "Documento", "Empresa", "Operación", "Código", "Denominación", "Concepto", "Debe S/", "Haber S/"]
     for i, h in enumerate(ac_headers, start=1):
         ws_ac.cell(row=1, column=i, value=h)
     style_header(ws_ac, 1, 1, len(ac_headers))
@@ -4761,6 +5010,7 @@ if "asientos_contables" in st.session_state:
                 fecha = asiento.get("fecha", "")
                 glosa = asiento.get("glosa", "")
                 documento = asiento.get("documento", "")
+                empresa = asiento.get("empresa", "")
                 operacion = asiento.get("operacion_numero", "")
                 first_line = False
             else:
@@ -4768,19 +5018,20 @@ if "asientos_contables" in st.session_state:
                 fecha = ""
                 glosa = ""
                 documento = ""
+                empresa = ""
                 operacion = ""
 
             values = [
-                numero, fecha, glosa, documento, operacion, code,
+                numero, fecha, glosa, documento, empresa, operacion, code,
                 pcge_map_export.get(code, line.get("denominacion", "")),
                 line.get("concepto", ""), line.get("debe", 0), line.get("haber", 0)
             ]
             for cc, value in enumerate(values, start=1):
                 ws_ac.cell(row=rr, column=cc, value=value).font = BLACK
-            ws_ac.cell(row=rr, column=9).number_format = '#,##0.00;(#,##0.00);"-"'
             ws_ac.cell(row=rr, column=10).number_format = '#,##0.00;(#,##0.00);"-"'
+            ws_ac.cell(row=rr, column=11).number_format = '#,##0.00;(#,##0.00);"-"'
             rr += 1
-    autofit(ws_ac, [12, 13, 35, 18, 12, 12, 48, 42, 14, 14])
+    autofit(ws_ac, [12, 13, 35, 18, 28, 12, 12, 48, 42, 14, 14])
     ws_ac.freeze_panes = "A2"
 
 # ============================================================
