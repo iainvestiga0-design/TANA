@@ -763,8 +763,21 @@ def _construir_asiento_apertura_determinista(monografia_json):
                 lineas_haber.append({"codigo": "59111", "denominacion": "Utilidades acumuladas", "debe": 0.0, "haber": diferencia, "concepto": "Saldo de utilidades acumuladas necesario para cuadrar el estado inicial"})
             sum_haber += diferencia
         elif diferencia < -0.009:
-            # No inventar un activo para cuadrar: reportar revisión.
-            faltantes.append(f"Diferencia de apertura no explicada: S/ {abs(diferencia):,.2f}")
+            # Si el Haber supera al Debe, el saldo faltante es un resultado
+            # acumulado deudor (pérdida). No se crea un activo ficticio.
+            perdida = abs(diferencia)
+            existente = next((x for x in lineas_debe if x.get("codigo") == "59211"), None)
+            if existente:
+                existente["debe"] = round(existente["debe"] + perdida, 2)
+            else:
+                lineas_debe.append({
+                    "codigo": "59211",
+                    "denominacion": "Pérdidas acumuladas",
+                    "debe": perdida,
+                    "haber": 0.0,
+                    "concepto": "Saldo de pérdidas acumuladas necesario para cuadrar el estado inicial"
+                })
+            sum_debe += perdida
 
     if abs(sum_debe - sum_haber) > 0.009:
         return None
@@ -3170,23 +3183,41 @@ def _detectar_empresas_monografia(monografia_json):
 
 
 def _construir_aperturas_por_empresa(monografia_json):
-    """Construye un asiento de apertura determinista por cada empresa detectada."""
+    """Construye exactamente una apertura por empresa usando SOLO sus saldos iniciales."""
     data = monografia_json or {}
     estado = data.get("estado_inicial", []) or []
     empresas = _detectar_empresas_monografia(data)
-    if len(empresas) <= 1:
+    if not empresas:
         return []
+
+    def key(v):
+        # Solo para comparar; no modifica el nombre mostrado.
+        s = _normalizar_nombre_empresa(v).lower()
+        s = re.sub(r"[^a-z0-9áéíóúüñ]+", " ", s)
+        return re.sub(r"\s+", " ", s).strip()
+
+    grupos = {key(e): [] for e in empresas}
+    sin_empresa = []
+
+    for item in estado:
+        if not isinstance(item, dict):
+            continue
+        emp_item = item.get("empresa")
+        k = key(emp_item)
+        if k in grupos:
+            grupos[k].append(item)
+        else:
+            sin_empresa.append(item)
+
     resultado = []
     for empresa in empresas:
-        partidas = []
-        for item in estado:
-            if not isinstance(item, dict):
-                continue
-            emp_item = _normalizar_nombre_empresa(item.get("empresa"))
-            if emp_item and emp_item.lower() == empresa.lower():
-                partidas.append(item)
+        partidas = grupos.get(key(empresa), [])
+        # Para una sola empresa, las partidas sin etiqueta pertenecen a ella.
+        if len(empresas) == 1 and sin_empresa:
+            partidas = partidas + sin_empresa
         if not partidas:
             continue
+
         sub = dict(data)
         sub["empresa"] = empresa
         sub["estado_inicial"] = partidas
@@ -3194,7 +3225,9 @@ def _construir_aperturas_por_empresa(monografia_json):
         if apertura:
             apertura["empresa"] = empresa
             resultado.append(apertura)
+
     return resultado
+
 
 
 def _asientos_por_empresa(asientos, empresas):
@@ -3551,7 +3584,7 @@ if "monografia_json" in st.session_state and "asientos_contables" not in st.sess
             # para cada una y nunca se mezclan sus saldos.
             mono_actual = st.session_state.get("monografia_json", {}) or {}
             empresas_detectadas = _detectar_empresas_monografia(mono_actual)
-            aperturas = _construir_aperturas_por_empresa(mono_actual) if len(empresas_detectadas) > 1 else []
+            aperturas = _construir_aperturas_por_empresa(mono_actual)
 
             asientos_sin_apertura = []
             for a in asientos_generados:
