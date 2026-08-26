@@ -750,33 +750,34 @@ def _construir_asiento_apertura_determinista(monografia_json):
             line["debe"] = monto
             lineas_debe.append(line); sum_debe += monto
 
-    # Si la práctica deja utilidades acumuladas en '?' o no las expresa pero el
-    # resto del estado permite cuadrar, calculamos 59111 como diferencia.
-    if abs(sum_debe - sum_haber) > 0.009:
+    # Solo podemos calcular un resultado acumulado faltante cuando la fuente
+    # realmente contiene los TOTALES del estado inicial y NO trae ya una cuenta
+    # 59. Nunca inventamos una diferencia para forzar el cuadre.
+    tipos_estado = {
+        str(x.get("tipo") or "").lower()
+        for x in estado if isinstance(x, dict)
+    }
+    tiene_totales_fuente = (
+        any(t == "total_activo" for t in tipos_estado)
+        and any(t in {"total_pasivo_patrimonio", "total_pasivo", "total_patrimonio"} for t in tipos_estado)
+    )
+    tiene_59 = any(str(x.get("codigo", "")).strip().startswith("59") for x in (lineas_debe + lineas_haber))
+    if abs(sum_debe - sum_haber) > 0.009 and tiene_totales_fuente and not tiene_59:
         diferencia = round(sum_debe - sum_haber, 2)
         if diferencia > 0.009:
-            # El saldo faltante del patrimonio es acreedor.
-            existente = next((x for x in lineas_haber if x.get("codigo") == "59111"), None)
-            if existente:
-                existente["haber"] = round(existente["haber"] + diferencia, 2)
-            else:
-                lineas_haber.append({"codigo": "59111", "denominacion": "Utilidades acumuladas", "debe": 0.0, "haber": diferencia, "concepto": "Saldo de utilidades acumuladas necesario para cuadrar el estado inicial"})
+            lineas_haber.append({
+                "codigo": "59111", "denominacion": "Utilidades acumuladas",
+                "debe": 0.0, "haber": diferencia,
+                "concepto": "Resultado acumulado calculado exclusivamente a partir de los totales del estado inicial"
+            })
             sum_haber += diferencia
         elif diferencia < -0.009:
-            # Si el Haber supera al Debe, el saldo faltante es un resultado
-            # acumulado deudor (pérdida). No se crea un activo ficticio.
             perdida = abs(diferencia)
-            existente = next((x for x in lineas_debe if x.get("codigo") == "59211"), None)
-            if existente:
-                existente["debe"] = round(existente["debe"] + perdida, 2)
-            else:
-                lineas_debe.append({
-                    "codigo": "59211",
-                    "denominacion": "Pérdidas acumuladas",
-                    "debe": perdida,
-                    "haber": 0.0,
-                    "concepto": "Saldo de pérdidas acumuladas necesario para cuadrar el estado inicial"
-                })
+            lineas_debe.append({
+                "codigo": "59211", "denominacion": "Pérdidas acumuladas",
+                "debe": perdida, "haber": 0.0,
+                "concepto": "Resultado acumulado deudor calculado exclusivamente a partir de los totales del estado inicial"
+            })
             sum_debe += perdida
 
     if abs(sum_debe - sum_haber) > 0.009:
@@ -1624,7 +1625,7 @@ def _cached_json_extraction_from_text(document_text, model, api_key):
 def _cached_opening_extraction_from_text(document_text, model, api_key):
     """Extrae exclusivamente el balance inicial y lo comparte entre usuarios."""
     client = get_gemini_client(api_key)
-    text = re.sub(r"\\s+", " ", str(document_text or "")).strip()
+    text = re.sub(r"\s+", " ", str(document_text or "")).strip()
     response = client.models.generate_content(
         model=model,
         contents=[OPENING_STATE_PROMPT + "\\n\\nTEXTO FUENTE COMPLETO:\\n" + text[:140000]],
@@ -3569,6 +3570,133 @@ def _crear_excel_por_empresa_desde_base(base_bytes, empresa, asientos_empresa):
     return out.getvalue()
 
 
+
+def _operaciones_numericas_detectadas(monografia_json):
+    """Devuelve los números de operación que la extracción considera contables."""
+    nums = []
+    for op in (monografia_json or {}).get("operaciones", []) or []:
+        if not isinstance(op, dict):
+            continue
+        n = str(op.get("numero") or "").strip()
+        if re.fullmatch(r"\d+", n):
+            nums.append(int(n))
+    return sorted(set(nums))
+
+
+def _operaciones_representadas(asientos):
+    nums = set()
+    for a in asientos or []:
+        if not isinstance(a, dict):
+            continue
+        n = str(a.get("operacion_numero") or "").strip()
+        if re.fullmatch(r"\d+", n) and int(n) > 0:
+            nums.add(int(n))
+    return nums
+
+
+def _reparar_y_completar_asientos(asientos, pcge_map, monografia_json):
+    """Segunda barrera determinista: repara asientos inválidos y completa
+    operaciones extraídas que quedaron sin asiento. Nunca toca los asientos
+    que ya validaron correctamente.
+    """
+    actuales = list(asientos or [])
+    _, errores, _ = validate_asientos({"asientos": actuales}, pcge_map)
+    faltantes = [n for n in _operaciones_numericas_detectadas(monografia_json)
+                 if n not in _operaciones_representadas(actuales)]
+    if not errores and not faltantes:
+        return actuales, [], []
+
+    invalidos = []
+    for a in actuales:
+        _, e, _ = validate_asientos({"asientos": [a]}, pcge_map)
+        if e:
+            invalidos.append(a)
+
+    pcge_5 = [[str(c).strip(), str(d)] for c, d in PCGE_DATA if re.fullmatch(r"\d{5}", str(c).strip())]
+    prompt = f"""
+Eres el reparador determinista de TANA. Debes devolver SOLO los asientos que
+faltan o que están inválidos. NO modifiques ningún asiento que ya sea válido.
+
+REGLAS:
+- Cada asiento devuelto debe cuadrar exactamente Debe = Haber.
+- Usa exclusivamente cuentas PCGE de 5 dígitos.
+- Conserva número de operación, fecha, empresa, glosa y documentos cuando sean correctos.
+- Si una operación está en FALTANTES, genera el asiento completo de esa operación.
+- Si un asiento está en INVÁLIDOS, corrige únicamente lo necesario para que sea contablemente válido.
+- No inventes importes: usa la información de la operación y del balance inicial.
+- No cierres saldos de apertura contra 50. El asiento de apertura ya fue construido aparte.
+- No cambies los asientos que no aparecen en INVÁLIDOS.
+
+DEVUELVE JSON:
+{{"asientos_reparados": [ ... ], "observacion": "..."}}
+
+FALTANTES:
+{json.dumps(faltantes, ensure_ascii=False)}
+
+INVÁLIDOS:
+{json.dumps(invalidos, ensure_ascii=False, indent=2)[:30000]}
+
+MONOGRAFÍA EXTRAÍDA:
+{json.dumps(_canonicalize_for_hash(monografia_json or {{}}), ensure_ascii=False, sort_keys=True)[:60000]}
+
+PCGE 5 DÍGITOS:
+{json.dumps(pcge_5, ensure_ascii=False)[:50000]}
+"""
+    seed = _deterministic_seed({"repair": invalidos, "missing": faltantes, "monografia": monografia_json})
+    response, profile = _generate_with_fallback(
+        lambda client: [prompt],
+        types.GenerateContentConfig(response_mime_type="application/json", temperature=0.0, seed=seed),
+    )
+    data = _parsear_respuesta_json_gemini(response.text or "{}")
+    nuevos = data.get("asientos_reparados", []) if isinstance(data, dict) else []
+    if not isinstance(nuevos, list):
+        nuevos = []
+
+    # Reemplazo por clave estable: operación + número. Los válidos permanecen intactos.
+    por_clave = {}
+    for a in nuevos:
+        if not isinstance(a, dict):
+            continue
+        clave = (str(a.get("operacion_numero") or "").strip(), str(a.get("numero") or "").strip())
+        por_clave[clave] = a
+
+    salida = []
+    for a in actuales:
+        if not isinstance(a, dict):
+            salida.append(a); continue
+        _, e, _ = validate_asientos({"asientos": [a]}, pcge_map)
+        if not e:
+            salida.append(a)
+            continue
+        clave = (str(a.get("operacion_numero") or "").strip(), str(a.get("numero") or "").strip())
+        reemplazo = por_clave.get(clave)
+        if reemplazo is not None:
+            salida.append(reemplazo)
+        else:
+            salida.append(a)
+
+    existentes_ops = _operaciones_representadas(salida)
+    for a in nuevos:
+        if not isinstance(a, dict):
+            continue
+        n = str(a.get("operacion_numero") or "").strip()
+        if re.fullmatch(r"\d+", n) and int(n) in faltantes and int(n) not in existentes_ops:
+            salida.append(a)
+            existentes_ops.add(int(n))
+
+    # Correlativo final, sin alterar operación/empresa.
+    for idx, a in enumerate(salida, start=1):
+        if isinstance(a, dict):
+            a["numero"] = idx
+
+    valid, errors_final, warnings_final = validate_asientos({"asientos": salida}, pcge_map)
+    if errors_final:
+        # No ocultamos errores: solo conservamos el conjunto completo para que
+        # TANA pueda mostrar exactamente qué asiento sigue pendiente.
+        return salida, errors_final, warnings_final
+    return salida, [], warnings_final
+
+
 def resolve_asientos_with_gemini():
     if not get_gemini_profiles():
         raise RuntimeError("No está configurada ninguna GEMINI_API_KEY en Streamlit Secrets.")
@@ -3660,12 +3788,23 @@ if "monografia_json" in st.session_state and "asientos_contables" not in st.sess
                         for a in aperturas
                         if isinstance(a, dict) and a.get("empresa")
                     }
-                    faltan_aperturas = sorted(empresas_con_estado - empresas_con_apertura)
+                    # Una empresa detectada puede participar en la práctica sin
+                    # tener un balance inicial propio. En ese caso NO se inventa una
+                    # apertura ni se bloquea toda la práctica. Solo exigimos apertura
+                    # para las empresas que realmente tienen partidas de estado inicial.
+                    empresas_con_partidas = {
+                        _normalizar_nombre_empresa(x.get("empresa")).lower()
+                        for x in estado_inicial
+                        if isinstance(x, dict)
+                        and x.get("empresa")
+                        and str(x.get("tipo") or "").lower() in {"partida", "contra_activo", "total_activo", "total_pasivo", "total_patrimonio", "total_pasivo_patrimonio"}
+                    }
+                    faltan_aperturas = sorted(empresas_con_partidas - empresas_con_apertura)
                     if faltan_aperturas:
                         raise ValueError(
                             "No se pudo construir el asiento de apertura para: "
                             + ", ".join(faltan_aperturas)
-                            + ". TANA no generará un Excel incompleto."
+                            + "."
                         )
                 elif len(aperturas) != 1:
                     raise ValueError(
@@ -3733,9 +3872,30 @@ if "monografia_json" in st.session_state and "asientos_contables" not in st.sess
                     _linea["haber"] = round(max(_to_float(_linea.get("haber"), 0.0), 0.0), 2)
 
             valid, errors, warnings = validate_asientos({"asientos": asientos_generados}, pcge_map)
+
+            # Segunda barrera: si Gemini dejó un asiento inválido o una operación
+            # extraída sin asiento, TANA intenta repararlo/completarlo de forma
+            # determinista antes de construir HT/ERF/ERN/ESF.
+            if errors or any(
+                n not in _operaciones_representadas(asientos_generados)
+                for n in _operaciones_numericas_detectadas(mono_actual)
+            ):
+                asientos_reparados, errores_reparados, warnings_reparados = _reparar_y_completar_asientos(
+                    asientos_generados, pcge_map, mono_actual
+                )
+                asientos_generados = asientos_reparados
+                valid, errors, warnings = validate_asientos({"asientos": asientos_generados}, pcge_map)
+                warnings = list(warnings) + list(warnings_reparados)
+
+            if errors:
+                raise ValueError(
+                    "TANA no pudo validar todos los asientos después de la segunda revisión. "
+                    + " | ".join(str(e) for e in errors[:8])
+                )
+
             st.session_state["asientos_contables"] = asientos_generados
             st.session_state["asientos_validos"] = valid
-            st.session_state["errores_asientos"] = errors
+            st.session_state["errores_asientos"] = []
             st.session_state["alertas_asientos"] = list(alertas_gemini) + list(warnings)
         except Exception as exc:
             st.error(f"No se pudieron desarrollar los asientos: {exc}")
