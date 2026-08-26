@@ -3239,14 +3239,7 @@ def _detectar_empresas_monografia(monografia_json):
 
 
 def _construir_aperturas_por_empresa(monografia_json):
-    """Construye una apertura independiente por cada empresa.
-
-    El extractor puede colocar el nombre de la empresa solo en el encabezado
-    de un bloque y dejar las partidas siguientes sin el campo ``empresa``.
-    En una práctica multiempresa eso NO significa que esas partidas deban
-    descartarse. Se hereda la empresa del último encabezado identificado,
-    preservando el orden del balance inicial.
-    """
+    """Construye exactamente una apertura por empresa usando SOLO sus saldos iniciales."""
     data = monografia_json or {}
     estado = data.get("estado_inicial", []) or []
     empresas = _detectar_empresas_monografia(data)
@@ -3254,43 +3247,30 @@ def _construir_aperturas_por_empresa(monografia_json):
         return []
 
     def key(v):
+        # Solo para comparar; no modifica el nombre mostrado.
         s = _normalizar_nombre_empresa(v).lower()
         s = re.sub(r"[^a-z0-9áéíóúüñ]+", " ", s)
         return re.sub(r"\s+", " ", s).strip()
 
     grupos = {key(e): [] for e in empresas}
-    empresa_por_clave = {key(e): e for e in empresas}
-    empresa_actual = None
+    sin_empresa = []
 
-    # La extracción puede venir como: encabezado de empresa -> varias partidas
-    # sin empresa -> siguiente encabezado. Propagamos el encabezado únicamente
-    # hacia adelante dentro de ese bloque.
     for item in estado:
         if not isinstance(item, dict):
             continue
-
-        emp_item = _normalizar_nombre_empresa(item.get("empresa"))
-        if emp_item and key(emp_item) in grupos:
-            empresa_actual = empresa_por_clave[key(emp_item)]
-
-        if empresa_actual:
-            copia = dict(item)
-            copia["empresa"] = empresa_actual
-            grupos[key(empresa_actual)].append(copia)
-
-    # Si el extractor realmente etiquetó todas las partidas, lo anterior ya
-    # produjo los grupos correctos. Si no hubo encabezados utilizables, para una
-    # sola empresa es seguro asignar las partidas a esa empresa. Para varias
-    # empresas NO inventamos la asignación.
-    if not any(grupos.values()):
-        if len(empresas) == 1:
-            grupos[key(empresas[0])] = [dict(x) for x in estado if isinstance(x, dict)]
+        emp_item = item.get("empresa")
+        k = key(emp_item)
+        if k in grupos:
+            grupos[k].append(item)
         else:
-            return []
+            sin_empresa.append(item)
 
     resultado = []
     for empresa in empresas:
         partidas = grupos.get(key(empresa), [])
+        # Para una sola empresa, las partidas sin etiqueta pertenecen a ella.
+        if len(empresas) == 1 and sin_empresa:
+            partidas = partidas + sin_empresa
         if not partidas:
             continue
 
@@ -3635,6 +3615,179 @@ def resolve_asientos_with_gemini():
     data.setdefault("_tana_gemini_model", profile["model"])
     return data, pcge_map
 
+
+def _reparar_y_completar_asientos(asientos, monografia_json, pcge_map):
+    """Segundo pase determinista del motor contable.
+
+    TANA primero obtiene los asientos con el motor principal. Este segundo pase
+    NO vuelve a desarrollar toda la práctica: solo busca dos problemas concretos:
+      1) operaciones extraídas que no tienen ningún asiento asociado;
+      2) asientos que no pasan la validación básica.
+
+    Para evitar que una respuesta diferente de Gemini cambie toda la práctica,
+    las solicitudes de reparación contienen únicamente la operación faltante o
+    el asiento inválido y se ejecutan con temperatura 0 + semilla determinista.
+    """
+    data = monografia_json or {}
+    ops = [op for op in (data.get("operaciones", []) or []) if isinstance(op, dict)]
+    current = [dict(a) for a in (asientos or []) if isinstance(a, dict)]
+    alerts = []
+
+    def opnum(v):
+        try:
+            return str(int(float(str(v).strip())))
+        except Exception:
+            return str(v or "").strip()
+
+    # ------------------------------------------------------------
+    # PASO 1: detectar operaciones que quedaron sin asiento.
+    # ------------------------------------------------------------
+    covered = set()
+    for a in current:
+        n = opnum(a.get("operacion_numero"))
+        if n and n != "0":
+            covered.add(n)
+
+    missing = [op for op in ops if opnum(op.get("numero")) and opnum(op.get("numero")) not in covered]
+
+    if missing:
+        pcge_5 = [[str(c).strip(), str(d)] for c, d in PCGE_DATA if re.fullmatch(r"\d{5}", str(c).strip())]
+        repair_prompt = f"""
+Eres el reparador determinista de asientos de TANA.
+
+La extracción de la práctica ya fue realizada. NO vuelvas a desarrollar toda la
+práctica y NO cambies los asientos existentes. Solo debes completar las operaciones
+que quedaron sin asiento.
+
+REGLAS:
+- Usa exclusivamente cuentas de 5 dígitos existentes en el PCGE adjunto.
+- Cada asiento debe cuadrar exactamente Debe = Haber.
+- Conserva la fecha, empresa y número de operación.
+- Si una operación realmente no genera asiento por una regla contable explícita,
+  inclúyela en "sin_asiento" con una explicación breve. No inventes un asiento.
+- Si la operación sí genera asiento, debes construirlo completo.
+- No cierres ni compenses cuentas contra 50 artificialmente.
+- Si hay destino por función, Elemento 9 en Debe y 79111 en Haber.
+- No modifiques ni dupliques los asientos existentes.
+
+OPERACIONES FALTANTES:
+{json.dumps(missing, ensure_ascii=False, indent=2)}
+
+ASIENTOS YA EXISTENTES (solo para contexto y evitar duplicados):
+{json.dumps(current, ensure_ascii=False, indent=2)[:30000]}
+
+PCGE:
+{json.dumps(pcge_5, ensure_ascii=False)}
+
+Devuelve SOLO JSON:
+{{
+  "asientos": [
+    {{
+      "numero": 0,
+      "empresa": "",
+      "fecha": "",
+      "glosa": "",
+      "documento": "",
+      "operacion_numero": 0,
+      "requiere_revision": false,
+      "observacion": "",
+      "lineas": [
+        {{"codigo":"12345","denominacion":"","debe":0.0,"haber":0.0,"concepto":""}}
+      ]
+    }}
+  ],
+  "sin_asiento": []
+}}
+"""
+        canonical = {"missing": missing, "practice": _canonicalize_for_hash(data)}
+        seed = _deterministic_seed(canonical)
+        response, _profile = _generate_with_fallback(
+            lambda _client: [repair_prompt],
+            types.GenerateContentConfig(response_mime_type="application/json", temperature=0.0, seed=seed),
+        )
+        rec = _parsear_respuesta_json_gemini(response.text or "{}")
+        nuevos = rec.get("asientos", []) if isinstance(rec, dict) else []
+        if isinstance(nuevos, list):
+            existing_keys = {(opnum(a.get("operacion_numero")), str(a.get("empresa") or "").strip().lower()) for a in current}
+            for a in nuevos:
+                if not isinstance(a, dict):
+                    continue
+                k = (opnum(a.get("operacion_numero")), str(a.get("empresa") or "").strip().lower())
+                if k[0] and k not in existing_keys and a.get("lineas"):
+                    current.append(a)
+                    existing_keys.add(k)
+        sin = rec.get("sin_asiento", []) if isinstance(rec, dict) else []
+        if sin:
+            alerts.extend([f"Operación sin asiento: {x}" for x in sin[:10]])
+
+    # ------------------------------------------------------------
+    # PASO 2: reparar únicamente los asientos que no validan.
+    # ------------------------------------------------------------
+    valid, errors, warnings = validate_asientos({"asientos": current}, pcge_map)
+    if errors:
+        invalid_nums = []
+        for err in errors:
+            m = re.search(r"Asiento\s+(\d+)", str(err), flags=re.IGNORECASE)
+            if m:
+                invalid_nums.append(m.group(1))
+        invalid_nums = list(dict.fromkeys(invalid_nums))
+        invalid = [a for a in current if str(a.get("numero", "")) in invalid_nums]
+        if invalid:
+            pcge_5 = [[str(c).strip(), str(d)] for c, d in PCGE_DATA if re.fullmatch(r"\d{5}", str(c).strip())]
+            repair_prompt = f"""
+Eres el reparador final de TANA. Corrige SOLO los asientos que fallaron la validación.
+No cambies asientos válidos y no agregues operaciones nuevas.
+
+ERRORES EXACTOS:
+{json.dumps(errors, ensure_ascii=False, indent=2)}
+
+ASIENTOS QUE FALLARON:
+{json.dumps(invalid, ensure_ascii=False, indent=2)}
+
+REGLAS:
+- Cuentas exclusivamente de 5 dígitos del PCGE.
+- Debe = Haber exactamente.
+- Conserva operación, fecha, empresa y glosa.
+- No cierres contra 50 artificialmente.
+- No inventes importes que no estén sustentados.
+- Devuelve un asiento corregido por cada asiento recibido.
+
+PCGE:
+{json.dumps(pcge_5, ensure_ascii=False)}
+
+Devuelve SOLO JSON:
+{{"asientos_corregidos": []}}
+"""
+            seed = _deterministic_seed({"errors": errors, "invalid": invalid, "practice": _canonicalize_for_hash(data)})
+            response, _profile = _generate_with_fallback(
+                lambda _client: [repair_prompt],
+                types.GenerateContentConfig(response_mime_type="application/json", temperature=0.0, seed=seed),
+            )
+            rec = _parsear_respuesta_json_gemini(response.text or "{}")
+            corrected = rec.get("asientos_corregidos", []) if isinstance(rec, dict) else []
+            by_num = {str(a.get("numero")): a for a in corrected if isinstance(a, dict) and a.get("numero") is not None}
+            if by_num:
+                for i, a in enumerate(current):
+                    n = str(a.get("numero", ""))
+                    if n in by_num:
+                        current[i] = by_num[n]
+
+    # ------------------------------------------------------------
+    # PASO 3: normalización final y validación final.
+    # ------------------------------------------------------------
+    for a in current:
+        if not isinstance(a, dict):
+            continue
+        for line in a.get("lineas", []) or []:
+            if not isinstance(line, dict):
+                continue
+            line["debe"] = round(max(_to_float(line.get("debe"), 0.0), 0.0), 2)
+            line["haber"] = round(max(_to_float(line.get("haber"), 0.0), 0.0), 2)
+
+    current = asegurar_cuenta_79_en_destinos(current, pcge_map)
+    valid, errors, warnings = validate_asientos({"asientos": current}, pcge_map)
+    return current, valid, errors, list(warnings) + alerts
+
 if "monografia_json" in st.session_state and "asientos_contables" not in st.session_state:
     with st.spinner("TANA está desarrollando y validando los asientos contables…"):
         try:
@@ -3752,11 +3905,26 @@ if "monografia_json" in st.session_state and "asientos_contables" not in st.sess
                     _linea["debe"] = round(max(_to_float(_linea.get("debe"), 0.0), 0.0), 2)
                     _linea["haber"] = round(max(_to_float(_linea.get("haber"), 0.0), 0.0), 2)
 
-            valid, errors, warnings = validate_asientos({"asientos": asientos_generados}, pcge_map)
+            # Segundo pase: si Gemini omitió una operación o produjo un asiento
+            # inválido, TANA intenta reparar SOLO ese punto. Esto evita que una
+            # práctica de 16 operaciones termine con 14/15 asientos válidos.
+            asientos_generados, valid, errors, warnings_pase2 = _reparar_y_completar_asientos(
+                asientos_generados, mono_actual, pcge_map
+            )
+
+            # Si hubo una reparación, vuelve a aplicar bancos y destinos y valida
+            # por última vez antes de guardar el resultado.
+            operaciones_map = {str(op.get("numero")): op for op in (mono_actual.get("operaciones", []) or []) if isinstance(op, dict)}
+            for _a in asientos_generados:
+                if isinstance(_a, dict):
+                    _aplicar_banco_a_lineas_asiento(_a, operaciones_map.get(str(_a.get("operacion_numero")), {}))
+            asientos_generados = asegurar_cuenta_79_en_destinos(asientos_generados, pcge_map)
+            valid, errors, warnings_finales = validate_asientos({"asientos": asientos_generados}, pcge_map)
+
             st.session_state["asientos_contables"] = asientos_generados
             st.session_state["asientos_validos"] = valid
             st.session_state["errores_asientos"] = errors
-            st.session_state["alertas_asientos"] = list(alertas_gemini) + list(warnings)
+            st.session_state["alertas_asientos"] = list(alertas_gemini) + list(warnings_pase2) + list(warnings_finales)
         except Exception as exc:
             st.error(f"No se pudieron desarrollar los asientos: {exc}")
             st.stop()
