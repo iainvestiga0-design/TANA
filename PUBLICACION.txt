@@ -1,0 +1,20 @@
+TANA IA - PAQUETE DE PUBLICACION ESTABLE
+
+IMPORTANTE:
+- app.py es exactamente el archivo recibido del usuario.
+- No se modifico la logica contable.
+- requirements.txt contiene las dependencias Python necesarias.
+- packages.txt instala antiword para rescate de documentos Word .doc antiguos.
+- NO subir secretos, claves de Gemini, Supabase ni cookie_secret a GitHub.
+
+En Streamlit Community Cloud:
+1. Crear/seleccionar el repositorio de GitHub.
+2. Subir app.py, requirements.txt y packages.txt en la raiz.
+3. Crear la aplicacion apuntando a app.py.
+4. Elegir el subdominio definitivo antes de publicar, por ejemplo tanaia.
+5. Configurar Secrets en Advanced settings.
+6. Mantener la configuracion [auth] de Google OAuth y actualizar redirect_uri
+   si cambia la URL publica.
+7. Configurar SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, TANA_CREATOR_EMAIL
+   y las claves/modelos de Gemini que usa la aplicacion.
+8. Publicar la aplicacion como publica y searchable cuando se haya probado.
