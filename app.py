@@ -2537,75 +2537,6 @@ def validate_asientos(data, pcge_map):
     return valid, errors, warnings
 
 
-def _asientos_completos_para_libros(asientos, pcge_map):
-    """Filtra asientos completos (todas sus líneas con código de 5 dígitos
-    existente en el PCGE) para construir HT/LM/ERN/ERF/ESF.
-
-    Antes, la construcción de la Hoja de Trabajo descartaba línea por línea
-    cualquier código inválido, dejando suelto el lado (Debe o Haber) contrario
-    dentro del mismo asiento. Eso producía un descuadre aunque el asiento en
-    cuestión ya estuviera fuera de 'asientos_validos'. Ahora se excluye el
-    asiento completo (ambos lados) cuando alguna de sus líneas es inválida, para
-    que los libros nunca queden descuadrados por un asiento parcialmente roto.
-    No cambia qué cuentas usa TANA ni cómo arma cada asiento: solo decide si
-    ese asiento, tal como fue generado, entra completo o no entra a los libros.
-    """
-    resultado = []
-    for asiento in asientos or []:
-        if not isinstance(asiento, dict):
-            continue
-        lineas = asiento.get("lineas", []) or []
-        if not lineas:
-            continue
-        completo = True
-        for line in lineas:
-            if not isinstance(line, dict):
-                completo = False
-                break
-            code = str(line.get("codigo", "")).strip()
-            if not re.fullmatch(r"\d{5}", code) or code not in pcge_map:
-                completo = False
-                break
-        if completo:
-            resultado.append(asiento)
-    return resultado
-
-
-def _resolver_codigos_a_detalle(asientos, pcge_map):
-    """Resuelve a su cuenta de detalle (5 dígitos) los códigos que Gemini
-    devuelve incompletos, en vez de excluir la línea o el asiento.
-
-    El PCGE es jerárquico: "104" (control) agrupa a "10411", "10412", etc.
-    (detalle). Si un código no tiene 5 dígitos o no existe tal cual en el
-    catálogo, se busca bajo esa misma familia. Solo se reemplaza cuando existe
-    EXACTAMENTE una cuenta de detalle posible para ese código: así nunca se
-    inventa ni se elige al azar una cuenta que la operación no sustente. Si
-    hay varias posibles (p. ej. "104" con varios bancos) o ninguna, el código
-    se deja como está y sigue el flujo normal de validación.
-    """
-    for asiento in asientos or []:
-        if not isinstance(asiento, dict):
-            continue
-        for line in asiento.get("lineas", []) or []:
-            if not isinstance(line, dict):
-                continue
-            code = str(line.get("codigo", "")).strip()
-            if re.fullmatch(r"\d{5}", code) and code in pcge_map:
-                continue
-            if not code or not code.isdigit() or len(code) >= 5:
-                continue
-            candidatos = sorted(c for c in pcge_map if len(c) == 5 and c.startswith(code))
-            if len(candidatos) == 1:
-                nuevo = candidatos[0]
-                line["codigo"] = nuevo
-                line["denominacion"] = pcge_map.get(nuevo, line.get("denominacion", ""))
-                nota = f"TANA resolvió el código '{code}' a la cuenta de detalle {nuevo} ({pcge_map.get(nuevo, '')})."
-                obs = str(asiento.get("observacion", "") or "").strip()
-                if nota not in obs:
-                    asiento["observacion"] = (obs + " " + nota).strip()
-    return asientos
-
-
 if uploaded_file is not None and enviar_top and st.session_state.get("tana_file_signature") != file_signature:
     for _key in (
         "monografia_json", "monografia_texto", "monografia_nombre", "archivo_excel_origen",
@@ -3308,7 +3239,14 @@ def _detectar_empresas_monografia(monografia_json):
 
 
 def _construir_aperturas_por_empresa(monografia_json):
-    """Construye exactamente una apertura por empresa usando SOLO sus saldos iniciales."""
+    """Construye una apertura independiente por cada empresa.
+
+    El extractor puede colocar el nombre de la empresa solo en el encabezado
+    de un bloque y dejar las partidas siguientes sin el campo ``empresa``.
+    En una práctica multiempresa eso NO significa que esas partidas deban
+    descartarse. Se hereda la empresa del último encabezado identificado,
+    preservando el orden del balance inicial.
+    """
     data = monografia_json or {}
     estado = data.get("estado_inicial", []) or []
     empresas = _detectar_empresas_monografia(data)
@@ -3316,30 +3254,43 @@ def _construir_aperturas_por_empresa(monografia_json):
         return []
 
     def key(v):
-        # Solo para comparar; no modifica el nombre mostrado.
         s = _normalizar_nombre_empresa(v).lower()
         s = re.sub(r"[^a-z0-9áéíóúüñ]+", " ", s)
         return re.sub(r"\s+", " ", s).strip()
 
     grupos = {key(e): [] for e in empresas}
-    sin_empresa = []
+    empresa_por_clave = {key(e): e for e in empresas}
+    empresa_actual = None
 
+    # La extracción puede venir como: encabezado de empresa -> varias partidas
+    # sin empresa -> siguiente encabezado. Propagamos el encabezado únicamente
+    # hacia adelante dentro de ese bloque.
     for item in estado:
         if not isinstance(item, dict):
             continue
-        emp_item = item.get("empresa")
-        k = key(emp_item)
-        if k in grupos:
-            grupos[k].append(item)
+
+        emp_item = _normalizar_nombre_empresa(item.get("empresa"))
+        if emp_item and key(emp_item) in grupos:
+            empresa_actual = empresa_por_clave[key(emp_item)]
+
+        if empresa_actual:
+            copia = dict(item)
+            copia["empresa"] = empresa_actual
+            grupos[key(empresa_actual)].append(copia)
+
+    # Si el extractor realmente etiquetó todas las partidas, lo anterior ya
+    # produjo los grupos correctos. Si no hubo encabezados utilizables, para una
+    # sola empresa es seguro asignar las partidas a esa empresa. Para varias
+    # empresas NO inventamos la asignación.
+    if not any(grupos.values()):
+        if len(empresas) == 1:
+            grupos[key(empresas[0])] = [dict(x) for x in estado if isinstance(x, dict)]
         else:
-            sin_empresa.append(item)
+            return []
 
     resultado = []
     for empresa in empresas:
         partidas = grupos.get(key(empresa), [])
-        # Para una sola empresa, las partidas sin etiqueta pertenecen a ella.
-        if len(empresas) == 1 and sin_empresa:
-            partidas = partidas + sin_empresa
         if not partidas:
             continue
 
@@ -3501,12 +3452,8 @@ def _crear_excel_por_empresa_desde_base(base_bytes, empresa, asientos_empresa):
     # ------------------------------------------------------------
     if "HT" in wb2.sheetnames:
         ws = wb2["HT"]
-        # Igual que en el Excel de una sola empresa: la HT de cada empresa se
-        # calcula solo con asientos completos (ambos lados), para no
-        # descuadrar por una línea con código inválido dentro de un asiento.
-        asientos_empresa_ht = _asientos_completos_para_libros(asientos_empresa, pcge_map)
         movimientos_local = {}
-        for asiento in asientos_empresa_ht:
+        for asiento in asientos_empresa:
             for line in asiento.get("lineas", []) or []:
                 code = str(line.get("codigo", "")).strip()
                 if not re.fullmatch(r"\d{5}", code):
@@ -3516,7 +3463,7 @@ def _crear_excel_por_empresa_desde_base(base_bytes, empresa, asientos_empresa):
                 rec["haber"] += _to_float(line.get("haber"), 0.0)
 
         cuentas_local = sorted(movimientos_local.keys(), key=lambda x: (int(x), x))
-        destinadas_local = detectar_cuentas_6_con_destino(asientos_empresa_ht)
+        destinadas_local = detectar_cuentas_6_con_destino(asientos_empresa)
 
         def d_a_local(code):
             rec = movimientos_local.get(code, {"debe": 0.0, "haber": 0.0})
@@ -3792,7 +3739,6 @@ if "monografia_json" in st.session_state and "asientos_contables" not in st.sess
 
             asientos_generados = asegurar_cuenta_79_en_destinos(asientos_generados, pcge_map)
             asientos_generados = corregir_retiro_socio(asientos_generados, st.session_state.get("monografia_json", {}))
-            asientos_generados = _resolver_codigos_a_detalle(asientos_generados, pcge_map)
 
             # Normalización determinista: todos los importes operativos de TANA
             # quedan a 2 decimales antes de construir HT. Esto evita que pequeñas
@@ -4161,7 +4107,6 @@ def _aplicar_correccion_si_corresponde(pregunta):
             # claramente como NO VALIDADA hasta que el usuario la revise.
             nuevos = asegurar_cuenta_79_en_destinos(nuevos, pcge_map)
             nuevos = corregir_retiro_socio(nuevos, st.session_state.get("monografia_json", {}))
-            nuevos = _resolver_codigos_a_detalle(nuevos, pcge_map)
             valid, errors, warnings = validate_asientos({"asientos": nuevos}, pcge_map)
 
             if st.session_state.get("tana_excel_origen_bytes"):
@@ -4625,13 +4570,10 @@ print("Hoja LM (Libro Mayor) lista:", LM_LAST_ROW-1, "cuentas")
 # ============================================================
 
 asientos_export = st.session_state.get("asientos_contables", [])
-# Los libros (HT/LM/ERN/ERF/ESF) se calculan solo con asientos completos,
-# para no descuadrar por un asiento que tiene una línea con código inválido.
-asientos_export_ht = _asientos_completos_para_libros(asientos_export, pcge_map)
 
 # Consolidar todas las cuentas realmente utilizadas por los asientos.
 movimientos = {}
-for asiento in asientos_export_ht:
+for asiento in asientos_export:
     for line in asiento.get("lineas", []):
         code = str(line.get("codigo", "")).strip()
         if not re.fullmatch(r"\d{5}", code):
@@ -4905,7 +4847,9 @@ def es_funcion(code):
     return False
 
 
-CUENTAS_6_CON_DESTINO = detectar_cuentas_6_con_destino(asientos_export_ht)
+CUENTAS_6_CON_DESTINO = detectar_cuentas_6_con_destino(
+    st.session_state.get("asientos_contables", [])
+)
 
 def es_balance(code):
     return not clasificar_resultado(code)
@@ -5893,24 +5837,6 @@ if st.session_state.get("tana_excel_buffer") and st.session_state.get("tana_exce
         f'</div>',
         unsafe_allow_html=True,
     )
-    # Si algún asiento no pasó la validación, se explica el motivo exacto aquí
-    # mismo (antes solo quedaba anotado dentro del Excel). No cambia qué
-    # asientos se consideran válidos ni la lógica contable: solo hace visible
-    # el detalle que ya calculaba validate_asientos().
-    _errores_detalle = st.session_state.get("errores_asientos", []) or []
-    if _n_asientos != _n_validos and _errores_detalle:
-        with st.expander(
-            f"⚠️ {_n_asientos - _n_validos} asiento(s) no pasaron la validación — ver motivo",
-            expanded=True,
-        ):
-            st.markdown(
-                "El Excel se genera igual con los **%d** asientos, pero el/los que se listan "
-                "abajo tienen un problema de datos (código, importe o descuadre) que conviene "
-                "revisar en la práctica de origen:" % _n_asientos
-            )
-            for _err in _errores_detalle:
-                st.markdown(f"- {_err}")
-
     def _registrar_descarga_excel():
         _record_user_activity(
             "excel_descargado",
