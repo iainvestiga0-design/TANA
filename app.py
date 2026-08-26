@@ -1613,6 +1613,34 @@ def _deterministic_seed(value):
     return int.from_bytes(hashlib.sha256(raw).digest()[:4], "big") % 2147483647
 
 
+@st.cache_data(show_spinner=False, ttl=86400, max_entries=128)
+def _cached_json_extraction_from_text(document_text, model, api_key):
+    """Extracción compartida por práctica: misma fuente textual -> mismo JSON en todas las sesiones."""
+    client = get_gemini_client(api_key)
+    return _json_extraction_from_text(client, model, document_text)
+
+
+@st.cache_data(show_spinner=False, ttl=86400, max_entries=128)
+def _cached_opening_extraction_from_text(document_text, model, api_key):
+    """Extrae exclusivamente el balance inicial y lo comparte entre usuarios."""
+    client = get_gemini_client(api_key)
+    text = re.sub(r"\\s+", " ", str(document_text or "")).strip()
+    response = client.models.generate_content(
+        model=model,
+        contents=[OPENING_STATE_PROMPT + "\\n\\nTEXTO FUENTE COMPLETO:\\n" + text[:140000]],
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            temperature=0.0,
+            seed=_deterministic_seed("OPENING_STATE|" + text),
+        ),
+    )
+    extra = _parsear_respuesta_json_gemini(response.text or "{}")
+    estado = extra.get("estado_inicial", []) if isinstance(extra, dict) else []
+    if not _estado_inicial_es_verosimil(estado):
+        raise ValueError("La extracción determinista del balance inicial no pasó la validación estructural.")
+    return estado
+
+
 def extract_with_gemini(uploaded):
     profiles = get_gemini_profiles()
     if not profiles:
@@ -1651,9 +1679,16 @@ def extract_with_gemini(uploaded):
             for profile in profiles:
                 client = get_gemini_client(profile["api_key"])
                 try:
-                    data = _json_extraction_from_text(client, profile["model"], local_text)
+                    data = _cached_json_extraction_from_text(local_text, profile["model"], profile["api_key"])
                     if _extraction_has_content(data) and data.get("operaciones"):
-                        data = _reforzar_estado_inicial_desde_texto(client, profile["model"], local_text, data)
+                        try:
+                            estado_verificado = _cached_opening_extraction_from_text(local_text, profile["model"], profile["api_key"])
+                            data = dict(data)
+                            data["estado_inicial"] = estado_verificado
+                            data["estado_inicial_fuente_verificada"] = True
+                        except Exception:
+                            # Si no existe balance inicial, se conserva la extracción general.
+                            pass
                         return data
                     errors.append((profile["label"], profile["model"], ValueError("La extracción textual no identificó operaciones contables.")))
                 except Exception as exc:
@@ -3585,6 +3620,23 @@ if "monografia_json" in st.session_state and "asientos_contables" not in st.sess
             mono_actual = st.session_state.get("monografia_json", {}) or {}
             empresas_detectadas = _detectar_empresas_monografia(mono_actual)
             aperturas = _construir_aperturas_por_empresa(mono_actual)
+
+            # El balance inicial es obligatorio cuando la monografía lo contiene.
+            # No entregamos un Excel si falta la apertura: así todos los usuarios
+            # reciben el mismo resultado y nunca una sesión "sin apertura".
+            estado_inicial = mono_actual.get("estado_inicial", []) or []
+            if estado_inicial:
+                if len(empresas_detectadas) > 1 and len(aperturas) != len(empresas_detectadas):
+                    raise ValueError(
+                        f"El balance inicial fue detectado para {len(empresas_detectadas)} empresas, "
+                        f"pero solo se pudo construir {len(aperturas)} asiento(s) de apertura. "
+                        "No se generará un Excel incompleto."
+                    )
+                if len(empresas_detectadas) <= 1 and len(aperturas) != 1:
+                    raise ValueError(
+                        "Se detectó un balance inicial, pero TANA no pudo construir exactamente un asiento de apertura. "
+                        "No se generará el Excel hasta corregir la apertura."
+                    )
 
             asientos_sin_apertura = []
             for a in asientos_generados:
