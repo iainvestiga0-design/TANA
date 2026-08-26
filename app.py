@@ -569,16 +569,26 @@ if user_role != "Creador":
                 st.rerun()
         else:
             if st.button("💳 Comprar pase 24h — S/1.00", use_container_width=True, type="primary"):
-                code = _create_payment_code(user_email)
-                if code:
-                    st.session_state.tana_payment_code = code
-                    st.session_state.tana_payment_code_created_at = datetime.now(timezone.utc).isoformat()
-                    st.rerun()
+                if not user_email:
+                    st.error("No se pudo generar el código.")
+                    st.caption("Detalle técnico: tu sesión no tiene un correo asociado (user_email vacío).")
+                elif not SUPABASE_URL:
+                    st.error("No se pudo generar el código.")
+                    st.caption("Detalle técnico: el secret SUPABASE_URL está vacío o no existe en esta app.")
+                elif not SUPABASE_KEY:
+                    st.error("No se pudo generar el código.")
+                    st.caption("Detalle técnico: el secret SUPABASE_SERVICE_ROLE_KEY está vacío o no existe en esta app.")
                 else:
-                    st.error("No se pudo generar el código. Verifica que TANA esté conectado a Supabase.")
-                    _detail = st.session_state.get("_tana_last_supabase_error")
-                    if _detail:
-                        st.caption(f"Detalle técnico: {_detail}")
+                    code = _create_payment_code(user_email)
+                    if code:
+                        st.session_state.tana_payment_code = code
+                        st.session_state.tana_payment_code_created_at = datetime.now(timezone.utc).isoformat()
+                        st.rerun()
+                    else:
+                        st.error("No se pudo generar el código. Verifica que TANA esté conectado a Supabase.")
+                        _detail = st.session_state.get("_tana_last_supabase_error")
+                        if _detail:
+                            st.caption(f"Detalle técnico: {_detail}")
 
         st.stop()
 
