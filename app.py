@@ -750,34 +750,33 @@ def _construir_asiento_apertura_determinista(monografia_json):
             line["debe"] = monto
             lineas_debe.append(line); sum_debe += monto
 
-    # Solo podemos calcular un resultado acumulado faltante cuando la fuente
-    # realmente contiene los TOTALES del estado inicial y NO trae ya una cuenta
-    # 59. Nunca inventamos una diferencia para forzar el cuadre.
-    tipos_estado = {
-        str(x.get("tipo") or "").lower()
-        for x in estado if isinstance(x, dict)
-    }
-    tiene_totales_fuente = (
-        any(t == "total_activo" for t in tipos_estado)
-        and any(t in {"total_pasivo_patrimonio", "total_pasivo", "total_patrimonio"} for t in tipos_estado)
-    )
-    tiene_59 = any(str(x.get("codigo", "")).strip().startswith("59") for x in (lineas_debe + lineas_haber))
-    if abs(sum_debe - sum_haber) > 0.009 and tiene_totales_fuente and not tiene_59:
+    # Si la práctica deja utilidades acumuladas en '?' o no las expresa pero el
+    # resto del estado permite cuadrar, calculamos 59111 como diferencia.
+    if abs(sum_debe - sum_haber) > 0.009:
         diferencia = round(sum_debe - sum_haber, 2)
         if diferencia > 0.009:
-            lineas_haber.append({
-                "codigo": "59111", "denominacion": "Utilidades acumuladas",
-                "debe": 0.0, "haber": diferencia,
-                "concepto": "Resultado acumulado calculado exclusivamente a partir de los totales del estado inicial"
-            })
+            # El saldo faltante del patrimonio es acreedor.
+            existente = next((x for x in lineas_haber if x.get("codigo") == "59111"), None)
+            if existente:
+                existente["haber"] = round(existente["haber"] + diferencia, 2)
+            else:
+                lineas_haber.append({"codigo": "59111", "denominacion": "Utilidades acumuladas", "debe": 0.0, "haber": diferencia, "concepto": "Saldo de utilidades acumuladas necesario para cuadrar el estado inicial"})
             sum_haber += diferencia
         elif diferencia < -0.009:
+            # Si el Haber supera al Debe, el saldo faltante es un resultado
+            # acumulado deudor (pérdida). No se crea un activo ficticio.
             perdida = abs(diferencia)
-            lineas_debe.append({
-                "codigo": "59211", "denominacion": "Pérdidas acumuladas",
-                "debe": perdida, "haber": 0.0,
-                "concepto": "Resultado acumulado deudor calculado exclusivamente a partir de los totales del estado inicial"
-            })
+            existente = next((x for x in lineas_debe if x.get("codigo") == "59211"), None)
+            if existente:
+                existente["debe"] = round(existente["debe"] + perdida, 2)
+            else:
+                lineas_debe.append({
+                    "codigo": "59211",
+                    "denominacion": "Pérdidas acumuladas",
+                    "debe": perdida,
+                    "haber": 0.0,
+                    "concepto": "Saldo de pérdidas acumuladas necesario para cuadrar el estado inicial"
+                })
             sum_debe += perdida
 
     if abs(sum_debe - sum_haber) > 0.009:
@@ -1625,7 +1624,7 @@ def _cached_json_extraction_from_text(document_text, model, api_key):
 def _cached_opening_extraction_from_text(document_text, model, api_key):
     """Extrae exclusivamente el balance inicial y lo comparte entre usuarios."""
     client = get_gemini_client(api_key)
-    text = re.sub(r"\s+", " ", str(document_text or "")).strip()
+    text = re.sub(r"\\s+", " ", str(document_text or "")).strip()
     response = client.models.generate_content(
         model=model,
         contents=[OPENING_STATE_PROMPT + "\\n\\nTEXTO FUENTE COMPLETO:\\n" + text[:140000]],
@@ -2538,6 +2537,75 @@ def validate_asientos(data, pcge_map):
     return valid, errors, warnings
 
 
+def _asientos_completos_para_libros(asientos, pcge_map):
+    """Filtra asientos completos (todas sus líneas con código de 5 dígitos
+    existente en el PCGE) para construir HT/LM/ERN/ERF/ESF.
+
+    Antes, la construcción de la Hoja de Trabajo descartaba línea por línea
+    cualquier código inválido, dejando suelto el lado (Debe o Haber) contrario
+    dentro del mismo asiento. Eso producía un descuadre aunque el asiento en
+    cuestión ya estuviera fuera de 'asientos_validos'. Ahora se excluye el
+    asiento completo (ambos lados) cuando alguna de sus líneas es inválida, para
+    que los libros nunca queden descuadrados por un asiento parcialmente roto.
+    No cambia qué cuentas usa TANA ni cómo arma cada asiento: solo decide si
+    ese asiento, tal como fue generado, entra completo o no entra a los libros.
+    """
+    resultado = []
+    for asiento in asientos or []:
+        if not isinstance(asiento, dict):
+            continue
+        lineas = asiento.get("lineas", []) or []
+        if not lineas:
+            continue
+        completo = True
+        for line in lineas:
+            if not isinstance(line, dict):
+                completo = False
+                break
+            code = str(line.get("codigo", "")).strip()
+            if not re.fullmatch(r"\d{5}", code) or code not in pcge_map:
+                completo = False
+                break
+        if completo:
+            resultado.append(asiento)
+    return resultado
+
+
+def _resolver_codigos_a_detalle(asientos, pcge_map):
+    """Resuelve a su cuenta de detalle (5 dígitos) los códigos que Gemini
+    devuelve incompletos, en vez de excluir la línea o el asiento.
+
+    El PCGE es jerárquico: "104" (control) agrupa a "10411", "10412", etc.
+    (detalle). Si un código no tiene 5 dígitos o no existe tal cual en el
+    catálogo, se busca bajo esa misma familia. Solo se reemplaza cuando existe
+    EXACTAMENTE una cuenta de detalle posible para ese código: así nunca se
+    inventa ni se elige al azar una cuenta que la operación no sustente. Si
+    hay varias posibles (p. ej. "104" con varios bancos) o ninguna, el código
+    se deja como está y sigue el flujo normal de validación.
+    """
+    for asiento in asientos or []:
+        if not isinstance(asiento, dict):
+            continue
+        for line in asiento.get("lineas", []) or []:
+            if not isinstance(line, dict):
+                continue
+            code = str(line.get("codigo", "")).strip()
+            if re.fullmatch(r"\d{5}", code) and code in pcge_map:
+                continue
+            if not code or not code.isdigit() or len(code) >= 5:
+                continue
+            candidatos = sorted(c for c in pcge_map if len(c) == 5 and c.startswith(code))
+            if len(candidatos) == 1:
+                nuevo = candidatos[0]
+                line["codigo"] = nuevo
+                line["denominacion"] = pcge_map.get(nuevo, line.get("denominacion", ""))
+                nota = f"TANA resolvió el código '{code}' a la cuenta de detalle {nuevo} ({pcge_map.get(nuevo, '')})."
+                obs = str(asiento.get("observacion", "") or "").strip()
+                if nota not in obs:
+                    asiento["observacion"] = (obs + " " + nota).strip()
+    return asientos
+
+
 if uploaded_file is not None and enviar_top and st.session_state.get("tana_file_signature") != file_signature:
     for _key in (
         "monografia_json", "monografia_texto", "monografia_nombre", "archivo_excel_origen",
@@ -3433,8 +3501,12 @@ def _crear_excel_por_empresa_desde_base(base_bytes, empresa, asientos_empresa):
     # ------------------------------------------------------------
     if "HT" in wb2.sheetnames:
         ws = wb2["HT"]
+        # Igual que en el Excel de una sola empresa: la HT de cada empresa se
+        # calcula solo con asientos completos (ambos lados), para no
+        # descuadrar por una línea con código inválido dentro de un asiento.
+        asientos_empresa_ht = _asientos_completos_para_libros(asientos_empresa, pcge_map)
         movimientos_local = {}
-        for asiento in asientos_empresa:
+        for asiento in asientos_empresa_ht:
             for line in asiento.get("lineas", []) or []:
                 code = str(line.get("codigo", "")).strip()
                 if not re.fullmatch(r"\d{5}", code):
@@ -3444,7 +3516,7 @@ def _crear_excel_por_empresa_desde_base(base_bytes, empresa, asientos_empresa):
                 rec["haber"] += _to_float(line.get("haber"), 0.0)
 
         cuentas_local = sorted(movimientos_local.keys(), key=lambda x: (int(x), x))
-        destinadas_local = detectar_cuentas_6_con_destino(asientos_empresa)
+        destinadas_local = detectar_cuentas_6_con_destino(asientos_empresa_ht)
 
         def d_a_local(code):
             rec = movimientos_local.get(code, {"debe": 0.0, "haber": 0.0})
@@ -3570,133 +3642,6 @@ def _crear_excel_por_empresa_desde_base(base_bytes, empresa, asientos_empresa):
     return out.getvalue()
 
 
-
-def _operaciones_numericas_detectadas(monografia_json):
-    """Devuelve los números de operación que la extracción considera contables."""
-    nums = []
-    for op in (monografia_json or {}).get("operaciones", []) or []:
-        if not isinstance(op, dict):
-            continue
-        n = str(op.get("numero") or "").strip()
-        if re.fullmatch(r"\d+", n):
-            nums.append(int(n))
-    return sorted(set(nums))
-
-
-def _operaciones_representadas(asientos):
-    nums = set()
-    for a in asientos or []:
-        if not isinstance(a, dict):
-            continue
-        n = str(a.get("operacion_numero") or "").strip()
-        if re.fullmatch(r"\d+", n) and int(n) > 0:
-            nums.add(int(n))
-    return nums
-
-
-def _reparar_y_completar_asientos(asientos, pcge_map, monografia_json):
-    """Segunda barrera determinista: repara asientos inválidos y completa
-    operaciones extraídas que quedaron sin asiento. Nunca toca los asientos
-    que ya validaron correctamente.
-    """
-    actuales = list(asientos or [])
-    _, errores, _ = validate_asientos({"asientos": actuales}, pcge_map)
-    faltantes = [n for n in _operaciones_numericas_detectadas(monografia_json)
-                 if n not in _operaciones_representadas(actuales)]
-    if not errores and not faltantes:
-        return actuales, [], []
-
-    invalidos = []
-    for a in actuales:
-        _, e, _ = validate_asientos({"asientos": [a]}, pcge_map)
-        if e:
-            invalidos.append(a)
-
-    pcge_5 = [[str(c).strip(), str(d)] for c, d in PCGE_DATA if re.fullmatch(r"\d{5}", str(c).strip())]
-    prompt = f"""
-Eres el reparador determinista de TANA. Debes devolver SOLO los asientos que
-faltan o que están inválidos. NO modifiques ningún asiento que ya sea válido.
-
-REGLAS:
-- Cada asiento devuelto debe cuadrar exactamente Debe = Haber.
-- Usa exclusivamente cuentas PCGE de 5 dígitos.
-- Conserva número de operación, fecha, empresa, glosa y documentos cuando sean correctos.
-- Si una operación está en FALTANTES, genera el asiento completo de esa operación.
-- Si un asiento está en INVÁLIDOS, corrige únicamente lo necesario para que sea contablemente válido.
-- No inventes importes: usa la información de la operación y del balance inicial.
-- No cierres saldos de apertura contra 50. El asiento de apertura ya fue construido aparte.
-- No cambies los asientos que no aparecen en INVÁLIDOS.
-
-DEVUELVE JSON:
-{{"asientos_reparados": [ ... ], "observacion": "..."}}
-
-FALTANTES:
-{json.dumps(faltantes, ensure_ascii=False)}
-
-INVÁLIDOS:
-{json.dumps(invalidos, ensure_ascii=False, indent=2)[:30000]}
-
-MONOGRAFÍA EXTRAÍDA:
-{json.dumps(_canonicalize_for_hash(monografia_json or {{}}), ensure_ascii=False, sort_keys=True)[:60000]}
-
-PCGE 5 DÍGITOS:
-{json.dumps(pcge_5, ensure_ascii=False)[:50000]}
-"""
-    seed = _deterministic_seed({"repair": invalidos, "missing": faltantes, "monografia": monografia_json})
-    response, profile = _generate_with_fallback(
-        lambda client: [prompt],
-        types.GenerateContentConfig(response_mime_type="application/json", temperature=0.0, seed=seed),
-    )
-    data = _parsear_respuesta_json_gemini(response.text or "{}")
-    nuevos = data.get("asientos_reparados", []) if isinstance(data, dict) else []
-    if not isinstance(nuevos, list):
-        nuevos = []
-
-    # Reemplazo por clave estable: operación + número. Los válidos permanecen intactos.
-    por_clave = {}
-    for a in nuevos:
-        if not isinstance(a, dict):
-            continue
-        clave = (str(a.get("operacion_numero") or "").strip(), str(a.get("numero") or "").strip())
-        por_clave[clave] = a
-
-    salida = []
-    for a in actuales:
-        if not isinstance(a, dict):
-            salida.append(a); continue
-        _, e, _ = validate_asientos({"asientos": [a]}, pcge_map)
-        if not e:
-            salida.append(a)
-            continue
-        clave = (str(a.get("operacion_numero") or "").strip(), str(a.get("numero") or "").strip())
-        reemplazo = por_clave.get(clave)
-        if reemplazo is not None:
-            salida.append(reemplazo)
-        else:
-            salida.append(a)
-
-    existentes_ops = _operaciones_representadas(salida)
-    for a in nuevos:
-        if not isinstance(a, dict):
-            continue
-        n = str(a.get("operacion_numero") or "").strip()
-        if re.fullmatch(r"\d+", n) and int(n) in faltantes and int(n) not in existentes_ops:
-            salida.append(a)
-            existentes_ops.add(int(n))
-
-    # Correlativo final, sin alterar operación/empresa.
-    for idx, a in enumerate(salida, start=1):
-        if isinstance(a, dict):
-            a["numero"] = idx
-
-    valid, errors_final, warnings_final = validate_asientos({"asientos": salida}, pcge_map)
-    if errors_final:
-        # No ocultamos errores: solo conservamos el conjunto completo para que
-        # TANA pueda mostrar exactamente qué asiento sigue pendiente.
-        return salida, errors_final, warnings_final
-    return salida, [], warnings_final
-
-
 def resolve_asientos_with_gemini():
     if not get_gemini_profiles():
         raise RuntimeError("No está configurada ninguna GEMINI_API_KEY en Streamlit Secrets.")
@@ -3788,23 +3733,12 @@ if "monografia_json" in st.session_state and "asientos_contables" not in st.sess
                         for a in aperturas
                         if isinstance(a, dict) and a.get("empresa")
                     }
-                    # Una empresa detectada puede participar en la práctica sin
-                    # tener un balance inicial propio. En ese caso NO se inventa una
-                    # apertura ni se bloquea toda la práctica. Solo exigimos apertura
-                    # para las empresas que realmente tienen partidas de estado inicial.
-                    empresas_con_partidas = {
-                        _normalizar_nombre_empresa(x.get("empresa")).lower()
-                        for x in estado_inicial
-                        if isinstance(x, dict)
-                        and x.get("empresa")
-                        and str(x.get("tipo") or "").lower() in {"partida", "contra_activo", "total_activo", "total_pasivo", "total_patrimonio", "total_pasivo_patrimonio"}
-                    }
-                    faltan_aperturas = sorted(empresas_con_partidas - empresas_con_apertura)
+                    faltan_aperturas = sorted(empresas_con_estado - empresas_con_apertura)
                     if faltan_aperturas:
                         raise ValueError(
                             "No se pudo construir el asiento de apertura para: "
                             + ", ".join(faltan_aperturas)
-                            + "."
+                            + ". TANA no generará un Excel incompleto."
                         )
                 elif len(aperturas) != 1:
                     raise ValueError(
@@ -3858,6 +3792,7 @@ if "monografia_json" in st.session_state and "asientos_contables" not in st.sess
 
             asientos_generados = asegurar_cuenta_79_en_destinos(asientos_generados, pcge_map)
             asientos_generados = corregir_retiro_socio(asientos_generados, st.session_state.get("monografia_json", {}))
+            asientos_generados = _resolver_codigos_a_detalle(asientos_generados, pcge_map)
 
             # Normalización determinista: todos los importes operativos de TANA
             # quedan a 2 decimales antes de construir HT. Esto evita que pequeñas
@@ -3872,30 +3807,9 @@ if "monografia_json" in st.session_state and "asientos_contables" not in st.sess
                     _linea["haber"] = round(max(_to_float(_linea.get("haber"), 0.0), 0.0), 2)
 
             valid, errors, warnings = validate_asientos({"asientos": asientos_generados}, pcge_map)
-
-            # Segunda barrera: si Gemini dejó un asiento inválido o una operación
-            # extraída sin asiento, TANA intenta repararlo/completarlo de forma
-            # determinista antes de construir HT/ERF/ERN/ESF.
-            if errors or any(
-                n not in _operaciones_representadas(asientos_generados)
-                for n in _operaciones_numericas_detectadas(mono_actual)
-            ):
-                asientos_reparados, errores_reparados, warnings_reparados = _reparar_y_completar_asientos(
-                    asientos_generados, pcge_map, mono_actual
-                )
-                asientos_generados = asientos_reparados
-                valid, errors, warnings = validate_asientos({"asientos": asientos_generados}, pcge_map)
-                warnings = list(warnings) + list(warnings_reparados)
-
-            if errors:
-                raise ValueError(
-                    "TANA no pudo validar todos los asientos después de la segunda revisión. "
-                    + " | ".join(str(e) for e in errors[:8])
-                )
-
             st.session_state["asientos_contables"] = asientos_generados
             st.session_state["asientos_validos"] = valid
-            st.session_state["errores_asientos"] = []
+            st.session_state["errores_asientos"] = errors
             st.session_state["alertas_asientos"] = list(alertas_gemini) + list(warnings)
         except Exception as exc:
             st.error(f"No se pudieron desarrollar los asientos: {exc}")
@@ -4247,6 +4161,7 @@ def _aplicar_correccion_si_corresponde(pregunta):
             # claramente como NO VALIDADA hasta que el usuario la revise.
             nuevos = asegurar_cuenta_79_en_destinos(nuevos, pcge_map)
             nuevos = corregir_retiro_socio(nuevos, st.session_state.get("monografia_json", {}))
+            nuevos = _resolver_codigos_a_detalle(nuevos, pcge_map)
             valid, errors, warnings = validate_asientos({"asientos": nuevos}, pcge_map)
 
             if st.session_state.get("tana_excel_origen_bytes"):
@@ -4710,10 +4625,13 @@ print("Hoja LM (Libro Mayor) lista:", LM_LAST_ROW-1, "cuentas")
 # ============================================================
 
 asientos_export = st.session_state.get("asientos_contables", [])
+# Los libros (HT/LM/ERN/ERF/ESF) se calculan solo con asientos completos,
+# para no descuadrar por un asiento que tiene una línea con código inválido.
+asientos_export_ht = _asientos_completos_para_libros(asientos_export, pcge_map)
 
 # Consolidar todas las cuentas realmente utilizadas por los asientos.
 movimientos = {}
-for asiento in asientos_export:
+for asiento in asientos_export_ht:
     for line in asiento.get("lineas", []):
         code = str(line.get("codigo", "")).strip()
         if not re.fullmatch(r"\d{5}", code):
@@ -4987,9 +4905,7 @@ def es_funcion(code):
     return False
 
 
-CUENTAS_6_CON_DESTINO = detectar_cuentas_6_con_destino(
-    st.session_state.get("asientos_contables", [])
-)
+CUENTAS_6_CON_DESTINO = detectar_cuentas_6_con_destino(asientos_export_ht)
 
 def es_balance(code):
     return not clasificar_resultado(code)
@@ -5977,6 +5893,24 @@ if st.session_state.get("tana_excel_buffer") and st.session_state.get("tana_exce
         f'</div>',
         unsafe_allow_html=True,
     )
+    # Si algún asiento no pasó la validación, se explica el motivo exacto aquí
+    # mismo (antes solo quedaba anotado dentro del Excel). No cambia qué
+    # asientos se consideran válidos ni la lógica contable: solo hace visible
+    # el detalle que ya calculaba validate_asientos().
+    _errores_detalle = st.session_state.get("errores_asientos", []) or []
+    if _n_asientos != _n_validos and _errores_detalle:
+        with st.expander(
+            f"⚠️ {_n_asientos - _n_validos} asiento(s) no pasaron la validación — ver motivo",
+            expanded=True,
+        ):
+            st.markdown(
+                "El Excel se genera igual con los **%d** asientos, pero el/los que se listan "
+                "abajo tienen un problema de datos (código, importe o descuadre) que conviene "
+                "revisar en la práctica de origen:" % _n_asientos
+            )
+            for _err in _errores_detalle:
+                st.markdown(f"- {_err}")
+
     def _registrar_descarga_excel():
         _record_user_activity(
             "excel_descargado",
