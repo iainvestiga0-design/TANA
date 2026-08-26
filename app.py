@@ -588,8 +588,6 @@ TANA_BANCOS_SUBDIVISIONARIAS = {
     "banco gnb": "10420",
 }
 
-# Nombre de referencia (para mostrar) de cada código de TANA_BANCOS_SUBDIVISIONARIAS,
-# en el orden en que se muestran al motor de Gemini.
 TANA_BANCOS_NOMBRES = {
     "10411": "Banco de la Nación",
     "10412": "Banco de Crédito del Perú (BCP)",
@@ -602,6 +600,201 @@ TANA_BANCOS_NOMBRES = {
     "10419": "Banco Ripley",
     "10420": "Banco GNB",
 }
+
+def _instalar_subdivisionarias_bancarias_en_pcge():
+    """Agrega al catálogo operativo las subdivisionarias bancarias de 5 dígitos."""
+    global PCGE_DATA, pcge_map
+    existentes = {str(c).strip() for c, _ in PCGE_DATA}
+    for codigo, banco in TANA_BANCOS_NOMBRES.items():
+        if codigo not in existentes:
+            PCGE_DATA.append((codigo, banco))
+    pcge_map = {str(cod).strip(): str(desc) for cod, desc in PCGE_DATA}
+
+
+def _normalizar_texto_contable(valor):
+    import unicodedata
+    txt = str(valor or "").lower()
+    txt = unicodedata.normalize("NFKD", txt).encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"\s+", " ", txt).strip()
+
+
+def _detectar_banco_en_texto(texto):
+    """Devuelve código 104xx solo cuando el banco aparece explícitamente."""
+    t = _normalizar_texto_contable(texto)
+    # Ordenar por longitud evita que una clave corta gane sobre una específica.
+    for nombre, codigo in sorted(TANA_BANCOS_SUBDIVISIONARIAS.items(), key=lambda x: len(x[0]), reverse=True):
+        if _normalizar_texto_contable(nombre) in t:
+            return codigo
+    return None
+
+
+def _aplicar_banco_a_lineas_asiento(asiento, operacion=None):
+    """Si el asiento menciona un banco, usa su subdivisionaria 104xx."""
+    if not isinstance(asiento, dict):
+        return asiento
+    op = operacion or {}
+    contexto = " ".join(str(op.get(k) or "") for k in (
+        "descripcion", "cuenta_bancaria", "medio_pago", "forma_pago", "tercero", "datos_adicionales"
+    ))
+    contexto += " " + " ".join(
+        str(line.get(k) or "")
+        for line in (asiento.get("lineas", []) or []) if isinstance(line, dict)
+        for k in ("concepto", "denominacion")
+    )
+    contexto += " " + str(asiento.get("glosa") or "") + " " + str(asiento.get("documento") or "")
+    codigo_banco = _detectar_banco_en_texto(contexto)
+    if not codigo_banco:
+        return asiento
+    nombre_banco = TANA_BANCOS_NOMBRES.get(codigo_banco, pcge_map.get(codigo_banco, "Cuenta bancaria"))
+    lineas = []
+    for line in asiento.get("lineas", []) or []:
+        ln = dict(line) if isinstance(line, dict) else line
+        if isinstance(ln, dict) and str(ln.get("codigo", "")).strip() in {"10411", "10412", "10413", "10414", "10415", "10416", "10417", "10418", "10419", "10420"}:
+            ln["codigo"] = codigo_banco
+            ln["denominacion"] = nombre_banco
+        elif isinstance(ln, dict) and str(ln.get("codigo", "")).strip() == "104":
+            ln["codigo"] = codigo_banco
+            ln["denominacion"] = nombre_banco
+        lineas.append(ln)
+    asiento["lineas"] = lineas
+    return asiento
+
+
+def _extraer_texto_estado_inicial(item):
+    if isinstance(item, dict):
+        return " ".join(str(item.get(k) or "") for k in (
+            "seccion", "cuenta", "descripcion", "denominacion", "concepto", "nombre", "detalle", "texto"
+        ))
+    return str(item or "")
+
+
+def _extraer_importe_estado_inicial(item):
+    if isinstance(item, dict):
+        for k in ("importe", "saldo", "monto", "valor", "debe", "haber"):
+            n = _to_float(item.get(k), None)
+            if n is not None:
+                return n
+        # Buscar el primer número razonable en campos numéricos.
+        for v in item.values():
+            n = _to_float(v, None)
+            if n is not None and abs(n) > 0:
+                return n
+    # Caso texto: último número con formato monetario/simple.
+    m = re.findall(r"[-+]?\d[\d,]*(?:\.\d+)?", str(item or ""))
+    if m:
+        try:
+            return float(m[-1].replace(",", ""))
+        except Exception:
+            pass
+    return None
+
+
+def _cuenta_apertura_para_texto(texto):
+    """Mapeo conservador de saldos iniciales a cuentas operativas de 5 dígitos."""
+    t = _normalizar_texto_contable(texto)
+    banco = _detectar_banco_en_texto(t)
+    es_obligacion_bancaria = any(k in t for k in ("prestamo por pagar", "préstamo por pagar", "prestamo al banco", "préstamo al banco", "deuda con el banco"))
+    if banco and not es_obligacion_bancaria and any(k in t for k in ("cuenta corriente", "cuenta de ahorros", "cuenta ahorro", "dinero en cuenta", "cheque", "transferencia bancaria")):
+        return banco, TANA_BANCOS_NOMBRES.get(banco, pcge_map.get(banco, "Cuenta bancaria"))
+    reglas = [
+        (("caja chica", "dinero en caja chica", "efectivo en caja"), "10111", "Caja"),
+        (("facturas por cobrar", "cuentas por cobrar", "factura por cobrar", "emitidas en cartera"), "12121", "Emitidas en cartera"),
+        (("prendas de vestir", "mercaderias", "mercaderías", "muebles de melamine", "existencias", "mercaderia"), "20111", "Costo"),
+        (("suministros de oficina", "suministros", "materiales auxiliares"), "25241", "Otros suministros"),
+        (("muebles", "muebles y enseres", "propiedad planta y equipo"), "33511", "Costo"),
+        (("depreciacion acumulada", "depreciación acumulada"), "39526", "Muebles y enseres"),
+        (("igv por pagar", "igv – cuenta propia", "igv cuenta propia", "igv por pagar"), "40111", "IGV – Cuenta propia"),
+        (("essalud por pagar", "essalud", "es salud"), "40311", "ESSALUD"),
+        (("afp por pagar", "administradoras de fondos de pensiones", "afp"), "41711", "Administradoras de fondos de pensiones"),
+        (("facturas por pagar", "cuentas por pagar comerciales", "emitidas por pagar", "proveedores"), "42121", "Emitidas"),
+        (("prestamo por pagar", "préstamo por pagar", "prestamo al banco", "préstamo al banco"), "45111", "Instituciones financieras"),
+        (("participaciones sociales", "capital social", "capital"), "50121", "Participaciones"),
+        (("utilidades acumuladas", "resultados acumulados", "utilidad acumulada"), "59111", "Utilidades acumuladas"),
+    ]
+    for claves, codigo, desc in reglas:
+        if any(k in t for k in claves):
+            return codigo, desc
+    return None, None
+
+
+def _construir_asiento_apertura_determinista(monografia_json):
+    """Construye un único asiento de apertura desde el estado inicial, sin cerrar a 50."""
+    estado = (monografia_json or {}).get("estado_inicial", []) or []
+    if not estado:
+        return None
+
+    lineas_debe = []
+    lineas_haber = []
+    sum_debe = 0.0
+    sum_haber = 0.0
+    faltantes = []
+
+    for item in estado:
+        texto = _extraer_texto_estado_inicial(item)
+        importe = _extraer_importe_estado_inicial(item)
+        if importe is None or abs(float(importe)) < 0.005:
+            continue
+        codigo, desc = _cuenta_apertura_para_texto(texto)
+        if not codigo:
+            faltantes.append(texto)
+            continue
+        monto = abs(round(float(importe), 2))
+        # Depreciaciones acumuladas son saldos acreedores aun cuando el texto trae importe negativo.
+        es_contra_activo = codigo.startswith("39") or "depreciacion acumulada" in _normalizar_texto_contable(texto)
+        es_pasivo_patrimonio = codigo.startswith(("40", "41", "42", "45", "50", "59"))
+        line = {"codigo": codigo, "denominacion": desc, "debe": 0.0, "haber": 0.0, "concepto": texto.strip()}
+        if float(importe) < 0 or es_contra_activo or es_pasivo_patrimonio:
+            line["haber"] = monto
+            lineas_haber.append(line); sum_haber += monto
+        else:
+            line["debe"] = monto
+            lineas_debe.append(line); sum_debe += monto
+
+    # Si la práctica deja utilidades acumuladas en '?' o no las expresa pero el
+    # resto del estado permite cuadrar, calculamos 59111 como diferencia.
+    if abs(sum_debe - sum_haber) > 0.009:
+        diferencia = round(sum_debe - sum_haber, 2)
+        if diferencia > 0.009:
+            # El saldo faltante del patrimonio es acreedor.
+            existente = next((x for x in lineas_haber if x.get("codigo") == "59111"), None)
+            if existente:
+                existente["haber"] = round(existente["haber"] + diferencia, 2)
+            else:
+                lineas_haber.append({"codigo": "59111", "denominacion": "Utilidades acumuladas", "debe": 0.0, "haber": diferencia, "concepto": "Saldo de utilidades acumuladas necesario para cuadrar el estado inicial"})
+            sum_haber += diferencia
+        elif diferencia < -0.009:
+            # No inventar un activo para cuadrar: reportar revisión.
+            faltantes.append(f"Diferencia de apertura no explicada: S/ {abs(diferencia):,.2f}")
+
+    if abs(sum_debe - sum_haber) > 0.009:
+        return None
+    if not lineas_debe or not lineas_haber:
+        return None
+
+    empresa = str((monografia_json or {}).get("empresa") or "").strip()
+    periodo = str((monografia_json or {}).get("periodo") or "").strip()
+    fecha = ""
+    m = re.search(r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}", periodo)
+    if m:
+        fecha = m.group(0)
+    else:
+        for item in (monografia_json or {}).get("operaciones", []) or []:
+            f = str(item.get("fecha") or "").strip()
+            if f:
+                fecha = f; break
+    obs = "Asiento de apertura generado directamente desde el estado inicial. Activos en Debe y pasivos/patrimonio en Haber."
+    if faltantes:
+        obs += " Revisar datos no mapeados: " + "; ".join(faltantes[:3])
+    return {
+        "numero": 1,
+        "fecha": fecha,
+        "glosa": f"Apertura / reapertura para el proceso contable{(' de ' + empresa) if empresa else ''}",
+        "documento": "Balance / Estado de Situación Financiera inicial",
+        "operacion_numero": 0,
+        "requiere_revision": bool(faltantes),
+        "observacion": obs,
+        "lineas": lineas_debe + lineas_haber,
+    }
 
 
 # ============================================================
@@ -633,6 +826,7 @@ with open(PCGE_FILE, encoding="utf-8") as f:
 # El motor de Gemini crea su propia copia local, pero el Excel también necesita
 # resolver la denominación de cada código sin depender de esa función.
 pcge_map = {str(cod).strip(): str(desc) for cod, desc in PCGE_DATA}
+_instalar_subdivisionarias_bancarias_en_pcge()
 
 
 # ============================================================
@@ -930,7 +1124,9 @@ REGLAS:
   documentos, nombres y condiciones.
 - Si un dato no aparece, usa null o "".
 - Separa cada operación en un elemento.
-- Incluye el estado financiero inicial si existe.
+- Incluye el estado financiero inicial si existe, con CADA partida individual y su importe exacto. NO consolides varias partidas en una sola cuenta.
+- El balance inicial es una fuente histórica del propio documento: NO reutilices importes de otra práctica, ejemplo, sesión o archivo anterior. Si el texto presenta dos empresas, extrae sus saldos por separado.
+- Si aparece un banco concreto (Banco de la Nación, BCP/Banco de Crédito del Perú, Interbank, Scotiabank, BBVA, BanBif, Pichincha, Falabella, Ripley, GNB), conserva el nombre exacto dentro de "cuenta_bancaria", "descripcion" o "datos_importantes". NO lo reemplaces por "cuenta corriente" genérico.
 - Incluye todo lo que el ejercicio pide realizar en "solicitudes".
 - La información extraída servirá después para el motor contable de TANA.
 """
@@ -1139,6 +1335,14 @@ IMPORTANTE:
 - Si una operación no tiene importe explícito, conserva la descripción y usa
   null para el importe.
 - No inventes operaciones.
+- Si existe uno o más balances iniciales, extrae TODAS sus partidas individuales dentro de
+  "estado_inicial" con su importe exacto y empresa correspondiente. No consolides
+  bancos, cuentas por cobrar, inventarios, activos fijos, pasivos ni patrimonio.
+- No reutilices importes de otra práctica o de otro ejercicio. El texto fuente es la única
+  autoridad para los saldos iniciales. Si el texto presenta dos empresas, cada una debe
+  conservar su propio conjunto de partidas.
+- Conserva el nombre exacto del banco cuando aparezca (Banco de la Nación, BCP/Banco de
+  Crédito del Perú, etc.).
 
 Devuelve SOLO JSON válido con esta estructura:
 {
@@ -1210,6 +1414,118 @@ def _json_extraction_from_text(client, model, document_text):
         ),
     )
     return _parsear_respuesta_json_gemini(response.text or "{}")
+
+
+OPENING_STATE_PROMPT = """
+Eres el verificador de SALDOS INICIALES de TANA. Tu única tarea es extraer con fidelidad
+los balances/estados de situación financiera que aparecen ANTES de las operaciones de
+una práctica contable.
+
+FUENTE ÚNICA: el texto completo de la práctica que se adjunta al final.
+
+REGLAS CRÍTICAS:
+- NO uses datos de otras prácticas, ejemplos, memoria, sesiones anteriores ni datos
+  que no aparezcan literalmente en el texto fuente.
+- NO agregues, agrupes, redistribuyas ni sustituyas importes.
+- Conserva CADA partida del balance inicial por separado, aunque varias partidas
+  pertenezcan al mismo elemento contable.
+- Conserva exactamente el importe que aparece junto a cada partida.
+- Si el texto dice Banco de la Nación, Banco de Crédito del Perú/BCP, Interbank,
+  Scotiabank, BBVA u otro banco, conserva el nombre exacto.
+- Conserva también las cuentas de pasivo y patrimonio por separado.
+- Las depreciaciones acumuladas deben conservar su importe como valor negativo y
+  quedar identificadas como contra-activo.
+- NO calcules una partida faltante usando otra partida. Solo conserva un importe
+  calculado si la propia práctica lo presenta explícitamente.
+- Si hay dos o más empresas, sepáralas completamente.
+- No mezcles balances de empresas distintas.
+- Incluye los totales del balance como registros tipo "TOTAL" para poder validar
+  que la extracción coincide con la fuente.
+
+Devuelve SOLO JSON válido:
+{
+  "estado_inicial": [
+    {
+      "empresa": "",
+      "fecha": "",
+      "seccion": "ACTIVO|PASIVO|PATRIMONIO|TOTAL",
+      "concepto": "",
+      "importe": 0,
+      "signo": "positivo|negativo",
+      "tipo": "partida|contra_activo|total_activo|total_pasivo|total_patrimonio|total_pasivo_patrimonio",
+      "banco": ""
+    }
+  ]
+}
+
+Antes de devolver el JSON, comprueba internamente que los importes y conceptos fueron
+copiados del texto fuente y que no pertenecen a otro ejercicio.
+"""
+
+
+def _estado_inicial_es_verosimil(valores):
+    """Valida que la extracción de apertura tenga partidas y totales coherentes.
+
+    La validación es deliberadamente conservadora: si faltan totales o no se puede
+    comprobar la estructura por empresa, no reemplazamos la extracción original.
+    """
+    if not isinstance(valores, list) or not valores:
+        return False
+    empresas = {}
+    for item in valores:
+        if not isinstance(item, dict):
+            continue
+        emp = str(item.get("empresa") or "").strip()
+        if not emp:
+            continue
+        empresas.setdefault(emp, []).append(item)
+    if not empresas:
+        return False
+    partidas = 0
+    for emp, items in empresas.items():
+        tipos = {str(x.get("tipo") or "").lower() for x in items}
+        if not any(t.startswith("total_activo") for t in tipos):
+            return False
+        if not any(t in {"total_pasivo_patrimonio", "total_pasivo", "total_patrimonio"} for t in tipos):
+            return False
+        for x in items:
+            if str(x.get("tipo") or "").lower() in {"partida", "contra_activo"}:
+                try:
+                    float(x.get("importe"))
+                    partidas += 1
+                except Exception:
+                    return False
+    return partidas >= 2
+
+
+def _reforzar_estado_inicial_desde_texto(client, model, document_text, data):
+    """Vuelve a extraer SOLO el balance inicial desde el texto fuente.
+
+    Se usa como segunda barrera para evitar que una extracción general arrastre
+    importes de otro ejercicio o consolide varias partidas del balance.
+    """
+    text = re.sub(r"\s+", " ", str(document_text or "")).strip()
+    if len(text) < 120:
+        return data
+    try:
+        response = client.models.generate_content(
+            model=model,
+            contents=[OPENING_STATE_PROMPT + "\n\nTEXTO FUENTE COMPLETO:\n" + text[:140000]],
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.0,
+                seed=_deterministic_seed("OPENING_STATE|" + text),
+            ),
+        )
+        extra = _parsear_respuesta_json_gemini(response.text or "{}")
+        estado = extra.get("estado_inicial", []) if isinstance(extra, dict) else []
+        if _estado_inicial_es_verosimil(estado):
+            data = dict(data or {})
+            data["estado_inicial"] = estado
+            data["estado_inicial_fuente_verificada"] = True
+        return data
+    except Exception:
+        return data
 
 
 def _rescue_extraction_with_gemini(client, model, gemini_file):
@@ -1314,6 +1630,7 @@ def extract_with_gemini(uploaded):
                 try:
                     data = _json_extraction_from_text(client, profile["model"], local_text)
                     if _extraction_has_content(data) and data.get("operaciones"):
+                        data = _reforzar_estado_inicial_desde_texto(client, profile["model"], local_text, data)
                         return data
                     errors.append((profile["label"], profile["model"], ValueError("La extracción textual no identificó operaciones contables.")))
                 except Exception as exc:
@@ -1339,6 +1656,7 @@ def extract_with_gemini(uploaded):
                         except json.JSONDecodeError:
                             data = {}
                         if _extraction_has_content(data) and data.get("operaciones"):
+                            data = _reforzar_estado_inicial_desde_texto(client, profile["model"], legacy_text, data)
                             return data
                         local_errors.append((profile["label"], profile["model"],
                                              ValueError("La extracción local obtuvo texto, pero no operaciones contables.")))
@@ -1598,29 +1916,32 @@ inputbar_container = st.container()
 with inputbar_container:
     st.markdown('<span class="tana-inputbar-anchor"></span>', unsafe_allow_html=True)
 
-    bar = st.columns([0.7, 5.6, 0.85, 0.85], gap="small")
-    with bar[0]:
-        uploaded_file = st.file_uploader(
-            "Archivo", type=SUPPORTED_TYPES, label_visibility="collapsed",
-            help="Adjuntar monografía: PDF, DOC, DOCX, XLS, XLSX, JPG, JPEG y PNG."
-        )
-    with bar[1]:
-        pregunta_top = st.text_input(
-            "Consulta", placeholder="Pregunta a TANA…",
-            key="pregunta_tana_top", label_visibility="collapsed"
-        )
-    with bar[2]:
-        audio_top = st.audio_input("Hablar", key="audio_tana_top", label_visibility="collapsed") if hasattr(st, "audio_input") else None
-    with bar[3]:
-        enviar_top = st.button("➤", type="primary", key="btn_enviar_tana_top", use_container_width=True)
+    # clear_on_submit=True hace que, después de enviar, la pregunta, el audio
+    # y el archivo seleccionado vuelvan a quedar limpios para la siguiente
+    # consulta. El procesamiento usa los valores capturados en esta misma
+    # ejecución antes de que Streamlit limpie los widgets en el siguiente rerun.
+    with st.form("tana_input_form", clear_on_submit=True, border=False):
+        bar = st.columns([0.7, 5.6, 0.85, 0.85], gap="small")
+        with bar[0]:
+            uploaded_file = st.file_uploader(
+                "Archivo", type=SUPPORTED_TYPES, label_visibility="collapsed",
+                help="Adjuntar monografía: PDF, DOC, DOCX, XLS, XLSX, JPG, JPEG y PNG."
+            )
+        with bar[1]:
+            pregunta_top = st.text_input(
+                "Consulta", placeholder="Pregunta a TANA…",
+                key="pregunta_tana_top", label_visibility="collapsed"
+            )
+        with bar[2]:
+            audio_top = st.audio_input("Hablar", key="audio_tana_top", label_visibility="collapsed") if hasattr(st, "audio_input") else None
+        with bar[3]:
+            enviar_top = st.form_submit_button("➤", type="primary", use_container_width=True)
 
-    # Cuando hay un archivo cargado, la barra se agranda un poco (hacia
-    # arriba) para mostrar esta etiqueta, en vez de un texto aparte debajo.
-    if uploaded_file:
-        st.markdown(
-            f'<div class="tana-file-chip">📎 {uploaded_file.name} · pulsa ➤ para enviar y procesar</div>',
-            unsafe_allow_html=True,
-        )
+        if uploaded_file:
+            st.markdown(
+                f'<div class="tana-file-chip">📎 {uploaded_file.name} · pulsa ➤ para enviar y procesar</div>',
+                unsafe_allow_html=True,
+            )
 
 def _normalizar_nombre_hoja(nombre):
     import unicodedata
@@ -1984,36 +2305,6 @@ def _agregar_hoja_control_contable(wb, asientos, ht_last_row, ern_resultado_row,
                  f"=ERF!$E${erf_resultado_row}",
                  "El resultado por función debe existir."))
 
-    # 8) Aviso informativo: cuántas empresas distintas hay en este libro.
-    # HT/ERF/ERN/ESF de esta versión de TANA consolidan TODOS los asientos
-    # en un solo juego de estados financieros. Si la práctica tiene más de
-    # una empresa (p. ej. una fusión), este control avisa que los saldos
-    # de HT/ESF están mezclando ambas empresas y que hay que revisarlos
-    # por separado con la columna "Empresa" de Asientos_Contables.
-    empresas_vistas = []
-    for a in (asientos or []):
-        emp = str((a or {}).get("empresa", "")).strip()
-        if emp and emp not in empresas_vistas:
-            empresas_vistas.append(emp)
-    if len(empresas_vistas) > 1:
-        rows.append((
-            "8. Empresas detectadas en este libro",
-            f"⚠️ {len(empresas_vistas)} EMPRESAS EN UN SOLO LIBRO",
-            "",
-            "Este libro mezcla los asientos de: " + "; ".join(empresas_vistas) +
-            ". HT, ERF, ERN y ESF muestran los saldos CONSOLIDADOS de todas "
-            "ellas, no por separado. Usa la columna \"Empresa\" de "
-            "Asientos_Contables para filtrar y revisar cada empresa "
-            "individualmente.",
-        ))
-    elif len(empresas_vistas) == 1:
-        rows.append((
-            "8. Empresa detectada en este libro",
-            f"✅ {empresas_vistas[0]}",
-            "",
-            "Todos los asientos de este libro pertenecen a la misma empresa.",
-        ))
-
     for i, (label, status, diff, note) in enumerate(rows, start=4):
         ws.cell(i, 1, label)
         ws.cell(i, 2, status)
@@ -2300,62 +2591,15 @@ REGLA ADICIONAL — ASIENTO DE APERTURA:
 Si la monografía proporciona un balance inicial, balance de comprobación,
 estado de situación financiera inicial o saldos de apertura, debes registrar
 primero el asiento de apertura correspondiente antes de la operación 1.
-Incluye las cuentas y montos iniciales que realmente aparecen en la práctica.
-Si existen dos empresas, cada empresa debe tener su propio asiento de apertura
-y su propio libro. No mezcles sus saldos. El asiento de apertura debe cuadrar
-Debe = Haber y debe alimentar el mismo flujo contable existente de la aplicación.
-Dentro del asiento de apertura, ordena las líneas SIEMPRE así: primero todas
-las cuentas de Activo (elementos 1, 2 y 3) en el DEBE, de menor a mayor código;
-luego todas las cuentas de Pasivo (elemento 4) en el HABER, de menor a mayor
-código; y al final todas las cuentas de Patrimonio (elemento 5) en el HABER,
-de menor a mayor código. No intercales cuentas de distintos grupos.
+El asiento de apertura debe ser UN SOLO asiento por empresa: primero todas las
+cuentas con saldo deudor (activos) y después todas las cuentas con saldo acreedor
+(pasivos y patrimonio). No cierres ni compenses artificialmente los saldos contra
+la cuenta 50: la 50121 Participaciones se registra solo por el capital que realmente
+aparece en el estado inicial. Si las utilidades acumuladas no tienen importe y el
+resto del estado permite calcularlas para que Activo = Pasivo + Patrimonio, el saldo
+calculado corresponde a 59111. Si existen dos empresas, cada empresa debe tener
+su propio asiento de apertura y su propio libro. No mezcles sus saldos.
 NO MODIFIQUES la lógica de HT, ERF, ERN, ESF, destinos ni distribución existente.
-
-REGLA CRÍTICA — NO AGREGUES PARTIDAS DISTINTAS EN UNA SOLA LÍNEA:
-El balance de la monografía trae varias partidas individuales (por ejemplo,
-varios bancos, varias existencias/productos, varias cuentas por pagar). Cada
-una de esas partidas individuales DEBE registrarse en su PROPIA línea del
-asiento, con su propio código de 5 dígitos. Está PROHIBIDO sumar dos o más
-partidas distintas del balance en una sola línea/código (por ejemplo, sumar
-"Caja" + "Banco de la Nación" + "Banco BCP" en una sola línea "10411" es un
-error grave). El total del asiento sigue siendo la suma de todas esas líneas
-individuales.
-
-SUB-CUENTAS BANCARIAS (elemento 104, cuentas corrientes):
-Cuando el balance mencione más de una cuenta corriente bancaria, usa una
-sub-cuenta de 5 dígitos DISTINTA para cada banco, según esta tabla fija:
-{tabla_bancos}
-Si el balance menciona "cuenta de detracciones" del Banco de la Nación (u otra
-cuenta corriente para fines específicos, distinta de la cuenta operativa),
-usa el código 10421 ("Cuentas corrientes para fines específicos"), NUNCA
-10411. Si el balance menciona un banco que no está en la tabla, usa 10411
-solo si es la única cuenta corriente del balance; si hay más de una y no
-está en la tabla, dale el siguiente código libre 104xx que exista en el
-PCGE adjunto, en el orden en que aparecen en el balance.
-
-SUB-CUENTAS DE MERCADERÍAS / EXISTENCIAS POR PRODUCTO (elemento 2011, Costo):
-Cuando el balance liste más de un producto/existencia distinto dentro de la
-misma partida de mercaderías (por ejemplo, "Queso Fresco", "Queso Suizo",
-"Queso Mantecoso", o "Leche Fresca", "Leche Descremada", "Suero"), asigna
-un código de 5 dígitos DISTINTO a cada producto, en el orden en que aparecen
-en el balance: el primero 20111, el segundo 20112, el tercero 20113, el
-cuarto 20115, y así sucesivamente usando los códigos 2011x disponibles en el
-PCGE adjunto (salta 20114, que en el PCGE ya significa "Valor razonable" y
-NO debe usarse para un producto). En cada línea, coloca el nombre real del
-producto (ej. "Queso Suizo") en "denominacion" y/o "concepto", para que quede
-identificable en el libro diario aunque el código PCGE diga "Costo".
-
-REGLA CRÍTICA — CAMPO "empresa" EN CADA ASIENTO:
-Si la monografía involucra más de una empresa (por ejemplo una fusión, donde
-cada empresa tiene su propio balance inicial), TODOS los asientos —incluido
-el de apertura y cada operación posterior— deben llevar el campo "empresa"
-con el nombre EXACTO de la empresa a la que pertenecen, tal como aparece en
-la monografía (ej. "Leche Fresca Cajamarquina S.R.L."). Nunca dejes "empresa"
-vacío en una práctica con más de una empresa, y nunca mezcles en un mismo
-asiento cuentas o saldos que pertenezcan a empresas distintas: cada operación
-de cada empresa es un asiento independiente con su propio campo "empresa".
-Si la práctica tiene una sola empresa, usa su nombre igualmente en todos los
-asientos (o cadena vacía si la monografía no la nombra).
 
 Eres el motor contable de TANA, una aplicación de contabilidad peruana.
 
@@ -2395,7 +2639,6 @@ Devuelve SOLO JSON válido con esta estructura:
       "fecha": "2026-04-02",
       "glosa": "...",
       "documento": "...",
-      "empresa": "...",
       "operacion_numero": 1,
       "requiere_revision": false,
       "observacion": "",
@@ -2864,140 +3107,6 @@ def corregir_retiro_socio(asientos, monografia_json):
     resultado.extend([dist, pago])
     return resultado
 
-
-def _es_asiento_apertura(asiento):
-    """
-    Identifica si un asiento es un asiento de apertura (balance inicial),
-    sin depender de que Gemini lo marque de forma consistente.
-
-    Señal principal: operacion_numero == 0 (así lo pide ASIENTOS_PROMPT:
-    "antes de la operación 1"). Señal de respaldo: la glosa/documento
-    menciona "apertura" o "balance inicial".
-    """
-    opnum = str(asiento.get("operacion_numero", "")).strip()
-    if opnum == "0":
-        return True
-    texto = " ".join(
-        str(asiento.get(k, "")) for k in ("glosa", "documento", "observacion")
-    ).lower()
-    return "apertura" in texto or "balance inicial" in texto
-
-
-def ordenar_lineas_asiento_apertura(asientos):
-    """
-    Corrige el orden de las líneas dentro de cada asiento de APERTURA para
-    que sigan siempre la convención contable: primero todas las cuentas de
-    Activo (elementos 1-3), luego Pasivo (elemento 4) y al final Patrimonio
-    (elemento 5) — en cada grupo, ascendente por código de cuenta.
-
-    Esto es una corrección DETERMINISTA en Python: no depende de que Gemini
-    "recuerde" el orden en cada respuesta, que es la causa raíz de que a
-    veces saliera mezclado (p. ej. 10, 50, 33, 42...).
-
-    No toca asientos de operaciones normales, solo los de apertura.
-    """
-    def orden_key(linea):
-        codigo = str(linea.get("codigo", "")).strip()
-        elemento = codigo[:1]
-        if elemento in ("1", "2", "3"):
-            grupo = 0  # Activo
-        elif elemento == "4":
-            grupo = 1  # Pasivo
-        elif elemento == "5":
-            grupo = 2  # Patrimonio
-        else:
-            grupo = 3  # cualquier otra cosa, al final, por seguridad
-        return (grupo, codigo)
-
-    for asiento in asientos:
-        if not isinstance(asiento, dict) or not _es_asiento_apertura(asiento):
-            continue
-        lineas = asiento.get("lineas", [])
-        if isinstance(lineas, list) and lineas:
-            asiento["lineas"] = sorted(
-                lineas,
-                key=lambda l: orden_key(l) if isinstance(l, dict) else (9, "")
-            )
-    return asientos
-
-
-def normalizar_empresa_por_asiento(asientos):
-    """
-    Rellena el campo "empresa" cuando Gemini lo dejó vacío, y devuelve
-    también la lista de empresas detectadas (para poder avisar al
-    estudiante si un mismo libro está mezclando más de una empresa,
-    algo que en una práctica de fusión NO debe ocurrir).
-
-    Estrategia:
-    1) Toma como "conocidas" las empresas que sí vinieron con el campo
-       "empresa" ya lleno.
-    2) Si además hay asientos de apertura cuya glosa dice
-       "apertura de <Empresa>", esa empresa también se considera conocida.
-    3) Para cada asiento sin "empresa", intenta encontrar el nombre de una
-       empresa conocida (o su última palabra significativa, p. ej.
-       "Chotanos" de "Productos Lácteos Chotanos S.A.C.") dentro de su
-       glosa/documento/observación.
-    4) Si solo hay UNA empresa conocida en toda la práctica, se la asigna
-       a cualquier asiento que siga sin "empresa".
-    5) Lo que no se pudo determinar queda con "empresa": "" (no se
-       inventa), para que quede visible en el Excel en vez de mezclarse
-       silenciosamente con otra empresa.
-    """
-    conocidas = []
-    for a in asientos:
-        if not isinstance(a, dict):
-            continue
-        emp = str(a.get("empresa", "")).strip()
-        if emp and emp not in conocidas:
-            conocidas.append(emp)
-
-    for a in asientos:
-        if not isinstance(a, dict):
-            continue
-        glosa = str(a.get("glosa", ""))
-        # Primero intentamos capturar el nombre completo incluyendo el sufijo
-        # societario habitual (S.A.C., S.R.L., S.A., S.A.A., E.I.R.L.), que
-        # contiene puntos y por eso no se puede cortar en el primer punto.
-        m = re.search(
-            r"apertura de ([A-ZÁÉÍÓÚÑ].+?(?:S\.A\.C\.|S\.R\.L\.|S\.A\.A\.|E\.I\.R\.L\.|S\.A\.))",
-            glosa, re.IGNORECASE,
-        )
-        if not m:
-            # Sin sufijo reconocible: cortamos en la primera coma o punto.
-            m = re.search(r"apertura de ([A-ZÁÉÍÓÚÑ][^,\.]{2,80})", glosa, re.IGNORECASE)
-        if m:
-            nombre = m.group(1).strip()
-            if nombre and nombre not in conocidas:
-                conocidas.append(nombre)
-
-    def palabra_clave(nombre):
-        # Última palabra "significativa" del razón social, ignorando
-        # sufijos societarios habituales (S.A.C., S.R.L., S.A., etc.)
-        tokens = [t for t in re.split(r"\s+", nombre) if t]
-        sufijos = {"s.a.c.", "s.r.l.", "s.a.", "s.a.a.", "e.i.r.l."}
-        tokens = [t for t in tokens if t.lower().strip(".") not in {s.strip(".") for s in sufijos}]
-        return tokens[-1] if tokens else nombre
-
-    for a in asientos:
-        if not isinstance(a, dict):
-            continue
-        if str(a.get("empresa", "")).strip():
-            continue
-        texto = " ".join(
-            str(a.get(k, "")) for k in ("glosa", "documento", "observacion")
-        ).lower()
-        asignado = ""
-        for nombre in conocidas:
-            if nombre.lower() in texto or palabra_clave(nombre).lower() in texto:
-                asignado = nombre
-                break
-        if not asignado and len(conocidas) == 1:
-            asignado = conocidas[0]
-        a["empresa"] = asignado
-
-    return asientos, conocidas
-
-
 def resolve_asientos_with_gemini():
     if not get_gemini_profiles():
         raise RuntimeError("No está configurada ninguna GEMINI_API_KEY en Streamlit Secrets.")
@@ -3012,13 +3121,6 @@ def resolve_asientos_with_gemini():
     prompt = (
         ASIENTOS_PROMPT
         .replace("{pcge}", json.dumps(pcge_5, ensure_ascii=False))
-        .replace(
-            "{tabla_bancos}",
-            "\n".join(
-                f"  {codigo} = {nombre}"
-                for codigo, nombre in sorted(TANA_BANCOS_NOMBRES.items())
-            ),
-        )
         .replace(
             "{operaciones}",
             json.dumps(
@@ -3070,11 +3172,36 @@ if "monografia_json" in st.session_state and "asientos_contables" not in st.sess
                     "TANA reconoció la práctica, pero no pudo identificar operaciones contables suficientes para generar asientos. "
                     "No se generará un Excel vacío."
                 )
+
+            # Apertura determinista: no dependemos de que Gemini invente el asiento
+            # ni de que cierre saldos contra 50. Si existe estado inicial, reemplazamos
+            # cualquier apertura generada por el modelo por la apertura construida desde
+            # el balance fuente, con activos primero y pasivos/patrimonio después.
+            apertura_det = _construir_asiento_apertura_determinista(st.session_state.get("monografia_json", {}))
+            if apertura_det:
+                asientos_sin_apertura = []
+                for a in asientos_generados:
+                    if not isinstance(a, dict):
+                        asientos_sin_apertura.append(a); continue
+                    texto_a = _normalizar_texto_contable(" ".join(str(a.get(k) or "") for k in ("glosa", "observacion", "documento")))
+                    if a.get("operacion_numero") in (0, "0") or any(k in texto_a for k in ("asiento de apertura", "reapertura", "saldo inicial", "balance inicial")):
+                        continue
+                    asientos_sin_apertura.append(a)
+                apertura_det["numero"] = 1
+                for idx, a in enumerate(asientos_sin_apertura, start=2):
+                    if isinstance(a, dict):
+                        a["numero"] = idx
+                asientos_generados = [apertura_det] + asientos_sin_apertura
+
+            # Normaliza bancos únicamente cuando el banco aparece explícitamente
+            # en la práctica. Así BCP, Nación, BBVA, etc. quedan con su 104xx propio.
+            operaciones_map = {str(op.get("numero")): op for op in (st.session_state.get("monografia_json", {}).get("operaciones", []) or []) if isinstance(op, dict)}
+            for a in asientos_generados:
+                if isinstance(a, dict):
+                    _aplicar_banco_a_lineas_asiento(a, operaciones_map.get(str(a.get("operacion_numero")), {}))
+
             asientos_generados = asegurar_cuenta_79_en_destinos(asientos_generados, pcge_map)
             asientos_generados = corregir_retiro_socio(asientos_generados, st.session_state.get("monografia_json", {}))
-            asientos_generados = ordenar_lineas_asiento_apertura(asientos_generados)
-            asientos_generados, empresas_detectadas = normalizar_empresa_por_asiento(asientos_generados)
-            st.session_state["tana_empresas_detectadas"] = empresas_detectadas
 
             # Normalización determinista: todos los importes operativos de TANA
             # quedan a 2 decimales antes de construir HT. Esto evita que pequeñas
@@ -3443,9 +3570,6 @@ def _aplicar_correccion_si_corresponde(pregunta):
             # claramente como NO VALIDADA hasta que el usuario la revise.
             nuevos = asegurar_cuenta_79_en_destinos(nuevos, pcge_map)
             nuevos = corregir_retiro_socio(nuevos, st.session_state.get("monografia_json", {}))
-            nuevos = ordenar_lineas_asiento_apertura(nuevos)
-            nuevos, empresas_detectadas = normalizar_empresa_por_asiento(nuevos)
-            st.session_state["tana_empresas_detectadas"] = empresas_detectadas
             valid, errors, warnings = validate_asientos({"asientos": nuevos}, pcge_map)
 
             if st.session_state.get("tana_excel_origen_bytes"):
@@ -3640,8 +3764,9 @@ GRAY = Font(name=FONT, size=9, color="808080")
 
 with open("pcge_data.json") as f:
     PCGE_DATA = json.load(f)
+_instalar_subdivisionarias_bancarias_en_pcge()
 
-print("Setup listo,", len(PCGE_DATA), "cuentas PCGE cargadas")
+print("Setup listo,", len(PCGE_DATA), "cuentas PCGE cargadas (incluidas subdivisionarias bancarias)")
 
 # ============================================================
 # HOJA: PCGE (catálogo oficial, tal cual tu plantilla)
@@ -4992,7 +5117,7 @@ ws9.freeze_panes='B5'
 # ============================================================
 if "asientos_contables" in st.session_state:
     ws_ac = wb.create_sheet("Asientos_Contables")
-    ac_headers = ["N° Asiento", "Fecha", "Glosa", "Documento", "Empresa", "Operación", "Código", "Denominación", "Concepto", "Debe S/", "Haber S/"]
+    ac_headers = ["N° Asiento", "Fecha", "Glosa", "Documento", "Operación", "Código", "Denominación", "Concepto", "Debe S/", "Haber S/"]
     for i, h in enumerate(ac_headers, start=1):
         ws_ac.cell(row=1, column=i, value=h)
     style_header(ws_ac, 1, 1, len(ac_headers))
@@ -5010,7 +5135,6 @@ if "asientos_contables" in st.session_state:
                 fecha = asiento.get("fecha", "")
                 glosa = asiento.get("glosa", "")
                 documento = asiento.get("documento", "")
-                empresa = asiento.get("empresa", "")
                 operacion = asiento.get("operacion_numero", "")
                 first_line = False
             else:
@@ -5018,20 +5142,19 @@ if "asientos_contables" in st.session_state:
                 fecha = ""
                 glosa = ""
                 documento = ""
-                empresa = ""
                 operacion = ""
 
             values = [
-                numero, fecha, glosa, documento, empresa, operacion, code,
+                numero, fecha, glosa, documento, operacion, code,
                 pcge_map_export.get(code, line.get("denominacion", "")),
                 line.get("concepto", ""), line.get("debe", 0), line.get("haber", 0)
             ]
             for cc, value in enumerate(values, start=1):
                 ws_ac.cell(row=rr, column=cc, value=value).font = BLACK
+            ws_ac.cell(row=rr, column=9).number_format = '#,##0.00;(#,##0.00);"-"'
             ws_ac.cell(row=rr, column=10).number_format = '#,##0.00;(#,##0.00);"-"'
-            ws_ac.cell(row=rr, column=11).number_format = '#,##0.00;(#,##0.00);"-"'
             rr += 1
-    autofit(ws_ac, [12, 13, 35, 18, 28, 12, 12, 48, 42, 14, 14])
+    autofit(ws_ac, [12, 13, 35, 18, 12, 12, 48, 42, 14, 14])
     ws_ac.freeze_panes = "A2"
 
 # ============================================================
