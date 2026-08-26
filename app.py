@@ -5189,21 +5189,31 @@ HT_DIF_ROW = r + 1
 ws6.cell(HT_DIF_ROW, 2, "DIFERENCIA / RESTA").font = BOLD
 ws6.cell(HT_DIF_ROW, 2).fill = PatternFill('solid', fgColor='FFF2CC')
 
-# Ajustes: deben cuadrar por sí mismos.
-ws6.cell(HT_DIF_ROW, 7, f'=ABS(G{HT_TOTAL_ROW}-H{HT_TOTAL_ROW})')
-ws6.cell(HT_DIF_ROW, 8, f'=ABS(G{HT_TOTAL_ROW}-H{HT_TOTAL_ROW})')
-# Saldos ajustados: misma lógica de diferencia visible.
-ws6.cell(HT_DIF_ROW, 9, f'=ABS(I{HT_TOTAL_ROW}-J{HT_TOTAL_ROW})')
-ws6.cell(HT_DIF_ROW, 10, f'=ABS(I{HT_TOTAL_ROW}-J{HT_TOTAL_ROW})')
+# DIFERENCIA DE CADA BLOQUE DE LA HT.
+# La fila de diferencia es INFORMATIVA: nunca se suma al TOTAL.
+# Se calcula directamente desde los TOTALES reales de la Hoja de Trabajo.
+for left_col, right_col in (
+    (3, 4),    # SUMA: Debe / Haber
+    (5, 6),    # SALDOS: Deudor / Acreedor
+    (7, 8),    # AJUSTES: Debe / Haber
+    (9, 10),   # SALDOS AJUSTADOS: Debe / Haber
+):
+    left = get_column_letter(left_col)
+    right = get_column_letter(right_col)
+    diff_formula = f'=ABS({left}{HT_TOTAL_ROW}-{right}{HT_TOTAL_ROW})'
+    ws6.cell(HT_DIF_ROW, left_col, diff_formula)
+    ws6.cell(HT_DIF_ROW, right_col, diff_formula)
 
-# Resultado por naturaleza: la diferencia se coloca en el lado menor.
+# Resultado por naturaleza: la diferencia se coloca EN EL LADO MENOR.
+# Haber > Debe = utilidad; Debe > Haber = pérdida.
 ws6.cell(HT_DIF_ROW, 11, f'=MAX(L{HT_TOTAL_ROW}-K{HT_TOTAL_ROW},0)')
 ws6.cell(HT_DIF_ROW, 12, f'=MAX(K{HT_TOTAL_ROW}-L{HT_TOTAL_ROW},0)')
-# Resultado por función.
+
+# Resultado por función: misma regla.
 ws6.cell(HT_DIF_ROW, 13, f'=MAX(N{HT_TOTAL_ROW}-M{HT_TOTAL_ROW},0)')
 ws6.cell(HT_DIF_ROW, 14, f'=MAX(M{HT_TOTAL_ROW}-N{HT_TOTAL_ROW},0)')
-# Estado de situación: si Activo > Pasivo+Patrimonio se muestra la diferencia
-# en el lado pasivo; si ocurre lo contrario, se muestra en activo.
+
+# Estado de situación: la diferencia se coloca en el lado menor.
 ws6.cell(HT_DIF_ROW, 15, f'=MAX(P{HT_TOTAL_ROW}-O{HT_TOTAL_ROW},0)')
 ws6.cell(HT_DIF_ROW, 16, f'=MAX(O{HT_TOTAL_ROW}-P{HT_TOTAL_ROW},0)')
 
@@ -5212,7 +5222,9 @@ for c in range(3, 19):
     ws6.cell(HT_DIF_ROW, c).fill = PatternFill('solid', fgColor='FFF2CC')
     ws6.cell(HT_DIF_ROW, c).font = BOLD
 
-# La línea de diferencia es informativa y no se vuelve a sumar al TOTAL.
+# Distribución / ajustes: diferencia visible entre ambos lados.
+# También es informativa y no se suma al TOTAL.
+ws6.cell(HT_DIF_ROW, 17, f'=ABS(Q{HT_TOTAL_ROW}-R{HT_TOTAL_ROW})')
 ws6.cell(HT_DIF_ROW, 18, f'=ABS(Q{HT_TOTAL_ROW}-R{HT_TOTAL_ROW})')
 
 ws6.freeze_panes = "A4"
@@ -5612,23 +5624,7 @@ ws7.freeze_panes = 'B5'
 ws9 = wb.create_sheet('ESF')
 _report_title(ws9, 'ESTADO DE SITUACIÓN FINANCIERA')
 
-# -----------------------------------------------------------------
-# ESF DETERMINISTA
-# -----------------------------------------------------------------
-# Regla general: el ESF se construye exclusivamente desde los saldos
-# ajustados de la HT (columnas I/J). No se toman importes de movimientos
-# sin ajustar ni se vuelven a calcular saldos con reglas distintas.
-#
-# Para que el ESF cuadre en cualquier práctica:
-#   • 1-3 normalmente son ACTIVO (Debe - Haber).
-#   • 4 normalmente es PASIVO (Haber - Debe).
-#   • 5 es PATRIMONIO (Haber - Debe).
-#   • 18, 19, 29 y 39 son cuentas correctoras de activo: su saldo acreedor
-#     reduce el activo y nunca debe aparecer como pasivo.
-#   • Si una cuenta 1-3 queda acreedora, se muestra como pasivo anómalo;
-#     si una cuenta 4 queda deudora, se muestra como activo anómalo.
-# Cada cuenta aparece una sola vez.
-
+# Encabezados, exactamente en el estilo de la plantilla suministrada.
 for cell, value in [('B4','ACTIVO'), ('D4','Notas'), ('E4','AÑO 2026'),
                     ('G4','PASIVO Y PATRIMONIO'), ('I4','Notas'), ('J4','AÑO 2026')]:
     ws9[cell] = value
@@ -5637,222 +5633,198 @@ for c in (2,4,5,7,9,10):
     ws9.cell(4,c).font = BOLD
     ws9.cell(4,c).alignment = Alignment(horizontal='center')
 
-
-def _saldo_ht_net(code):
-    """Saldo ajustado neto de una cuenta: Debe (I) - Haber (J)."""
-    return (
-        f'=SUMIF(HT!$A$4:$A${HT_LAST_ROW},"{code}",HT!$I$4:$I${HT_LAST_ROW})-'
-        f'SUMIF(HT!$A$4:$A${HT_LAST_ROW},"{code}",HT!$J$4:$J${HT_LAST_ROW})'
-    )
-
-
-def _saldo_ht_pasivo(code):
-    """Saldo acreedor positivo: Haber (J) - Debe (I)."""
-    return (
-        f'=SUMIF(HT!$A$4:$A${HT_LAST_ROW},"{code}",HT!$J$4:$J${HT_LAST_ROW})-'
-        f'SUMIF(HT!$A$4:$A${HT_LAST_ROW},"{code}",HT!$I$4:$I${HT_LAST_ROW})'
-    )
-
-
-def _saldo_ht_deudor(code):
-    """Saldo deudor positivo: Debe (I) - Haber (J)."""
-    return _saldo_ht_net(code)
-
-
+# Saldos de cada cuenta desde la HT. Se usa SALDO AJUSTADO (I/J) para las
+# cuentas de balance; si por alguna razón estuviera vacío, se conserva el
+# saldo deudor/acreedor de la HT (O/P).
 def _es_balance_real(code):
-    return bool(code) and str(code)[:1] in {'1','2','3','4','5'}
+    return bool(code) and code[:1] in {'1','2','3','4','5'}
 
+def _saldo_deudor_esf(code):
+    return f'=IF(SUMIF(HT!$A$4:$A${HT_LAST_ROW},"{code}",HT!$I$4:$I${HT_LAST_ROW})<>0,' \
+           f'SUMIF(HT!$A$4:$A${HT_LAST_ROW},"{code}",HT!$I$4:$I${HT_LAST_ROW}),' \
+           f'SUMIF(HT!$A$4:$A${HT_LAST_ROW},"{code}",HT!$O$4:$O${HT_LAST_ROW}))'
 
-def _es_correctora_activo(code):
-    # PCGE: 18, 19, 29 y 39 son cuentas correctoras/contra-activo.
-    # Se muestran dentro del activo con signo negativo cuando tienen saldo
-    # acreedor, en vez de convertirlas erróneamente en pasivos.
-    return str(code).startswith(('18','19','29','39'))
+def _saldo_acreedor_esf(code):
+    return f'=IF(SUMIF(HT!$A$4:$A${HT_LAST_ROW},"{code}",HT!$J$4:$J${HT_LAST_ROW})<>0,' \
+           f'SUMIF(HT!$A$4:$A${HT_LAST_ROW},"{code}",HT!$J$4:$J${HT_LAST_ROW}),' \
+           f'SUMIF(HT!$A$4:$A${HT_LAST_ROW},"{code}",HT!$P$4:$P${HT_LAST_ROW}))'
 
+# Para decidir el lado en Excel sin depender de la evaluación previa del
+# archivo, usamos los saldos ya consolidados en Python (movimientos). Los
+# valores son los mismos que alimentan la HT. Esto permite que cada cuenta
+# aparezca una sola vez y evita filas de códigos "sueltos" fuera del cuadro.
 
-cuentas_balance = sorted({str(c).strip() for c in cuentas_reporte if _es_balance_real(str(c).strip())})
+def _saldo_python(code):
+    rec = movimientos.get(code, {'debe':0.0,'haber':0.0})
+    return float(rec.get('debe',0) or 0) - float(rec.get('haber',0) or 0)
 
-# El saldo usado para decidir el lado se toma de los movimientos ya ajustados
-# disponibles en Python solo como criterio de clasificación; el importe que
-# finalmente queda en Excel siempre se calcula con I/J de HT.
-def _saldo_python_esf(code):
-    # movimientos contiene el saldo contable antes de presentación. Para
-    # evitar depender de esa estructura en casos de ajustes, usamos el mismo
-    # criterio neto cuando existen columnas ajustadas en la HT generada.
-    rec = movimientos.get(code, {'debe': 0.0, 'haber': 0.0})
-    return float(rec.get('debe', 0) or 0) - float(rec.get('haber', 0) or 0)
+# Cuentas de balance con saldo no nulo. Las cuentas con saldo cero también
+# se conservan si fueron utilizadas: ninguna cuenta utilizada desaparece.
+cuentas_balance = [c for c in cuentas_reporte if _es_balance_real(c)]
 
+# Orden lógico: activos 1-3, luego saldos deudores anómalos de 4-5;
+# pasivos 4, luego patrimonio 5.
 activos = []
-correctoras = []
 activos_anomalos = []
 pasivos = []
 patrimonio = []
 
 for code in cuentas_balance:
-    saldo = _saldo_python_esf(code)
-    if abs(saldo) < 0.005:
-        # Conservamos cuentas utilizadas solo si tienen saldo distinto de cero
-        # en la HT; la clasificación visual se hará por el saldo real.
-        continue
-
-    if _es_correctora_activo(code):
-        # Solo se trata como correctora cuando es una cuenta de balance.
-        correctoras.append(code)
-    elif code.startswith('5'):
+    saldo = _saldo_python(code)
+    if code.startswith('5'):
         patrimonio.append(code)
-    elif code.startswith(('1','2','3')):
-        if saldo >= 0:
+    elif saldo >= 0:
+        if code.startswith(('1','2','3')):
             activos.append(code)
+        elif code.startswith('4'):
+            # Cuenta de pasivo con saldo deudor: se presenta como activo,
+            # pero separada como "otras cuentas de activo".
+            activos_anomalos.append(code)
         else:
-            pasivos.append(code)       # saldo acreedor anómalo
-    elif code.startswith('4'):
-        if saldo >= 0:
+            activos.append(code)
+    else:
+        if code.startswith(('1','2','3')):
+            # Cuenta normalmente activa con saldo acreedor: se presenta como
+            # pasivo, sin duplicarla.
+            pasivos.append(code)
+        elif code.startswith('4'):
             pasivos.append(code)
         else:
-            activos_anomalos.append(code)  # saldo deudor anómalo
+            pasivos.append(code)
 
 # --------------------------- ACTIVO ---------------------------
 r = 5
 ws9.cell(r,2,'ACTIVO CORRIENTE').font = BOLD
 r += 1
-ac_rows = []
+ac_rows=[]
 
-# Activo corriente: elementos 1 y 2, más cuentas 4 anómalamente deudoras.
+# Elementos 1-2 se presentan como activo corriente, salvo cuentas 3 (PPE,
+# etc.) que corresponden al no corriente. La cuenta 40 con saldo deudor se
+# considera activo corriente (crédito fiscal).
 for code in activos:
     if code.startswith('3'):
         continue
-    desc = pcge_map.get(code, '') or f'Cuenta {code}'
+    desc = pcge_map.get(code, '')
+    if not desc:
+        desc = f'Cuenta {code}'
     _write_label(ws9, r, desc)
-    _set_report_value(ws9, r, 5, _saldo_ht_deudor(code))
+    _set_report_value(ws9, r, 5, _saldo_deudor_esf(code))
     ac_rows.append(r)
     r += 1
 for code in activos_anomalos:
     desc = pcge_map.get(code, '') or f'Cuenta {code}'
     _write_label(ws9, r, desc)
-    _set_report_value(ws9, r, 5, _saldo_ht_deudor(code))
-    ac_rows.append(r)
-    r += 1
-
-# Correctoras de activo de cuentas 18/19/29 se presentan en corriente
-# como importes negativos. Si alguna correctora corresponde a PPE (39),
-# se lleva al no corriente.
-for code in correctoras:
-    if code.startswith('39'):
-        continue
-    desc = pcge_map.get(code, '') or f'Cuenta {code}'
-    _write_label(ws9, r, desc)
-    _set_report_value(ws9, r, 5, f'=-({_saldo_ht_pasivo(code)[1:]})')
+    _set_report_value(ws9, r, 5, _saldo_deudor_esf(code))
     ac_rows.append(r)
     r += 1
 
 ws9.cell(r,2,'TOTAL ACTIVO CORRIENTE').font = BOLD
 _set_report_value(ws9, r, 5, '=' + '+'.join(f'E{x}' for x in ac_rows) if ac_rows else '=0', True)
-TOTAL_AC_ROW = r
+TOTAL_AC_ROW=r
 r += 2
 
 ws9.cell(r,2,'ACTIVO NO CORRIENTE').font = BOLD
 r += 1
-anc_rows = []
+anc_rows=[]
 for code in activos:
     if not code.startswith('3'):
         continue
     desc = pcge_map.get(code, '') or f'Cuenta {code}'
     _write_label(ws9, r, desc)
-    _set_report_value(ws9, r, 5, _saldo_ht_deudor(code))
-    anc_rows.append(r)
-    r += 1
-
-# Depreciación acumulada 39 y otras correctoras de no corriente reducen el
-# valor bruto del activo, por lo que se expresan con signo negativo.
-for code in correctoras:
-    if not code.startswith('39'):
-        continue
-    desc = pcge_map.get(code, '') or f'Cuenta {code}'
-    _write_label(ws9, r, desc)
-    _set_report_value(ws9, r, 5, f'=-({_saldo_ht_pasivo(code)[1:]})')
+    _set_report_value(ws9, r, 5, _saldo_deudor_esf(code))
     anc_rows.append(r)
     r += 1
 
 ws9.cell(r,2,'TOTAL ACTIVO NO CORRIENTE').font = BOLD
 _set_report_value(ws9, r, 5, '=' + '+'.join(f'E{x}' for x in anc_rows) if anc_rows else '=0', True)
-TOTAL_ANC_ROW = r
+TOTAL_ANC_ROW=r
 r += 1
 
 ws9.cell(r,2,'TOTAL ACTIVO').font = BOLD
 _set_report_value(ws9, r, 5, f'=E{TOTAL_AC_ROW}+E{TOTAL_ANC_ROW}', True)
-TOTAL_ACTIVO_ROW = r
+TOTAL_ACTIVO_ROW=r
 
 # ---------------------- PASIVO / PATRIMONIO ----------------------
-r2 = 5
-ws9.cell(r2,7,'PASIVO').font = BOLD
+r2=5
+ws9.cell(r2,7,'PASIVO').font=BOLD
 r2 += 1
-ws9.cell(r2,7,'PASIVO CORRIENTE').font = BOLD
+ws9.cell(r2,7,'PASIVO CORRIENTE').font=BOLD
 r2 += 1
-pc_rows = []
+pc_rows=[]
+
+# Pasivos corrientes: cuentas 4 y saldos acreedores de cuentas 1-3.
+# La clasificación se mantiene dinámica y no se inventan cuentas.
 for code in pasivos:
+    # Las obligaciones financieras que comienzan en 45 se mantienen en
+    # corriente en esta plantilla, tal como el modelo del usuario.
     desc = pcge_map.get(code, '') or f'Cuenta {code}'
     _write_label(ws9, r2, desc)
-    # Si es una cuenta 1-3 con saldo acreedor anómalo, Haber-Debe también es
-    # el importe correcto que debe mostrarse en pasivo.
-    _set_report_value(ws9, r2, 10, _saldo_ht_pasivo(code))
+    _set_report_value(ws9, r2, 10, _saldo_acreedor_esf(code))
     pc_rows.append(r2)
     r2 += 1
 
-ws9.cell(r2,7,'TOTAL PASIVO CORRIENTE').font = BOLD
+ws9.cell(r2,7,'TOTAL PASIVO CORRIENTE').font=BOLD
 _set_report_value(ws9, r2, 10, '=' + '+'.join(f'J{x}' for x in pc_rows) if pc_rows else '=0', True)
-TOTAL_PC_ROW = r2
+TOTAL_PC_ROW=r2
 r2 += 2
 
-ws9.cell(r2,7,'PASIVO NO CORRIENTE').font = BOLD
+# Pasivo no corriente: queda preparado para cuentas que explícitamente
+# correspondan a obligaciones no corrientes. Si el catálogo/monografía no
+# aporta una clasificación de vencimiento, no se duplica ninguna cuenta.
+ws9.cell(r2,7,'PASIVO NO CORRIENTE').font=BOLD
 r2 += 1
-pnc_rows = []
-# La práctica puede indicar vencimientos; si no hay información suficiente,
-# no se duplica ninguna cuenta. El total no corriente queda en cero.
-ws9.cell(r2,7,'Obligaciones financieras y otras').font = BLACK
-_set_report_value(ws9, r2, 10, '=0')
-TOTAL_PNC_ROW = r2
+pnc_rows=[]
+# Se reserva la clasificación de cuentas 45/46/47 con información de
+# vencimiento futura. En esta versión no se fuerza ninguna cuenta a PNC;
+# todas las cuentas existentes se muestran una sola vez en pasivo corriente,
+# siguiendo el modelo suministrado.
+ws9.cell(r2,7,'Obligaciones financieras y otras').font=BLACK
+_set_report_value(ws9,r2,10,'=0')
+TOTAL_PNC_ROW=r2
 r2 += 1
 
-ws9.cell(r2,7,'TOTAL PASIVO').font = BOLD
-_set_report_value(ws9, r2, 10, f'=J{TOTAL_PC_ROW}+J{TOTAL_PNC_ROW}', True)
-TOTAL_PASIVO_ROW = r2
+ws9.cell(r2,7,'TOTAL PASIVO').font=BOLD
+_set_report_value(ws9,r2,10,f'=J{TOTAL_PC_ROW}+J{TOTAL_PNC_ROW}',True)
+TOTAL_PASIVO_ROW=r2
 r2 += 2
 
-ws9.cell(r2,7,'PATRIMONIO NETO').font = BOLD
+ws9.cell(r2,7,'PATRIMONIO NETO').font=BOLD
 r2 += 1
-pat_rows = []
+pat_rows=[]
 for code in patrimonio:
-    desc = pcge_map.get(code, '') or f'Cuenta {code}'
-    _write_label(ws9, r2, desc)
-    # Patrimonio positivo si el saldo es acreedor; si es deudor reduce el PN.
-    _set_report_value(ws9, r2, 10, _saldo_ht_pasivo(code))
+    desc=pcge_map.get(code,'') or f'Cuenta {code}'
+    _write_label(ws9,r2,desc)
+    # Patrimonio: saldo acreedor aumenta; saldo deudor disminuye.
+    _set_report_value(ws9,r2,10,f'={_saldo_acreedor_esf(code)[1:]}-{_saldo_deudor_esf(code)[1:]}')
     pat_rows.append(r2)
     r2 += 1
 
-ws9.cell(r2,7,'Resultado del ejercicio').font = BLACK
-_set_report_value(ws9, r2, 10, f'=ERF!E{resultado_erf_row}')
+ws9.cell(r2,7,'Resultado del ejercicio').font=BLACK
+# El ESF toma el mismo resultado final del ERF; ERN mantiene un control cruzado.
+_set_report_value(ws9,r2,10,f'=ERF!E{resultado_erf_row}')
 pat_rows.append(r2)
 r2 += 1
 
-ws9.cell(r2,7,'TOTAL PATRIMONIO NETO').font = BOLD
-_set_report_value(ws9, r2, 10, '=' + '+'.join(f'J{x}' for x in pat_rows) if pat_rows else '=0', True)
-TOTAL_PATRIMONIO_ROW = r2
+ws9.cell(r2,7,'TOTAL PATRIMONIO NETO').font=BOLD
+_set_report_value(ws9,r2,10,'=' + '+'.join(f'J{x}' for x in pat_rows) if pat_rows else '=0',True)
+TOTAL_PATRIMONIO_ROW=r2
 r2 += 1
 
-ws9.cell(r2,7,'TOTAL PASIVO Y PATRIMONIO NETO').font = BOLD
-_set_report_value(ws9, r2, 10, f'=J{TOTAL_PASIVO_ROW}+J{TOTAL_PATRIMONIO_ROW}', True)
-TOTAL_PYPN_ROW = r2
+ws9.cell(r2,7,'TOTAL PASIVO Y PATRIMONIO NETO').font=BOLD
+_set_report_value(ws9,r2,10,f'=J{TOTAL_PASIVO_ROW}+J{TOTAL_PATRIMONIO_ROW}',True)
+TOTAL_PYPN_ROW=r2
 r2 += 1
 
-control_esf_row = r2
-ws9.cell(r2,7,'DIFERENCIA: ACTIVO - (PASIVO + PATRIMONIO)').font = BOLD
-_set_report_value(ws9, r2, 10, f'=E{TOTAL_ACTIVO_ROW}-J{TOTAL_PYPN_ROW}', True)
-ws9.cell(r2,11, f'=IF(ABS(J{r2})<0.01,"CUADRADO","REVISAR")').font = BOLD
-_hide_control_row(ws9, control_esf_row)
+# Control: la diferencia debe ser exactamente cero.
+control_esf_row=r2
+ws9.cell(r2,7,'DIFERENCIA: ACTIVO - (PASIVO + PATRIMONIO)').font=BOLD
+_set_report_value(ws9,r2,10,f'=E{TOTAL_ACTIVO_ROW}-J{TOTAL_PYPN_ROW}',True)
+ws9.cell(r2,11,f'=IF(ABS(J{r2})<0.01,"CUADRADO","REVISAR")').font=BOLD
+_hide_control_row(ws9,control_esf_row)
 
 for col,width in {'B':52,'C':3,'D':9,'E':18,'G':52,'H':3,'I':9,'J':18,'K':14}.items():
-    ws9.column_dimensions[col].width = width
-ws9.freeze_panes = 'B5'
+    ws9.column_dimensions[col].width=width
+ws9.freeze_panes='B5'
 
 # ============================================================
 # FIN DE ESTADOS FINANCIEROS
