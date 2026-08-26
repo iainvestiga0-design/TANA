@@ -1,7 +1,6 @@
 import json
 import ast
 import hashlib
-import secrets
 
 # --- TANA: filtro de diagnóstico preciso ---
 def tana_filtrar_diagnostico_preciso(diagnostico):
@@ -173,8 +172,17 @@ def _supabase_request(method, path, payload=None, params=None):
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
         with urllib.request.urlopen(req, timeout=15) as response:
             raw = response.read().decode("utf-8")
+            st.session_state["_tana_last_supabase_error"] = None
             return json.loads(raw) if raw else []
-    except Exception:
+    except urllib.error.HTTPError as e:
+        try:
+            detail = e.read().decode("utf-8")
+        except Exception:
+            detail = str(e)
+        st.session_state["_tana_last_supabase_error"] = f"HTTP {e.code} en {method} {path}: {detail}"
+        return None
+    except Exception as e:
+        st.session_state["_tana_last_supabase_error"] = f"{type(e).__name__} en {method} {path}: {e}"
         return None
 
 
@@ -211,7 +219,7 @@ def _load_user_registry():
         rows = _supabase_request(
             "GET",
             "tana_users",
-            params={"select": "email,role,first_seen,last_seen,visits", "order": "last_seen.desc"},
+            params={"select": "email,role,first_seen,last_seen,visits,access_expires_at", "order": "last_seen.desc"},
         )
         if isinstance(rows, list):
             return rows
@@ -227,6 +235,123 @@ def _upsert_supabase_user(user):
         params={"on_conflict": "email"},
     )
     return isinstance(rows, list)
+
+
+def _get_student_access_expires(email):
+    """Obtiene la fecha de vencimiento del pase de 24 horas."""
+    if not email or not _supabase_enabled():
+        return None
+    rows = _supabase_request(
+        "GET",
+        "tana_access",
+        params={"select": "access_expires_at", "email": f"eq.{email}", "limit": "1"},
+    )
+    if isinstance(rows, list) and rows:
+        value = rows[0].get("access_expires_at")
+        if value:
+            try:
+                return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            except Exception:
+                return None
+    return None
+
+
+def _generate_payment_code():
+    """Genera un código temporal único para el pago de TANA."""
+    import secrets
+    import string
+    alphabet = string.digits
+    for _ in range(10):
+        code = "TANA-" + "".join(secrets.choice(alphabet) for _ in range(6))
+        if _supabase_enabled():
+            rows = _supabase_request(
+                "GET", "tana_payment_codes",
+                params={"select": "id", "code": f"eq.{code}", "limit": "1"},
+            )
+            if isinstance(rows, list) and rows:
+                continue
+        return code
+    return "TANA-" + secrets.token_hex(4).upper()[:6]
+
+
+def _create_payment_code(email):
+    if not email or not _supabase_enabled():
+        return None
+    code = _generate_payment_code()
+    now = datetime.now(timezone.utc)
+    expires = now + timedelta(minutes=15)
+    rows = _supabase_request(
+        "POST",
+        "tana_payment_codes",
+        payload={
+            "email": email,
+            "code": code,
+            "amount": 1.00,
+            "status": "pending",
+            "expires_at": expires.isoformat(),
+        },
+    )
+    return code if isinstance(rows, list) and rows else None
+
+
+def _payment_confirmed_for_code(email, code):
+    if not email or not code or not _supabase_enabled():
+        return None
+    rows = _supabase_request(
+        "GET",
+        "tana_payments",
+        params={
+            "select": "id,amount,status,paid_at,payment_code",
+            "email": f"eq.{email}",
+            "payment_code": f"eq.{code}",
+            "status": "eq.confirmed",
+            "amount": "eq.1.00",
+            "limit": "1",
+        },
+    )
+    return rows[0] if isinstance(rows, list) and rows else None
+
+
+def _activate_access_24h(email):
+    if not email or not _supabase_enabled():
+        return None
+    rows = _supabase_request(
+        "GET", "tana_access",
+        params={"select": "access_expires_at", "email": f"eq.{email}", "limit": "1"},
+    )
+    current = None
+    if isinstance(rows, list) and rows and rows[0].get("access_expires_at"):
+        try:
+            current = datetime.fromisoformat(str(rows[0]["access_expires_at"]).replace("Z", "+00:00"))
+        except Exception:
+            current = None
+    base = current if current and current > datetime.now(timezone.utc) else datetime.now(timezone.utc)
+    expires = base + timedelta(hours=24)
+    existing = _supabase_request(
+        "GET", "tana_access",
+        params={"select": "email", "email": f"eq.{email}", "limit": "1"},
+    )
+    payload = {"email": email, "access_expires_at": expires.isoformat(), "updated_at": datetime.now(timezone.utc).isoformat()}
+    if isinstance(existing, list) and existing:
+        rows = _supabase_request("PATCH", "tana_access", payload=payload, params={"email": f"eq.{email}"})
+    else:
+        rows = _supabase_request("POST", "tana_access", payload=payload)
+    return expires if isinstance(rows, list) else None
+
+
+def _mark_payment_code_paid(code, payment_id=None):
+    if not code or not _supabase_enabled():
+        return False
+    payload = {"status": "paid", "paid_at": datetime.now(timezone.utc).isoformat()}
+    if payment_id:
+        payload["payment_id"] = payment_id
+    rows = _supabase_request("PATCH", "tana_payment_codes", payload=payload, params={"code": f"eq.{code}", "status": "eq.pending"})
+    return isinstance(rows, list) and bool(rows)
+
+
+def _student_has_active_access(email):
+    expires = _get_student_access_expires(email)
+    return bool(expires and expires > datetime.now(timezone.utc))
 
 
 def _load_user_activity(email, limit=20):
@@ -267,6 +392,7 @@ def _save_user_registry(data):
                 "first_seen": user.get("first_seen"),
                 "last_seen": user.get("last_seen"),
                 "visits": int(user.get("visits", 0) or 0),
+                "access_expires_at": user.get("access_expires_at"),
             }
             if not _upsert_supabase_user(payload):
                 ok = False
@@ -377,252 +503,6 @@ def _register_current_user():
 
 registered_users = _register_current_user()
 
-# ============================================================
-# TANA — ACCESO DE 24 HORAS / PASE S/1 (PASO 2)
-# ============================================================
-# En este paso TANA queda preparado para:
-#   1) generar un código único TANA-XXXXXX;
-#   2) guardarlo en tana_payment_codes;
-#   3) consultar tana_payments cuando el lector Android registre el pago;
-#   4) activar 24 horas en tana_users.access_expires_at.
-#
-# IMPORTANTE: el lector Android/Yape todavía NO forma parte de este paso.
-# La activación automática quedará conectada en el paso siguiente.
-
-PAYMENT_AMOUNT = Decimal("1.00")
-PAYMENT_CODE_MINUTES = 15
-
-
-def _supabase_quote(value):
-    """Valor seguro para filtros simples de PostgREST."""
-    return str(value or "").replace("\\", "\\\\").replace(",", "\\,")
-
-
-def _get_user_access_expiry(email):
-    email = str(email or "").strip().lower()
-    if not email or not _supabase_enabled():
-        return None
-    rows = _supabase_request(
-        "GET",
-        "tana_users",
-        params={
-            "select": "email,access_expires_at",
-            "email": f"eq.{email}",
-            "limit": "1",
-        },
-    )
-    if not isinstance(rows, list) or not rows:
-        return None
-    raw = rows[0].get("access_expires_at")
-    if not raw:
-        return None
-    try:
-        value = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
-        return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
-    except Exception:
-        return None
-
-
-def _set_user_access_expiry(email, expires_at):
-    email = str(email or "").strip().lower()
-    if not email or not _supabase_enabled():
-        return False
-    rows = _supabase_request(
-        "PATCH",
-        "tana_users",
-        payload={
-            "access_expires_at": expires_at.astimezone(timezone.utc).isoformat(timespec="seconds")
-        },
-        params={"email": f"eq.{email}"},
-    )
-    return isinstance(rows, list) and bool(rows)
-
-
-def _has_active_access(email):
-    if user_role == "Creador":
-        return True
-    expiry = _get_user_access_expiry(email)
-    return bool(expiry and expiry > datetime.now(timezone.utc))
-
-
-def _new_tana_payment_code():
-    """Genera un código corto y verifica que no esté ya registrado."""
-    if not _supabase_enabled():
-        return None
-    for _ in range(20):
-        code = f"TANA-{secrets.randbelow(1000000):06d}"
-        existing = _supabase_request(
-            "GET",
-            "tana_payment_codes",
-            params={"select": "id", "code": f"eq.{code}", "limit": "1"},
-        )
-        if isinstance(existing, list) and not existing:
-            return code
-    return None
-
-
-def _create_tana_payment_code(email):
-    email = str(email or "").strip().lower()
-    code = _new_tana_payment_code()
-    if not code:
-        return None
-    now = datetime.now(timezone.utc)
-    expires_at = now + timedelta(minutes=PAYMENT_CODE_MINUTES)
-    rows = _supabase_request(
-        "POST",
-        "tana_payment_codes",
-        payload={
-            "email": email,
-            "code": code,
-            "amount": float(PAYMENT_AMOUNT),
-            "status": "pending",
-            "expires_at": expires_at.isoformat(timespec="seconds"),
-        },
-    )
-    if not isinstance(rows, list) or not rows:
-        return None
-    return {"code": code, "expires_at": expires_at}
-
-
-def _find_confirmed_payment(code, email):
-    if not _supabase_enabled() or not code or not email:
-        return None
-    rows = _supabase_request(
-        "GET",
-        "tana_payments",
-        params={
-            "select": "id,email,amount,currency,payment_method,transaction_id,payment_message,payment_code,status,paid_at,notification_id",
-            "email": f"eq.{email}",
-            "payment_code": f"eq.{code}",
-            "status": "eq.confirmed",
-            "amount": "eq.1.00",
-            "limit": "1",
-        },
-    )
-    return rows[0] if isinstance(rows, list) and rows else None
-
-
-def _activate_access_from_payment(code, email):
-    """Activa exactamente un pase de 24h para un código pendiente confirmado."""
-    if not _supabase_enabled():
-        return None
-
-    code_rows = _supabase_request(
-        "GET",
-        "tana_payment_codes",
-        params={
-            "select": "id,email,code,amount,status,expires_at,paid_at,payment_id",
-            "email": f"eq.{email}",
-            "code": f"eq.{code}",
-            "limit": "1",
-        },
-    )
-    if not isinstance(code_rows, list) or not code_rows:
-        return None
-    code_row = code_rows[0]
-
-    if str(code_row.get("status", "")) == "paid":
-        return _get_user_access_expiry(email)
-    if str(code_row.get("status", "")) != "pending":
-        return None
-
-    try:
-        expires = datetime.fromisoformat(str(code_row.get("expires_at", "")).replace("Z", "+00:00"))
-        if expires.tzinfo is None:
-            expires = expires.replace(tzinfo=timezone.utc)
-    except Exception:
-        return None
-    if expires <= datetime.now(timezone.utc):
-        _supabase_request(
-            "PATCH",
-            "tana_payment_codes",
-            payload={"status": "expired"},
-            params={"id": f"eq.{code_row['id']}"},
-        )
-        return None
-
-    payment = _find_confirmed_payment(code, email)
-    if not payment:
-        return None
-
-    # Marcamos el código como pagado antes de conceder el acceso para
-    # impedir que una misma confirmación se procese repetidamente.
-    patched = _supabase_request(
-        "PATCH",
-        "tana_payment_codes",
-        payload={
-            "status": "paid",
-            "paid_at": payment.get("paid_at") or datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "payment_id": payment.get("id"),
-        },
-        params={"id": f"eq.{code_row['id']}", "status": "eq.pending"},
-    )
-    if not isinstance(patched, list) or not patched:
-        return _get_user_access_expiry(email)
-
-    current = _get_user_access_expiry(email)
-    base = current if current and current > datetime.now(timezone.utc) else datetime.now(timezone.utc)
-    new_expiry = base + timedelta(hours=24)
-    if not _set_user_access_expiry(email, new_expiry):
-        return None
-    return new_expiry
-
-
-def _render_payment_gate():
-    """Muestra el pago S/1 cuando el estudiante todavía no tiene acceso."""
-    if user_role == "Creador" or _has_active_access(user_email):
-        return True
-
-    st.markdown("## 🔒 Pase TANA — 24 horas")
-    st.info("Tu acceso de estudiante está vencido o todavía no has comprado un pase.")
-    st.markdown("### S/ 1.00")
-    st.caption("El código generado aquí se utilizará después con el lector de notificaciones de Yape.")
-
-    current = st.session_state.get("tana_payment_code_data")
-    if current:
-        try:
-            code_expiry = current["expires_at"]
-            if code_expiry <= datetime.now(timezone.utc):
-                current = None
-                st.session_state.pop("tana_payment_code_data", None)
-        except Exception:
-            current = None
-            st.session_state.pop("tana_payment_code_data", None)
-
-    if not current:
-        if st.button("💳 Generar código de pago — S/1.00", type="primary", use_container_width=True):
-            with st.spinner("Generando código..."):
-                current = _create_tana_payment_code(user_email)
-            if current:
-                st.session_state["tana_payment_code_data"] = current
-                st.rerun()
-            st.error("No se pudo generar el código. Verifica que los Secrets de Supabase estén configurados.")
-        st.stop()
-
-    code = current["code"]
-    expiry = current["expires_at"]
-    st.success(f"Código de pago: **{code}**")
-    st.markdown(
-        f"**Paga S/1.00 por Yape y coloca `{code}` en el mensaje/nota del pago.**"
-    )
-    st.caption(f"Este código vence a las {expiry.astimezone().strftime('%H:%M')} (hora local).")
-
-    if st.button("🔄 Verificar pago", use_container_width=True):
-        with st.spinner("Verificando pago..."):
-            new_expiry = _activate_access_from_payment(code, user_email)
-        if new_expiry:
-            st.success(f"✅ Pago confirmado. Tu acceso está activo hasta {new_expiry.astimezone().strftime('%d/%m/%Y %H:%M')}.")
-            st.session_state.pop("tana_payment_code_data", None)
-            st.rerun()
-        else:
-            st.warning("Todavía no encontramos un pago confirmado para este código.")
-    st.stop()
-
-
-# En este paso se conecta el acceso de estudiante con Supabase.
-# El Creador conserva acceso ilimitado.
-_render_payment_gate()
-
 # Identificación visible, breve y automática. Nunca mostramos el correo completo.
 if user_role == "Creador":
     role_label = "👤 Creador"
@@ -643,6 +523,64 @@ st.markdown(
 # El cierre de sesión se ofrece en la barra lateral sin alterar el flujo contable.
 with st.sidebar:
     st.button("Cerrar sesión", on_click=st.logout, use_container_width=True)
+
+
+# ============================================================
+# CONTROL DE ACCESO DEL ESTUDIANTE — PASE DE 24 HORAS
+# ============================================================
+# El creador entra siempre. Los estudiantes necesitan un pase vigente.
+if user_role != "Creador":
+    access_expires = _get_student_access_expires(user_email)
+    access_active = bool(access_expires and access_expires > datetime.now(timezone.utc))
+
+    if not access_active:
+        st.markdown("## 🔒 Pase TANA de 24 horas")
+        st.info("Tu acceso de estudiante requiere un pase de S/1.00 por 24 horas.")
+
+        if "tana_payment_code" not in st.session_state:
+            st.session_state.tana_payment_code = None
+        if "tana_payment_code_created_at" not in st.session_state:
+            st.session_state.tana_payment_code_created_at = None
+
+        if st.session_state.tana_payment_code:
+            st.markdown(f"### Código de pago: `{st.session_state.tana_payment_code}`")
+            st.write("1. Abre Yape.")
+            st.write("2. Envía exactamente **S/1.00**.")
+            st.write(f"3. En el mensaje/nota de Yape escribe exactamente **{st.session_state.tana_payment_code}**.")
+            st.caption("El código vence 15 minutos después de ser generado.")
+
+            if st.button("🔄 Verificar pago", use_container_width=True, type="primary"):
+                payment = _payment_confirmed_for_code(user_email, st.session_state.tana_payment_code)
+                if payment:
+                    _mark_payment_code_paid(st.session_state.tana_payment_code, payment.get("id"))
+                    expires = _activate_access_24h(user_email)
+                    if expires:
+                        st.success(f"✅ Pago confirmado. Tu acceso está activo hasta {expires.astimezone().strftime('%d/%m/%Y %H:%M') }.")
+                        st.session_state.tana_payment_code = None
+                        st.rerun()
+                    else:
+                        st.error("El pago fue encontrado, pero no se pudo activar el acceso. Revisa la configuración de Supabase.")
+                else:
+                    st.warning("⏳ Todavía no encontramos un pago confirmado de S/1.00 para este código.")
+
+            if st.button("♻️ Generar otro código", use_container_width=True):
+                st.session_state.tana_payment_code = _create_payment_code(user_email)
+                st.session_state.tana_payment_code_created_at = datetime.now(timezone.utc).isoformat()
+                st.rerun()
+        else:
+            if st.button("💳 Comprar pase 24h — S/1.00", use_container_width=True, type="primary"):
+                code = _create_payment_code(user_email)
+                if code:
+                    st.session_state.tana_payment_code = code
+                    st.session_state.tana_payment_code_created_at = datetime.now(timezone.utc).isoformat()
+                    st.rerun()
+                else:
+                    st.error("No se pudo generar el código. Verifica que TANA esté conectado a Supabase.")
+                    _detail = st.session_state.get("_tana_last_supabase_error")
+                    if _detail:
+                        st.caption(f"Detalle técnico: {_detail}")
+
+        st.stop()
 
 
 # ============================================================
