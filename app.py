@@ -3198,15 +3198,36 @@ def _detectar_empresas_monografia(monografia_json):
         if low not in {x.lower() for x in empresas}:
             empresas.append(v)
 
-    # Fuente preferente: extracción explícita.
-    for value in data.get("empresas", []) or []:
-        add(value)
-    add(data.get("empresa"))
+    # IMPORTANTE: la cantidad de empresas es completamente dinámica.
+    # TANA NO asume 1, 2, 3, 16 ni ningún número fijo.
+    #
+    # Para evitar falsos positivos, no debemos convertir cualquier nombre que
+    # aparezca dentro de una operación en una "empresa". Primero usamos fuentes
+    # estructurales: lista explícita de empresas y balance(s) inicial(es).
+    explicit = [v for v in (data.get("empresas", []) or []) if v]
+    if explicit:
+        for value in explicit:
+            add(value)
+        return empresas
 
-    # Fuentes complementarias.
+    # El estado inicial es la segunda fuente de mayor confianza: si allí se
+    # identifican empresas, esas son las empresas cuyos libros deben separarse.
+    estado_empresas = []
     for item in data.get("estado_inicial", []) or []:
-        if isinstance(item, dict):
-            add(item.get("empresa"))
+        if isinstance(item, dict) and item.get("empresa"):
+            estado_empresas.append(item.get("empresa"))
+    if estado_empresas:
+        for value in estado_empresas:
+            add(value)
+        return empresas
+
+    # Una empresa explícita a nivel superior.
+    add(data.get("empresa"))
+    if empresas:
+        return empresas
+
+    # Solo si no existe ninguna fuente estructural anterior, usamos operaciones
+    # y datos importantes como respaldo para detectar empresas participantes.
     for op in data.get("operaciones", []) or []:
         if isinstance(op, dict):
             add(op.get("empresa"))
@@ -3622,19 +3643,33 @@ if "monografia_json" in st.session_state and "asientos_contables" not in st.sess
             aperturas = _construir_aperturas_por_empresa(mono_actual)
 
             # El balance inicial es obligatorio cuando la monografía lo contiene.
-            # No entregamos un Excel si falta la apertura: así todos los usuarios
-            # reciben el mismo resultado y nunca una sesión "sin apertura".
+            # La cantidad de aperturas es DINÁMICA: una por cada empresa realmente
+            # identificada en el balance inicial. No se fija ningún número.
             estado_inicial = mono_actual.get("estado_inicial", []) or []
             if estado_inicial:
-                if len(empresas_detectadas) > 1 and len(aperturas) != len(empresas_detectadas):
+                if empresas_detectadas:
+                    # Para varias empresas, cada empresa que tenga un balance inicial
+                    # debe recibir su propia apertura. No se exige una cantidad fija.
+                    empresas_con_estado = {
+                        _normalizar_nombre_empresa(x.get("empresa")).lower()
+                        for x in estado_inicial
+                        if isinstance(x, dict) and x.get("empresa")
+                    }
+                    empresas_con_apertura = {
+                        _normalizar_nombre_empresa(a.get("empresa")).lower()
+                        for a in aperturas
+                        if isinstance(a, dict) and a.get("empresa")
+                    }
+                    faltan_aperturas = sorted(empresas_con_estado - empresas_con_apertura)
+                    if faltan_aperturas:
+                        raise ValueError(
+                            "No se pudo construir el asiento de apertura para: "
+                            + ", ".join(faltan_aperturas)
+                            + ". TANA no generará un Excel incompleto."
+                        )
+                elif len(aperturas) != 1:
                     raise ValueError(
-                        f"El balance inicial fue detectado para {len(empresas_detectadas)} empresas, "
-                        f"pero solo se pudo construir {len(aperturas)} asiento(s) de apertura. "
-                        "No se generará un Excel incompleto."
-                    )
-                if len(empresas_detectadas) <= 1 and len(aperturas) != 1:
-                    raise ValueError(
-                        "Se detectó un balance inicial, pero TANA no pudo construir exactamente un asiento de apertura. "
+                        "Se detectó un balance inicial, pero TANA no pudo construir el asiento de apertura. "
                         "No se generará el Excel hasta corregir la apertura."
                     )
 
@@ -3656,9 +3691,8 @@ if "monografia_json" in st.session_state and "asientos_contables" not in st.sess
                 asientos_sin_apertura.append(a)
 
             if len(empresas_detectadas) > 1:
-                # Para una práctica con varias empresas, exigimos que cada empresa
-                # tenga su apertura determinista. Si una apertura no pudo construirse,
-                # dejamos una alerta explícita en lugar de inventar saldos.
+                # La cantidad de empresas es libre. Se agregan exactamente las
+                # aperturas que correspondan a las empresas detectadas en el estado inicial.
                 if aperturas:
                     asientos_generados = aperturas + asientos_sin_apertura
                 else:
