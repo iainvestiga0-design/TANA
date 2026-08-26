@@ -1093,12 +1093,16 @@ Devuelve únicamente JSON válido con esta estructura:
 
 {
   "empresa": "",
+  "empresas": [],
+  "ruc": "",
   "tipo_documento": "",
   "periodo": "",
   "estado_inicial": [],
   "operaciones": [
     {
       "numero": 1,
+      "empresa": "",
+      "ruc": "",
       "fecha": "",
       "descripcion": "",
       "importe": null,
@@ -1121,9 +1125,13 @@ Devuelve únicamente JSON válido con esta estructura:
 REGLAS:
 - No inventes datos que no estén en la monografía.
 - Conserva exactamente fechas, importes, cantidades, porcentajes,
-  documentos, nombres y condiciones.
+  documentos, nombres, RUC y condiciones.
 - Si un dato no aparece, usa null o "".
 - Separa cada operación en un elemento.
+- Identifica TODAS las empresas participantes del ejercicio y colócalas también en "empresas" como una lista de nombres exactos.
+- Si existen dos o más empresas, cada operación DEBE llevar el campo "empresa" con el nombre exacto de la empresa a la que corresponde.
+- Si existen dos o más empresas, cada partida de "estado_inicial" DEBE llevar también el campo "empresa" correspondiente.
+- No uses como empresa nombres de bancos, clientes, proveedores ni cuentas contables.
 - Incluye el estado financiero inicial si existe, con CADA partida individual y su importe exacto. NO consolides varias partidas en una sola cuenta.
 - El balance inicial es una fuente histórica del propio documento: NO reutilices importes de otra práctica, ejemplo, sesión o archivo anterior. Si el texto presenta dos empresas, extrae sus saldos por separado.
 - Si aparece un banco concreto (Banco de la Nación, BCP/Banco de Crédito del Perú, Interbank, Scotiabank, BBVA, BanBif, Pichincha, Falabella, Ripley, GNB), conserva el nombre exacto dentro de "cuenta_bancaria", "descripcion" o "datos_importantes". NO lo reemplaces por "cuenta corriente" genérico.
@@ -1347,6 +1355,8 @@ IMPORTANTE:
 Devuelve SOLO JSON válido con esta estructura:
 {
   "empresa": "",
+  "empresas": [],
+  "ruc": "",
   "tipo_documento": "",
   "periodo": "",
   "estado_inicial": [],
@@ -1862,6 +1872,7 @@ with st.sidebar:
             "tana_modo_trabajo", "tana_correcciones", "tana_correccion_version",
             "tana_excel_origen_bytes", "tana_diagnostico_excel",
             "tana_excel_buffer", "tana_excel_output_ready", "tana_resuelto_signature",
+        "tana_excel_outputs", "tana_empresas_detectadas", "tana_multiempresa_alerta",
         ):
             st.session_state.pop(_key, None)
         st.rerun()
@@ -2618,6 +2629,7 @@ REGLAS OBLIGATORIAS:
 - Cada asiento debe cuadrar exactamente: total Debe = total Haber.
 - Separa en asientos independientes los registros que correspondan a una misma operación.
 - Conserva las fechas y datos de la monografía.
+- Si existen dos o más empresas, cada asiento DEBE llevar el campo "empresa" con el nombre exacto de la empresa a la que corresponde.
 - Calcula los importes cuando la monografía permita determinarlos.
 - Si un importe o tratamiento contable no puede determinarse con seguridad,
   NO inventes: marca la línea/asiento con "requiere_revision": true y explica por qué.
@@ -2636,6 +2648,7 @@ Devuelve SOLO JSON válido con esta estructura:
   "asientos": [
     {
       "numero": 1,
+      "empresa": "",
       "fecha": "2026-04-02",
       "glosa": "...",
       "documento": "...",
@@ -3107,6 +3120,366 @@ def corregir_retiro_socio(asientos, monografia_json):
     resultado.extend([dist, pago])
     return resultado
 
+
+def _normalizar_nombre_empresa(nombre):
+    return re.sub(r"\s+", " ", str(nombre or "").strip())
+
+
+def _detectar_empresas_monografia(monografia_json):
+    """Detecta todas las empresas participantes sin inventarlas.
+
+    Prioriza la lista explícita devuelta por el extractor y luego completa con
+    empresa, saldos iniciales, operaciones y datos importantes.
+    """
+    data = monografia_json or {}
+    empresas = []
+
+    def add(value):
+        v = _normalizar_nombre_empresa(value)
+        if not v:
+            return
+        low = v.lower()
+        # Evitar confundir bancos o cuentas con empresas participantes.
+        if low in {
+            "banco de la nación", "banco de la nacion",
+            "banco de crédito del perú", "banco de credito del peru",
+            "bcp", "interbank", "scotiabank", "bbva", "banbif",
+            "banco pichincha", "banco falabella", "banco ripley", "banco gnb"
+        }:
+            return
+        if low not in {x.lower() for x in empresas}:
+            empresas.append(v)
+
+    # Fuente preferente: extracción explícita.
+    for value in data.get("empresas", []) or []:
+        add(value)
+    add(data.get("empresa"))
+
+    # Fuentes complementarias.
+    for item in data.get("estado_inicial", []) or []:
+        if isinstance(item, dict):
+            add(item.get("empresa"))
+    for op in data.get("operaciones", []) or []:
+        if isinstance(op, dict):
+            add(op.get("empresa"))
+    for item in data.get("datos_importantes", []) or []:
+        if isinstance(item, dict):
+            add(item.get("empresa"))
+
+    return empresas
+
+
+def _construir_aperturas_por_empresa(monografia_json):
+    """Construye un asiento de apertura determinista por cada empresa detectada."""
+    data = monografia_json or {}
+    estado = data.get("estado_inicial", []) or []
+    empresas = _detectar_empresas_monografia(data)
+    if len(empresas) <= 1:
+        return []
+    resultado = []
+    for empresa in empresas:
+        partidas = []
+        for item in estado:
+            if not isinstance(item, dict):
+                continue
+            emp_item = _normalizar_nombre_empresa(item.get("empresa"))
+            if emp_item and emp_item.lower() == empresa.lower():
+                partidas.append(item)
+        if not partidas:
+            continue
+        sub = dict(data)
+        sub["empresa"] = empresa
+        sub["estado_inicial"] = partidas
+        apertura = _construir_asiento_apertura_determinista(sub)
+        if apertura:
+            apertura["empresa"] = empresa
+            resultado.append(apertura)
+    return resultado
+
+
+def _asientos_por_empresa(asientos, empresas):
+    """Agrupa asientos por empresa. No duplica un asiento entre empresas."""
+    grupos = {e: [] for e in empresas}
+    sin_empresa = []
+    for asiento in asientos or []:
+        if not isinstance(asiento, dict):
+            continue
+        emp = _normalizar_nombre_empresa(asiento.get("empresa"))
+        if emp:
+            # Match case-insensitive con el nombre detectado.
+            target = next((e for e in empresas if e.lower() == emp.lower()), None)
+            if target:
+                grupos[target].append(asiento)
+                continue
+        op_num = str(asiento.get("operacion_numero") or "").strip()
+        # Segunda oportunidad: buscar empresa en la operación.
+        for op in (st.session_state.get("monografia_json", {}) or {}).get("operaciones", []) or []:
+            if isinstance(op, dict) and str(op.get("numero") or "").strip() == op_num:
+                emp2 = _normalizar_nombre_empresa(op.get("empresa"))
+                target = next((e for e in empresas if e.lower() == emp2.lower()), None)
+                if target:
+                    asiento["empresa"] = target
+                    grupos[target].append(asiento)
+                    break
+        else:
+            sin_empresa.append(asiento)
+    return grupos, sin_empresa
+
+
+def _obtener_ruc_empresa(monografia_json, empresa):
+    """Busca el RUC de una empresa en la extracción sin inventarlo."""
+    data = monografia_json or {}
+    target = _normalizar_nombre_empresa(empresa).lower()
+    for key in ("ruc", "RUC"):
+        if isinstance(data.get(key), str) and data.get(key).strip():
+            if _normalizar_nombre_empresa(data.get("empresa")).lower() == target:
+                return data.get(key).strip()
+    for op in data.get("operaciones", []) or []:
+        if not isinstance(op, dict):
+            continue
+        if _normalizar_nombre_empresa(op.get("empresa")).lower() == target:
+            r = str(op.get("ruc") or "").strip()
+            if r:
+                return r
+    for item in data.get("datos_importantes", []) or []:
+        if not isinstance(item, dict):
+            continue
+        if _normalizar_nombre_empresa(item.get("empresa")).lower() == target:
+            r = str(item.get("ruc") or "").strip()
+            if r:
+                return r
+    return ""
+
+
+def _crear_excel_por_empresa_desde_base(base_bytes, empresa, asientos_empresa):
+    """Crea una copia independiente del Excel final para una sola empresa.
+
+    Conserva el formato y los estados de la plantilla, pero recalcula la HT desde
+    los asientos de esa empresa y reemplaza el Libro Diario/Asientos para que nunca
+    se mezclen empresas distintas.
+    """
+    wb2 = openpyxl.load_workbook(io.BytesIO(base_bytes), data_only=False)
+
+    # ------------------------------------------------------------
+    # Asientos_Contables: reemplazo completo por los de la empresa.
+    # ------------------------------------------------------------
+    if "Asientos_Contables" in wb2.sheetnames:
+        ws = wb2["Asientos_Contables"]
+        if ws.max_row > 1:
+            ws.delete_rows(2, ws.max_row - 1)
+        pcge_map_local = {str(cod).strip(): str(desc) for cod, desc in PCGE_DATA}
+        rr = 2
+        for asiento in asientos_empresa:
+            first_line = True
+            for line in asiento.get("lineas", []) or []:
+                code = str(line.get("codigo", "")).strip()
+                if first_line:
+                    vals = [asiento.get("numero", ""), asiento.get("fecha", ""), asiento.get("glosa", ""),
+                            asiento.get("documento", ""), asiento.get("operacion_numero", "")]
+                    first_line = False
+                else:
+                    vals = ["", "", "", "", ""]
+                vals += [code, pcge_map_local.get(code, line.get("denominacion", "")),
+                         line.get("concepto", ""), line.get("debe", 0), line.get("haber", 0)]
+                for c, value in enumerate(vals, 1):
+                    ws.cell(rr, c, value=value)
+                ws.cell(rr, 9).number_format = '#,##0.00;(#,##0.00);"-"'
+                ws.cell(rr, 10).number_format = '#,##0.00;(#,##0.00);"-"'
+                rr += 1
+        ws.freeze_panes = "A2"
+
+    # ------------------------------------------------------------
+    # LD oculto: debe corresponder SOLO a esta empresa porque LM lo usa como
+    # fuente de SUMIFS. Reemplazamos sus filas con el Libro Diario estático
+    # de los asientos filtrados; así el LM no mezcla empresas.
+    # ------------------------------------------------------------
+    if "LD" in wb2.sheetnames:
+        ws_ld = wb2["LD"]
+        if ws_ld.max_row > 1:
+            ws_ld.delete_rows(2, ws_ld.max_row - 1)
+        rr_ld = 2
+        pcge_map_local = {str(cod).strip(): str(desc) for cod, desc in PCGE_DATA}
+        for asiento in asientos_empresa:
+            first_line = True
+            for line in asiento.get("lineas", []) or []:
+                code = str(line.get("codigo", "")).strip()
+                vals = [
+                    asiento.get("numero", "") if first_line else "",
+                    asiento.get("fecha", "") if first_line else "",
+                    asiento.get("glosa", "") if first_line else "",
+                    asiento.get("documento", "") if first_line else "",
+                    code, pcge_map_local.get(code, line.get("denominacion", "")),
+                    line.get("debe", 0), line.get("haber", 0)
+                ]
+                for cc, value in enumerate(vals, 1):
+                    ws_ld.cell(rr_ld, cc, value=value)
+                ws_ld.cell(rr_ld, 7).number_format = '#,##0.00;(#,##0.00);"-"'
+                ws_ld.cell(rr_ld, 8).number_format = '#,##0.00;(#,##0.00);"-"'
+                first_line = False
+                rr_ld += 1
+        ws_ld.freeze_panes = "A2"
+
+    # ------------------------------------------------------------
+    # Identificación de empresa en el libro exportado. No insertamos filas
+    # para no romper referencias de HT/ERN/ERF/ESF.
+    # ------------------------------------------------------------
+    if "Asientos_Contables" in wb2.sheetnames:
+        ws_meta = wb2["Asientos_Contables"]
+        ws_meta["L1"] = "EMPRESA"
+        ws_meta["M1"] = empresa
+        ws_meta["L2"] = "RUC"
+        ws_meta["M2"] = _obtener_ruc_empresa(monografia_json=st.session_state.get("monografia_json", {}), empresa=empresa)
+        ws_meta["L3"] = "PERÍODO"
+        ws_meta["M3"] = str((st.session_state.get("monografia_json", {}) or {}).get("periodo") or "")
+        for cell in ("L1", "L2", "L3"):
+            ws_meta[cell].font = Font(bold=True)
+        ws_meta.column_dimensions["L"].width = 16
+        ws_meta.column_dimensions["M"].width = 42
+
+    # ------------------------------------------------------------
+    # HT: reconstrucción determinista desde los asientos de la empresa.
+    # Se conserva la estructura de filas de la HT base para no romper las
+    # fórmulas de ERN/ERF/ESF que apuntan a ella.
+    # ------------------------------------------------------------
+    if "HT" in wb2.sheetnames:
+        ws = wb2["HT"]
+        movimientos_local = {}
+        for asiento in asientos_empresa:
+            for line in asiento.get("lineas", []) or []:
+                code = str(line.get("codigo", "")).strip()
+                if not re.fullmatch(r"\d{5}", code):
+                    continue
+                rec = movimientos_local.setdefault(code, {"debe": 0.0, "haber": 0.0})
+                rec["debe"] += _to_float(line.get("debe"), 0.0)
+                rec["haber"] += _to_float(line.get("haber"), 0.0)
+
+        cuentas_local = sorted(movimientos_local.keys(), key=lambda x: (int(x), x))
+        destinadas_local = detectar_cuentas_6_con_destino(asientos_empresa)
+
+        def d_a_local(code):
+            rec = movimientos_local.get(code, {"debe": 0.0, "haber": 0.0})
+            return max(rec["debe"] - rec["haber"], 0.0), max(rec["haber"] - rec["debe"], 0.0)
+
+        ajustes_d = {}
+        ajustes_h = {}
+        cuentas61 = [c for c in cuentas_local if es_variacion_existencias(c)]
+        mapa61 = {c[2:]: c for c in cuentas61}
+        for c69 in [c for c in cuentas_local if es_costo_ventas(c)]:
+            d69, _ = d_a_local(c69)
+            if d69 <= 0:
+                continue
+            c61 = mapa61.get(c69[2:])
+            if c61 is None and len(cuentas61) == 1:
+                c61 = cuentas61[0]
+            if c61:
+                ajustes_h[c69] = ajustes_h.get(c69, 0.0) + d69
+                ajustes_d[c61] = ajustes_d.get(c61, 0.0) + d69
+
+        cuentas9 = [c for c in cuentas_local if es_elemento9(c)]
+        cuentas79 = [c for c in cuentas_local if es_cuenta79(c)]
+        total9 = 0.0
+        for c9 in cuentas9:
+            d9, _ = d_a_local(c9)
+            if d9 > 0:
+                ajustes_h[c9] = ajustes_h.get(c9, 0.0) + d9
+                total9 += d9
+        if total9 > 0 and cuentas79:
+            acre79 = {c: d_a_local(c)[1] for c in cuentas79}
+            total_ac = sum(acre79.values())
+            if total_ac > 0:
+                for c79, val in acre79.items():
+                    ajustes_d[c79] = ajustes_d.get(c79, 0.0) + total9 * (val / total_ac)
+            else:
+                ajustes_d[cuentas79[0]] = ajustes_d.get(cuentas79[0], 0.0) + total9
+
+        # Mapeo de filas existentes por código. Las cuentas de otras empresas
+        # quedan en cero y sus etiquetas se conservan solo como estructura.
+        row_by_code = {}
+        for r in range(4, ws.max_row + 1):
+            code = str(ws.cell(r, 1).value or "").strip()
+            if re.fullmatch(r"\d{5}", code):
+                row_by_code[code] = r
+
+        for r in row_by_code.values():
+            for c in range(3, 19):
+                ws.cell(r, c, 0)
+
+        for code, row in row_by_code.items():
+            if code not in movimientos_local:
+                continue
+            rec = movimientos_local[code]
+            debe = round(rec["debe"], 2)
+            haber = round(rec["haber"], 2)
+            deudor = max(debe - haber, 0.0)
+            acreedor = max(haber - debe, 0.0)
+            ajd = round(ajustes_d.get(code, 0.0), 2)
+            ajh = round(ajustes_h.get(code, 0.0), 2)
+            ws.cell(row, 3, debe); ws.cell(row, 4, haber)
+            ws.cell(row, 5, deudor); ws.cell(row, 6, acreedor)
+            ws.cell(row, 7, ajd); ws.cell(row, 8, ajh)
+            if clasificar_resultado(code):
+                sad = sah = 0.0
+            else:
+                net = (deudor + ajd) - (acreedor + ajh)
+                sad = max(net, 0.0); sah = max(-net, 0.0)
+            ws.cell(row, 9, round(sad, 2)); ws.cell(row, 10, round(sah, 2))
+            neto = round((deudor + ajd) - (acreedor + ajh), 2)
+            nd = max(neto, 0.0); na = max(-neto, 0.0)
+            if es_naturaleza(code):
+                ws.cell(row, 11, nd); ws.cell(row, 12, na)
+            if es_funcion(code):
+                ws.cell(row, 13, deudor); ws.cell(row, 14, acreedor)
+            if es_balance(code):
+                ws.cell(row, 15, deudor); ws.cell(row, 16, acreedor)
+            if es_variacion_existencias(code) or es_cuenta79(code):
+                ws.cell(row, 17, ajd)
+            elif es_costo_ventas(code) or es_elemento9(code):
+                ws.cell(row, 18, ajh)
+
+        # Actualiza los totales y la línea de diferencia ya existentes.
+        total_row = None
+        diff_row = None
+        for r in range(4, ws.max_row + 1):
+            if str(ws.cell(r, 2).value or "").strip().upper() == "TOTAL":
+                total_row = r
+                break
+        if total_row:
+            for c in range(3, 19):
+                letter = get_column_letter(c)
+                ws.cell(total_row, c, f'=SUM({letter}4:{letter}{total_row-1})')
+        if total_row and total_row + 1 <= ws.max_row:
+            diff_row = total_row + 1
+            ws.cell(diff_row, 7, f'=ABS(G{total_row}-H{total_row})')
+            ws.cell(diff_row, 8, f'=ABS(G{total_row}-H{total_row})')
+            ws.cell(diff_row, 9, f'=ABS(I{total_row}-J{total_row})')
+            ws.cell(diff_row, 10, f'=ABS(I{total_row}-J{total_row})')
+            ws.cell(diff_row, 11, f'=MAX(L{total_row}-K{total_row},0)')
+            ws.cell(diff_row, 12, f'=MAX(K{total_row}-L{total_row},0)')
+            ws.cell(diff_row, 13, f'=MAX(N{total_row}-M{total_row},0)')
+            ws.cell(diff_row, 14, f'=MAX(M{total_row}-N{total_row},0)')
+            ws.cell(diff_row, 15, f'=MAX(P{total_row}-O{total_row},0)')
+            ws.cell(diff_row, 16, f'=MAX(O{total_row}-P{total_row},0)')
+            ws.cell(diff_row, 18, f'=ABS(Q{total_row}-R{total_row})')
+
+    # ------------------------------------------------------------
+    # Metadatos y nombre del libro.
+    # ------------------------------------------------------------
+    wb2.properties.title = f"TANA - {empresa}"
+    wb2.properties.subject = "Desarrollo contable individual por empresa"
+    wb2.properties.keywords = "TANA, contabilidad, empresa, fusión"
+
+    out = io.BytesIO()
+    try:
+        wb2.calculation.fullCalcOnLoad = True
+        wb2.calculation.forceFullCalc = True
+        wb2.calculation.calcMode = "auto"
+    except Exception:
+        pass
+    wb2.save(out)
+    out.seek(0)
+    return out.getvalue()
+
+
 def resolve_asientos_with_gemini():
     if not get_gemini_profiles():
         raise RuntimeError("No está configurada ninguna GEMINI_API_KEY en Streamlit Secrets.")
@@ -3173,25 +3546,50 @@ if "monografia_json" in st.session_state and "asientos_contables" not in st.sess
                     "No se generará un Excel vacío."
                 )
 
-            # Apertura determinista: no dependemos de que Gemini invente el asiento
-            # ni de que cierre saldos contra 50. Si existe estado inicial, reemplazamos
-            # cualquier apertura generada por el modelo por la apertura construida desde
-            # el balance fuente, con activos primero y pasivos/patrimonio después.
-            apertura_det = _construir_asiento_apertura_determinista(st.session_state.get("monografia_json", {}))
-            if apertura_det:
-                asientos_sin_apertura = []
-                for a in asientos_generados:
-                    if not isinstance(a, dict):
-                        asientos_sin_apertura.append(a); continue
-                    texto_a = _normalizar_texto_contable(" ".join(str(a.get(k) or "") for k in ("glosa", "observacion", "documento")))
-                    if a.get("operacion_numero") in (0, "0") or any(k in texto_a for k in ("asiento de apertura", "reapertura", "saldo inicial", "balance inicial")):
-                        continue
-                    asientos_sin_apertura.append(a)
-                apertura_det["numero"] = 1
-                for idx, a in enumerate(asientos_sin_apertura, start=2):
-                    if isinstance(a, dict):
-                        a["numero"] = idx
-                asientos_generados = [apertura_det] + asientos_sin_apertura
+            # Apertura determinista: la fuente única es el estado inicial de la monografía.
+            # Si hay varias empresas, se construye UN asiento de apertura independiente
+            # para cada una y nunca se mezclan sus saldos.
+            mono_actual = st.session_state.get("monografia_json", {}) or {}
+            empresas_detectadas = _detectar_empresas_monografia(mono_actual)
+            aperturas = _construir_aperturas_por_empresa(mono_actual) if len(empresas_detectadas) > 1 else []
+
+            asientos_sin_apertura = []
+            for a in asientos_generados:
+                if not isinstance(a, dict):
+                    asientos_sin_apertura.append(a); continue
+                texto_a = _normalizar_texto_contable(" ".join(str(a.get(k) or "") for k in ("glosa", "observacion", "documento")))
+                if a.get("operacion_numero") in (0, "0") or any(k in texto_a for k in ("asiento de apertura", "reapertura", "saldo inicial", "balance inicial")):
+                    continue
+                # Completa la empresa del asiento usando la operación extraída si Gemini no la devolvió.
+                if not str(a.get("empresa") or "").strip():
+                    op_num = str(a.get("operacion_numero") or "").strip()
+                    for op in (mono_actual.get("operaciones", []) or []):
+                        if isinstance(op, dict) and str(op.get("numero") or "").strip() == op_num:
+                            if str(op.get("empresa") or "").strip():
+                                a["empresa"] = str(op.get("empresa")).strip()
+                            break
+                asientos_sin_apertura.append(a)
+
+            if len(empresas_detectadas) > 1:
+                # Para una práctica con varias empresas, exigimos que cada empresa
+                # tenga su apertura determinista. Si una apertura no pudo construirse,
+                # dejamos una alerta explícita en lugar de inventar saldos.
+                if aperturas:
+                    asientos_generados = aperturas + asientos_sin_apertura
+                else:
+                    asientos_generados = asientos_sin_apertura
+            else:
+                apertura_det = _construir_asiento_apertura_determinista(mono_actual)
+                if apertura_det:
+                    asientos_generados = [apertura_det] + asientos_sin_apertura
+                else:
+                    asientos_generados = asientos_sin_apertura
+
+            # Correlativo global, preservando el orden: cada empresa conserva su
+            # apertura como el primer asiento que le corresponde.
+            for idx, a in enumerate(asientos_generados, start=1):
+                if isinstance(a, dict):
+                    a["numero"] = idx
 
             # Normaliza bancos únicamente cuando el banco aparece explícitamente
             # en la práctica. Así BCP, Nación, BBVA, etc. quedan con su 104xx propio.
@@ -5238,6 +5636,41 @@ buffer = io.BytesIO()
 wb.save(buffer)
 buffer.seek(0)
 
+# ============================================================
+# EXPORTACIÓN MULTIEMPRESA — UNA MONOGRAFÍA, UN EXCEL POR EMPRESA
+# ============================================================
+# Si TANA detectó 2 o más empresas, nunca se entrega un libro mezclado.
+# Se parte del Excel validado y se genera una copia independiente por empresa.
+_empresas_export = _detectar_empresas_monografia(st.session_state.get("monografia_json", {}) or {})
+if len(_empresas_export) > 1 and st.session_state.get("tana_modo_trabajo") != "revision_excel":
+    _grupos_export, _sin_empresa_export = _asientos_por_empresa(
+        st.session_state.get("asientos_contables", []) or [], _empresas_export
+    )
+    st.session_state["tana_empresas_detectadas"] = _empresas_export
+    st.session_state["tana_excel_outputs"] = {}
+    for _empresa_export in _empresas_export:
+        _as_emp = _grupos_export.get(_empresa_export, [])
+        if not _as_emp:
+            continue
+        _nombre_seguro = re.sub(r"[^A-Za-z0-9ÁÉÍÓÚáéíóúÑñÜü _.-]+", "", _empresa_export).strip()
+        _nombre_seguro = re.sub(r"\s+", "_", _nombre_seguro)[:80] or "Empresa"
+        st.session_state["tana_excel_outputs"][_empresa_export] = {
+            "bytes": _crear_excel_por_empresa_desde_base(buffer.getvalue(), _empresa_export, _as_emp),
+            "filename": f"TANA_{_nombre_seguro}.xlsx",
+            "asientos": len(_as_emp),
+        }
+    if _sin_empresa_export:
+        st.session_state["tana_multiempresa_alerta"] = (
+            f"Hay {len(_sin_empresa_export)} asiento(s) que no pudieron asociarse a una empresa. "
+            "No se mezclaron automáticamente; revisa la práctica si esto ocurre."
+        )
+    else:
+        st.session_state.pop("tana_multiempresa_alerta", None)
+else:
+    st.session_state.pop("tana_excel_outputs", None)
+    st.session_state.pop("tana_empresas_detectadas", None)
+    st.session_state.pop("tana_multiempresa_alerta", None)
+
 _sig = st.session_state.get("tana_file_signature")
 if _sig and st.session_state.get("tana_resuelto_signature") != _sig and st.session_state.get("tana_modo_trabajo") != "revision_excel":
     _tana_chat_add(
@@ -5272,18 +5705,49 @@ if st.session_state.get("tana_excel_buffer") and st.session_state.get("tana_exce
             st.session_state.get("tana_resuelto_signature", ""),
         )
 
-    st.download_button(
-        label="⬇️  Descargar Excel",
-        data=st.session_state["tana_excel_buffer"],
-        on_click=_registrar_descarga_excel,
-        file_name=(
-            f"TANA_Contabilidad_corregido_v{st.session_state.get('tana_correccion_version', 1)}.xlsx"
-            if st.session_state.get("tana_correcciones", 0) else
-            ("TANA_Asientos.xlsx" if st.session_state.get("tana_modo_trabajo") == "asientos" else "TANA_Contabilidad.xlsx")
-        ),
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        type="primary",
-        use_container_width=True,
-    )
+    # Una empresa = un Excel. Dos o más empresas = un botón independiente por empresa.
+    _salidas_multi = st.session_state.get("tana_excel_outputs", {}) or {}
+    if _salidas_multi:
+        st.markdown(
+            f"<div class='tana-success-card'>📚 TANA detectó <b>{len(_salidas_multi)} empresas</b> y generó un Excel independiente para cada una.</div>",
+            unsafe_allow_html=True,
+        )
+        if st.session_state.get("tana_multiempresa_alerta"):
+            st.warning(st.session_state["tana_multiempresa_alerta"])
+        for _emp_name, _salida in _salidas_multi.items():
+            st.markdown(f"<div style='margin:10px 0 4px 0;font-weight:700;'>📄 {_emp_name}</div>", unsafe_allow_html=True)
+            def _registrar_descarga_multi(_emp=_emp_name, _sig_local=st.session_state.get("tana_resuelto_signature", "")):
+                _record_user_activity("excel_descargado", _emp, _sig_local)
+            st.download_button(
+                label=f"⬇️ Descargar Excel — {_emp_name}",
+                data=_salida["bytes"],
+                file_name=_salida["filename"],
+                on_click=_registrar_descarga_multi,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary",
+                use_container_width=True,
+                key=f"download_empresa_{hash(_emp_name)}",
+            )
+    else:
+        def _registrar_descarga_excel():
+            _record_user_activity(
+                "excel_descargado",
+                st.session_state.get("monografia_nombre", "TANA_Contabilidad.xlsx"),
+                st.session_state.get("tana_resuelto_signature", ""),
+            )
+
+        st.download_button(
+            label="⬇️  Descargar Excel",
+            data=st.session_state["tana_excel_buffer"],
+            on_click=_registrar_descarga_excel,
+            file_name=(
+                f"TANA_Contabilidad_corregido_v{st.session_state.get('tana_correccion_version', 1)}.xlsx"
+                if st.session_state.get("tana_correcciones", 0) else
+                ("TANA_Asientos.xlsx" if st.session_state.get("tana_modo_trabajo") == "asientos" else "TANA_Contabilidad.xlsx")
+            ),
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="primary",
+            use_container_width=True,
+        )
     if "monografia_nombre" in st.session_state:
         st.caption("La hoja Monografia conserva el texto extraído para revisión.")
