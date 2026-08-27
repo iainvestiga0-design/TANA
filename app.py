@@ -294,6 +294,43 @@ def _create_payment_code(email):
     return code if isinstance(rows, list) and rows else None
 
 
+def _registrar_codigo_operacion(email, codigo):
+    """El estudiante ingresa el número/código de operación que le dio Yape al pagar.
+    Se registra como pendiente para que MacroDroid (o el panel de prueba) lo confirme
+    cuando detecte esa misma operación en la notificación de Yape."""
+    if not email or not codigo or not _supabase_enabled():
+        return None, "Faltan datos o Supabase no está configurado."
+    codigo = str(codigo).strip()
+    if not codigo:
+        return None, "Escribe el código de operación que te dio Yape."
+
+    existing = _supabase_request(
+        "GET", "tana_payment_codes",
+        params={"select": "email,status", "code": f"eq.{codigo}", "limit": "1"},
+    )
+    if isinstance(existing, list) and existing:
+        owner = str(existing[0].get("email", "")).strip().lower()
+        if owner and owner != email.strip().lower():
+            return None, "Ese código de operación ya fue registrado con otra cuenta."
+        return codigo, None
+
+    now = datetime.now(timezone.utc)
+    rows = _supabase_request(
+        "POST",
+        "tana_payment_codes",
+        payload={
+            "email": email,
+            "code": codigo,
+            "amount": 1.00,
+            "status": "pending",
+            "expires_at": (now + timedelta(hours=24)).isoformat(),
+        },
+    )
+    if isinstance(rows, list) and rows:
+        return codigo, None
+    return None, "No se pudo registrar el código. Intenta de nuevo."
+
+
 def _payment_confirmed_for_code(email, code):
     if not email or not code or not _supabase_enabled():
         return None
@@ -350,12 +387,17 @@ def _mark_payment_code_paid(code, payment_id=None):
 
 
 def _macrodroid_extraer_codigo_monto(texto):
-    """Extrae el código TANA-XXXXXX y el monto en soles desde el texto de una notificación de Yape."""
+    """Extrae el código de operación de Yape y el monto en soles desde el texto de la notificación."""
     if not texto:
         return None, None
     texto_norm = str(texto)
-    match_codigo = re.search(r"TANA[-\s]?([0-9]{4,8})", texto_norm, re.IGNORECASE)
-    codigo = f"TANA-{match_codigo.group(1)}" if match_codigo else None
+    codigo = None
+    match_codigo = re.search(
+        r"(?:c[oó]digo|n[uú]mero|nro\.?|n[°º])\s*(?:de)?\s*operaci[oó]n[:\s]*([0-9]{4,15})",
+        texto_norm, re.IGNORECASE,
+    )
+    if match_codigo:
+        codigo = match_codigo.group(1)
     match_monto = re.search(r"[Ss]\s*/\.?\s*([0-9]+(?:[.,][0-9]{1,2})?)", texto_norm)
     monto = None
     if match_monto:
@@ -568,58 +610,65 @@ if user_role != "Creador":
         st.markdown("## 🔒 Pase TANA de 24 horas")
         st.info("Tu acceso de estudiante requiere un pase de S/1.00 por 24 horas.")
 
-        if "tana_payment_code" not in st.session_state:
-            st.session_state.tana_payment_code = None
-        if "tana_payment_code_created_at" not in st.session_state:
-            st.session_state.tana_payment_code_created_at = None
+        if "tana_codigo_operacion_registrado" not in st.session_state:
+            st.session_state.tana_codigo_operacion_registrado = None
 
-        if st.session_state.tana_payment_code:
-            st.markdown(f"### Código de pago: `{st.session_state.tana_payment_code}`")
+        if not st.session_state.tana_codigo_operacion_registrado:
             st.write("1. Abre Yape.")
-            st.write("2. Envía exactamente **S/1.00**.")
-            st.write(f"3. En el mensaje/nota de Yape escribe exactamente **{st.session_state.tana_payment_code}**.")
-            st.caption("El código vence 15 minutos después de ser generado.")
+            st.write("2. Envía exactamente **S/1.00** al número indicado por tu profesor/administrador.")
+            st.write("3. Copia el **Código de operación** que te muestra el comprobante de Yape.")
+            st.write("4. Pégalo abajo para registrar tu pago.")
+
+            codigo_ingresado = st.text_input(
+                "Código de operación de tu Yape",
+                placeholder="Ej: 000482913",
+                key="tana_codigo_operacion_input",
+            )
+
+            if st.button("📥 Registrar código y verificar pago", use_container_width=True, type="primary"):
+                if not user_email:
+                    st.error("No se pudo registrar el código.")
+                    st.caption("Detalle técnico: tu sesión no tiene un correo asociado (user_email vacío).")
+                elif not SUPABASE_URL:
+                    st.error("No se pudo registrar el código.")
+                    st.caption("Detalle técnico: el secret SUPABASE_URL está vacío o no existe en esta app.")
+                elif not SUPABASE_KEY:
+                    st.error("No se pudo registrar el código.")
+                    st.caption("Detalle técnico: el secret SUPABASE_SERVICE_ROLE_KEY está vacío o no existe en esta app.")
+                elif not codigo_ingresado.strip():
+                    st.error("Escribe el código de operación que te dio Yape.")
+                else:
+                    codigo_ok, error_msg = _registrar_codigo_operacion(user_email, codigo_ingresado)
+                    if codigo_ok:
+                        st.session_state.tana_codigo_operacion_registrado = codigo_ok
+                        st.rerun()
+                    else:
+                        st.error(error_msg or "No se pudo registrar el código.")
+                        _detail = st.session_state.get("_tana_last_supabase_error")
+                        if _detail:
+                            st.caption(f"Detalle técnico: {_detail}")
+        else:
+            codigo_actual = st.session_state.tana_codigo_operacion_registrado
+            st.markdown(f"### Código de operación registrado: `{codigo_actual}`")
+            st.caption("Esperando la confirmación de la recepción del pago.")
 
             if st.button("🔄 Verificar pago", use_container_width=True, type="primary"):
-                payment = _payment_confirmed_for_code(user_email, st.session_state.tana_payment_code)
+                payment = _payment_confirmed_for_code(user_email, codigo_actual)
                 if payment:
-                    _mark_payment_code_paid(st.session_state.tana_payment_code, payment.get("id"))
+                    _mark_payment_code_paid(codigo_actual, payment.get("id"))
                     expires = _activate_access_24h(user_email)
                     if expires:
                         st.success(f"✅ Pago confirmado. Tu acceso está activo hasta {expires.astimezone().strftime('%d/%m/%Y %H:%M') }.")
-                        st.session_state.tana_payment_code = None
+                        st.session_state.tana_codigo_operacion_registrado = None
                         st.rerun()
                     else:
                         st.error("El pago fue encontrado, pero no se pudo activar el acceso. Revisa la configuración de Supabase.")
                 else:
-                    st.warning("⏳ Todavía no encontramos un pago confirmado de S/1.00 para este código.")
+                    st.warning("⏳ Todavía no encontramos la confirmación de este pago. Espera unos segundos y vuelve a intentar.")
 
-            if st.button("♻️ Generar otro código", use_container_width=True):
-                st.session_state.tana_payment_code = _create_payment_code(user_email)
-                st.session_state.tana_payment_code_created_at = datetime.now(timezone.utc).isoformat()
+            if st.button("♻️ Usar otro código de operación", use_container_width=True):
+                st.session_state.tana_codigo_operacion_registrado = None
                 st.rerun()
-        else:
-            if st.button("💳 Comprar pase 24h — S/1.00", use_container_width=True, type="primary"):
-                if not user_email:
-                    st.error("No se pudo generar el código.")
-                    st.caption("Detalle técnico: tu sesión no tiene un correo asociado (user_email vacío).")
-                elif not SUPABASE_URL:
-                    st.error("No se pudo generar el código.")
-                    st.caption("Detalle técnico: el secret SUPABASE_URL está vacío o no existe en esta app.")
-                elif not SUPABASE_KEY:
-                    st.error("No se pudo generar el código.")
-                    st.caption("Detalle técnico: el secret SUPABASE_SERVICE_ROLE_KEY está vacío o no existe en esta app.")
-                else:
-                    code = _create_payment_code(user_email)
-                    if code:
-                        st.session_state.tana_payment_code = code
-                        st.session_state.tana_payment_code_created_at = datetime.now(timezone.utc).isoformat()
-                        st.rerun()
-                    else:
-                        st.error("No se pudo generar el código. Verifica que TANA esté conectado a Supabase.")
-                        _detail = st.session_state.get("_tana_last_supabase_error")
-                        if _detail:
-                            st.caption(f"Detalle técnico: {_detail}")
 
         st.stop()
 
@@ -798,7 +847,7 @@ if user_role == "Creador":
         )
         texto_prueba = st.text_area(
             "Pega aquí el texto de la notificación de Yape (o escríbelo a mano)",
-            placeholder="Te llegó un Yape de Juan Pérez por S/ 1.00. Mensaje: TANA-482913",
+            placeholder="Yape: Te llegó un pago de Juan Pérez por S/ 1.00. Código de operación: 000482913",
             key="macrodroid_texto_prueba",
         )
         codigo_detectado, monto_detectado = _macrodroid_extraer_codigo_monto(texto_prueba)
@@ -821,7 +870,7 @@ if user_role == "Creador":
 
         if st.button("📲 Simular notificación de MacroDroid", use_container_width=True):
             if not codigo_manual.strip():
-                st.error("No se detectó ningún código TANA-XXXXXX en el texto.")
+                st.error("No se detectó ningún código de operación en el texto.")
             else:
                 resultado = _macrodroid_confirmar_pago(
                     codigo_manual.strip().upper(), float(monto_manual), texto_prueba
@@ -851,9 +900,10 @@ if user_role == "Creador":
         st.markdown("---")
         st.markdown("##### ⚙️ Cómo configurar el macro real en MacroDroid")
         st.markdown(
-            "1. **Disparador:** *Notificación recibida* → selecciona la app de Yape.\n"
-            "2. **Variable local:** usa *Analizar/Extraer texto* (regex) para separar el "
-            "monto y el código TANA-XXXXXX del texto de la notificación.\n"
+            "1. **Disparador:** *Notificación recibida* → selecciona la app de Yape "
+            "(en el celular que RECIBE los pagos, no en el del estudiante).\n"
+            "2. **Variable local:** usa *Analizar/Extraer texto* (regex) para separar del "
+            "texto de la notificación el **código de operación** y el **monto**.\n"
             "3. **Acción:** *Solicitud HTTP (HTTP Request)* → método **POST** a:\n"
             f"   `{SUPABASE_URL or '<SUPABASE_URL>'}/rest/v1/rpc/tana_confirm_payment_from_macrodroid`\n"
             "4. **Encabezados:** `apikey` y `Authorization: Bearer <tu anon key>` "
@@ -861,8 +911,10 @@ if user_role == "Creador":
             "del lado del servidor).\n"
             "5. **Cuerpo (JSON):**\n"
             "```json\n"
-            '{"p_code": "[código extraído]", "p_amount": [monto extraído], "p_raw_text": "[texto de la notificación]"}\n'
-            "```"
+            '{"p_code": "[código de operación extraído]", "p_amount": [monto extraído], "p_raw_text": "[texto de la notificación]"}\n'
+            "```\n"
+            "El estudiante, por su lado, ingresa ese mismo código de operación en la app "
+            "(pantalla del pase de 24h) para reclamar su pago."
         )
         st.caption(
             "Ejecuta primero el script SQL 02_macrodroid_confirmar_pago.sql en Supabase antes de usar este panel."
