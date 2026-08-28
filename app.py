@@ -1,11 +1,68 @@
 import json
+import ast
+import hashlib
+
+# --- TANA: filtro de diagnóstico preciso ---
+def tana_filtrar_diagnostico_preciso(diagnostico):
+    """
+    Evita convertir cuentas relacionadas en errores.
+    Solo conserva hallazgos con evidencia explícita de inconsistencia.
+    """
+    if not diagnostico:
+        return diagnostico
+
+    # Si el diagnóstico es texto libre, no inventamos cuentas nuevas.
+    # Marcamos únicamente patrones explícitos de error/diferencia/fórmula inválida.
+    lineas = str(diagnostico).splitlines()
+    salida = []
+    contexto_error = False
+
+    patrones_error = (
+        "error", "diferencia", "descuadre", "incorrect", "inválid",
+        "invalida", "no existe", "referencia circular", "fórmula incorrecta",
+        "saldo incorrecto", "no coincide", "mal ubicada", "mal ubicado"
+    )
+    patrones_relacion = (
+        "relacionad", "participa", "contrapartida", "impacta", "afecta",
+        "cuenta vinculada", "cuentas relacionadas"
+    )
+
+    for linea in lineas:
+        low=linea.lower().strip()
+        if not low:
+            continue
+        # Si la línea presenta una evidencia concreta, conservarla.
+        if any(p in low for p in patrones_error):
+            salida.append(linea)
+            contexto_error=True
+            continue
+        # Conservar identificación de asiento/cuenta inmediatamente asociada al hallazgo.
+        if contexto_error and (
+            "cuenta" in low or "asiento" in low or "línea" in low or
+            "fila" in low or "celda" in low or "debe" in low or "haber" in low
+        ):
+            salida.append(linea)
+            continue
+        # No propagar cuentas solo por relación.
+        if any(p in low for p in patrones_relacion):
+            continue
+        # Mantener encabezados útiles, pero no listas especulativas de cuentas.
+        if low.startswith(("diagnóstico", "hallazgos", "resultado", "revisión")):
+            salida.append(linea)
+
+    if salida:
+        return "\n".join(salida)
+    return diagnostico
+# --- fin filtro ---
+
 import io
 import os
 import re
+import mimetypes
 import shutil
 import subprocess
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal, InvalidOperation
 
 import streamlit as st
@@ -115,8 +172,17 @@ def _supabase_request(method, path, payload=None, params=None):
         req = urllib.request.Request(url, data=data, headers=headers, method=method)
         with urllib.request.urlopen(req, timeout=15) as response:
             raw = response.read().decode("utf-8")
+            st.session_state["_tana_last_supabase_error"] = None
             return json.loads(raw) if raw else []
-    except Exception:
+    except urllib.error.HTTPError as e:
+        try:
+            detail = e.read().decode("utf-8")
+        except Exception:
+            detail = str(e)
+        st.session_state["_tana_last_supabase_error"] = f"HTTP {e.code} en {method} {path}: {detail}"
+        return None
+    except Exception as e:
+        st.session_state["_tana_last_supabase_error"] = f"{type(e).__name__} en {method} {path}: {e}"
         return None
 
 
@@ -153,7 +219,7 @@ def _load_user_registry():
         rows = _supabase_request(
             "GET",
             "tana_users",
-            params={"select": "email,role,first_seen,last_seen,visits", "order": "last_seen.desc"},
+            params={"select": "email,role,first_seen,last_seen,visits,access_expires_at", "order": "last_seen.desc"},
         )
         if isinstance(rows, list):
             return rows
@@ -169,6 +235,196 @@ def _upsert_supabase_user(user):
         params={"on_conflict": "email"},
     )
     return isinstance(rows, list)
+
+
+def _get_student_access_expires(email):
+    """Obtiene la fecha de vencimiento del pase de 24 horas."""
+    if not email or not _supabase_enabled():
+        return None
+    rows = _supabase_request(
+        "GET",
+        "tana_access",
+        params={"select": "access_expires_at", "email": f"eq.{email}", "limit": "1"},
+    )
+    if isinstance(rows, list) and rows:
+        value = rows[0].get("access_expires_at")
+        if value:
+            try:
+                return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            except Exception:
+                return None
+    return None
+
+
+def _generate_payment_code():
+    """Genera un código temporal único para el pago de TANA."""
+    import secrets
+    import string
+    alphabet = string.digits
+    for _ in range(10):
+        code = "TANA-" + "".join(secrets.choice(alphabet) for _ in range(6))
+        if _supabase_enabled():
+            rows = _supabase_request(
+                "GET", "tana_payment_codes",
+                params={"select": "id", "code": f"eq.{code}", "limit": "1"},
+            )
+            if isinstance(rows, list) and rows:
+                continue
+        return code
+    return "TANA-" + secrets.token_hex(4).upper()[:6]
+
+
+def _create_payment_code(email):
+    if not email or not _supabase_enabled():
+        return None
+    code = _generate_payment_code()
+    now = datetime.now(timezone.utc)
+    expires = now + timedelta(minutes=15)
+    rows = _supabase_request(
+        "POST",
+        "tana_payment_codes",
+        payload={
+            "email": email,
+            "code": code,
+            "amount": 1.00,
+            "status": "pending",
+            "expires_at": expires.isoformat(),
+        },
+    )
+    return code if isinstance(rows, list) and rows else None
+
+
+def _registrar_codigo_operacion(email, codigo):
+    """El estudiante ingresa el número/código de operación que le dio Yape al pagar.
+    Se registra como pendiente para que MacroDroid (o el panel de prueba) lo confirme
+    cuando detecte esa misma operación en la notificación de Yape."""
+    if not email or not codigo or not _supabase_enabled():
+        return None, "Faltan datos o Supabase no está configurado."
+    codigo = str(codigo).strip()
+    if not codigo:
+        return None, "Escribe el código de operación que te dio Yape."
+
+    existing = _supabase_request(
+        "GET", "tana_payment_codes",
+        params={"select": "email,status", "code": f"eq.{codigo}", "limit": "1"},
+    )
+    if isinstance(existing, list) and existing:
+        owner = str(existing[0].get("email", "")).strip().lower()
+        if owner and owner != email.strip().lower():
+            return None, "Ese código de operación ya fue registrado con otra cuenta."
+        return codigo, None
+
+    now = datetime.now(timezone.utc)
+    rows = _supabase_request(
+        "POST",
+        "tana_payment_codes",
+        payload={
+            "email": email,
+            "code": codigo,
+            "amount": 1.00,
+            "status": "pending",
+            "expires_at": (now + timedelta(hours=24)).isoformat(),
+        },
+    )
+    if isinstance(rows, list) and rows:
+        return codigo, None
+    return None, "No se pudo registrar el código. Intenta de nuevo."
+
+
+def _payment_confirmed_for_code(email, code):
+    if not email or not code or not _supabase_enabled():
+        return None
+    rows = _supabase_request(
+        "GET",
+        "tana_payments",
+        params={
+            "select": "id,amount,status,paid_at,payment_code",
+            "email": f"eq.{email}",
+            "payment_code": f"eq.{code}",
+            "status": "eq.confirmed",
+            "amount": "eq.1.00",
+            "limit": "1",
+        },
+    )
+    return rows[0] if isinstance(rows, list) and rows else None
+
+
+def _activate_access_24h(email):
+    if not email or not _supabase_enabled():
+        return None
+    rows = _supabase_request(
+        "GET", "tana_access",
+        params={"select": "access_expires_at", "email": f"eq.{email}", "limit": "1"},
+    )
+    current = None
+    if isinstance(rows, list) and rows and rows[0].get("access_expires_at"):
+        try:
+            current = datetime.fromisoformat(str(rows[0]["access_expires_at"]).replace("Z", "+00:00"))
+        except Exception:
+            current = None
+    base = current if current and current > datetime.now(timezone.utc) else datetime.now(timezone.utc)
+    expires = base + timedelta(hours=24)
+    existing = _supabase_request(
+        "GET", "tana_access",
+        params={"select": "email", "email": f"eq.{email}", "limit": "1"},
+    )
+    payload = {"email": email, "access_expires_at": expires.isoformat(), "updated_at": datetime.now(timezone.utc).isoformat()}
+    if isinstance(existing, list) and existing:
+        rows = _supabase_request("PATCH", "tana_access", payload=payload, params={"email": f"eq.{email}"})
+    else:
+        rows = _supabase_request("POST", "tana_access", payload=payload)
+    return expires if isinstance(rows, list) else None
+
+
+def _mark_payment_code_paid(code, payment_id=None):
+    if not code or not _supabase_enabled():
+        return False
+    payload = {"status": "paid", "paid_at": datetime.now(timezone.utc).isoformat()}
+    if payment_id:
+        payload["payment_id"] = payment_id
+    rows = _supabase_request("PATCH", "tana_payment_codes", payload=payload, params={"code": f"eq.{code}", "status": "eq.pending"})
+    return isinstance(rows, list) and bool(rows)
+
+
+def _macrodroid_extraer_codigo_monto(texto):
+    """Extrae el código de operación de Yape y el monto en soles desde el texto de la notificación."""
+    if not texto:
+        return None, None
+    texto_norm = str(texto)
+    codigo = None
+    match_codigo = re.search(
+        r"(?:c[oó]digo|n[uú]mero|nro\.?|n[°º])\s*(?:de)?\s*operaci[oó]n[:\s]*([0-9]{4,15})",
+        texto_norm, re.IGNORECASE,
+    )
+    if match_codigo:
+        codigo = match_codigo.group(1)
+    match_monto = re.search(r"[Ss]\s*/\.?\s*([0-9]+(?:[.,][0-9]{1,2})?)", texto_norm)
+    monto = None
+    if match_monto:
+        try:
+            monto = float(match_monto.group(1).replace(",", "."))
+        except Exception:
+            monto = None
+    return codigo, monto
+
+
+def _macrodroid_confirmar_pago(codigo, monto, texto_original=None):
+    """Llama a la función RPC de Supabase que confirma un pago recibido vía MacroDroid (Yape)."""
+    if not codigo or monto is None or not _supabase_enabled():
+        return None
+    rows = _supabase_request(
+        "POST",
+        "rpc/tana_confirm_payment_from_macrodroid",
+        payload={"p_code": codigo, "p_amount": monto, "p_raw_text": texto_original},
+    )
+    if isinstance(rows, list) and rows:
+        return rows[0]
+    return None
+
+
+def _student_has_active_access(email):
+    expires = _get_student_access_expires(email)
+    return bool(expires and expires > datetime.now(timezone.utc))
 
 
 def _load_user_activity(email, limit=20):
@@ -209,6 +465,7 @@ def _save_user_registry(data):
                 "first_seen": user.get("first_seen"),
                 "last_seen": user.get("last_seen"),
                 "visits": int(user.get("visits", 0) or 0),
+                "access_expires_at": user.get("access_expires_at"),
             }
             if not _upsert_supabase_user(payload):
                 ok = False
@@ -339,6 +596,81 @@ st.markdown(
 # El cierre de sesión se ofrece en la barra lateral sin alterar el flujo contable.
 with st.sidebar:
     st.button("Cerrar sesión", on_click=st.logout, use_container_width=True)
+
+
+# ============================================================
+# CONTROL DE ACCESO DEL ESTUDIANTE — PASE DE 24 HORAS
+# ============================================================
+# El creador entra siempre. Los estudiantes necesitan un pase vigente.
+if user_role != "Creador":
+    access_expires = _get_student_access_expires(user_email)
+    access_active = bool(access_expires and access_expires > datetime.now(timezone.utc))
+
+    if not access_active:
+        st.markdown("## 🔒 Pase TANA de 24 horas")
+        st.info("Tu acceso de estudiante requiere un pase de S/1.00 por 24 horas.")
+
+        if "tana_codigo_operacion_registrado" not in st.session_state:
+            st.session_state.tana_codigo_operacion_registrado = None
+
+        if not st.session_state.tana_codigo_operacion_registrado:
+            st.write("1. Abre Yape.")
+            st.write("2. Envía exactamente **S/1.00** al número indicado por tu profesor/administrador.")
+            st.write("3. Copia el **Código de operación** que te muestra el comprobante de Yape.")
+            st.write("4. Pégalo abajo para registrar tu pago.")
+
+            codigo_ingresado = st.text_input(
+                "Código de operación de tu Yape",
+                placeholder="Ej: 000482913",
+                key="tana_codigo_operacion_input",
+            )
+
+            if st.button("📥 Registrar código y verificar pago", use_container_width=True, type="primary"):
+                if not user_email:
+                    st.error("No se pudo registrar el código.")
+                    st.caption("Detalle técnico: tu sesión no tiene un correo asociado (user_email vacío).")
+                elif not SUPABASE_URL:
+                    st.error("No se pudo registrar el código.")
+                    st.caption("Detalle técnico: el secret SUPABASE_URL está vacío o no existe en esta app.")
+                elif not SUPABASE_KEY:
+                    st.error("No se pudo registrar el código.")
+                    st.caption("Detalle técnico: el secret SUPABASE_SERVICE_ROLE_KEY está vacío o no existe en esta app.")
+                elif not codigo_ingresado.strip():
+                    st.error("Escribe el código de operación que te dio Yape.")
+                else:
+                    codigo_ok, error_msg = _registrar_codigo_operacion(user_email, codigo_ingresado)
+                    if codigo_ok:
+                        st.session_state.tana_codigo_operacion_registrado = codigo_ok
+                        st.rerun()
+                    else:
+                        st.error(error_msg or "No se pudo registrar el código.")
+                        _detail = st.session_state.get("_tana_last_supabase_error")
+                        if _detail:
+                            st.caption(f"Detalle técnico: {_detail}")
+        else:
+            codigo_actual = st.session_state.tana_codigo_operacion_registrado
+            st.markdown(f"### Código de operación registrado: `{codigo_actual}`")
+            st.caption("Esperando la confirmación de la recepción del pago.")
+
+            if st.button("🔄 Verificar pago", use_container_width=True, type="primary"):
+                payment = _payment_confirmed_for_code(user_email, codigo_actual)
+                if payment:
+                    _mark_payment_code_paid(codigo_actual, payment.get("id"))
+                    expires = _activate_access_24h(user_email)
+                    if expires:
+                        st.success(f"✅ Pago confirmado. Tu acceso está activo hasta {expires.astimezone().strftime('%d/%m/%Y %H:%M') }.")
+                        st.session_state.tana_codigo_operacion_registrado = None
+                        st.rerun()
+                    else:
+                        st.error("El pago fue encontrado, pero no se pudo activar el acceso. Revisa la configuración de Supabase.")
+                else:
+                    st.warning("⏳ Todavía no encontramos la confirmación de este pago. Espera unos segundos y vuelve a intentar.")
+
+            if st.button("♻️ Usar otro código de operación", use_container_width=True):
+                st.session_state.tana_codigo_operacion_registrado = None
+                st.rerun()
+
+        st.stop()
 
 
 # ============================================================
@@ -508,10 +840,330 @@ if user_role == "Creador":
         else:
             st.info("Todavía no hay usuarios registrados.")
 
+    with st.expander("🧪 Prueba de integración MacroDroid (Yape)", expanded=False):
+        st.caption(
+            "Simula lo que enviará MacroDroid cuando llegue la notificación de Yape, "
+            "para probar la activación automática sin depender todavía del celular."
+        )
+        texto_prueba = st.text_area(
+            "Pega aquí el texto de la notificación de Yape (o escríbelo a mano)",
+            placeholder="Yape: Te llegó un pago de Juan Pérez por S/ 1.00. Código de operación: 000482913",
+            key="macrodroid_texto_prueba",
+        )
+        codigo_detectado, monto_detectado = _macrodroid_extraer_codigo_monto(texto_prueba)
+
+        col_a, col_b = st.columns(2)
+        with col_a:
+            codigo_manual = st.text_input(
+                "Código detectado (edítalo si hace falta)",
+                value=codigo_detectado or "",
+                key="macrodroid_codigo_manual",
+            )
+        with col_b:
+            monto_manual = st.number_input(
+                "Monto detectado (S/)",
+                value=float(monto_detectado) if monto_detectado is not None else 1.00,
+                step=0.01,
+                format="%.2f",
+                key="macrodroid_monto_manual",
+            )
+
+        if st.button("📲 Simular notificación de MacroDroid", use_container_width=True):
+            if not codigo_manual.strip():
+                st.error("No se detectó ningún código de operación en el texto.")
+            else:
+                resultado = _macrodroid_confirmar_pago(
+                    codigo_manual.strip().upper(), float(monto_manual), texto_prueba
+                )
+                if not resultado:
+                    st.error(
+                        "No se pudo contactar la función de Supabase. Revisa que el script "
+                        "02_macrodroid_confirmar_pago.sql ya se haya ejecutado y que las credenciales estén activas."
+                    )
+                    _detail = st.session_state.get("_tana_last_supabase_error")
+                    if _detail:
+                        st.caption(f"Detalle técnico: {_detail}")
+                else:
+                    estado = resultado.get("status")
+                    if estado == "confirmed":
+                        st.success(
+                            f"✅ Pago confirmado para {resultado.get('email')}. "
+                            "El estudiante ya puede pulsar 'Verificar pago' para activar su pase de 24h."
+                        )
+                    elif estado == "already_confirmed":
+                        st.info(f"Este código ya había sido confirmado antes para {resultado.get('email')}.")
+                    elif estado == "code_not_found":
+                        st.warning("El código no corresponde a ningún pase generado (puede haber expirado o estar mal escrito).")
+                    else:
+                        st.warning(f"Estado devuelto: {estado}")
+
+        st.markdown("---")
+        st.markdown("##### ⚙️ Cómo configurar el macro real en MacroDroid")
+        st.markdown(
+            "1. **Disparador:** *Notificación recibida* → selecciona la app de Yape "
+            "(en el celular que RECIBE los pagos, no en el del estudiante).\n"
+            "2. **Variable local:** usa *Analizar/Extraer texto* (regex) para separar del "
+            "texto de la notificación el **código de operación** y el **monto**.\n"
+            "3. **Acción:** *Solicitud HTTP (HTTP Request)* → método **POST** a:\n"
+            f"   `{SUPABASE_URL or '<SUPABASE_URL>'}/rest/v1/rpc/tana_confirm_payment_from_macrodroid`\n"
+            "4. **Encabezados:** `apikey` y `Authorization: Bearer <tu anon key>` "
+            "(usa la *anon key* de Supabase, no la service role — la función ya está protegida "
+            "del lado del servidor).\n"
+            "5. **Cuerpo (JSON):**\n"
+            "```json\n"
+            '{"p_code": "[código de operación extraído]", "p_amount": [monto extraído], "p_raw_text": "[texto de la notificación]"}\n'
+            "```\n"
+            "El estudiante, por su lado, ingresa ese mismo código de operación en la app "
+            "(pantalla del pase de 24h) para reclamar su pago."
+        )
+        st.caption(
+            "Ejecuta primero el script SQL 02_macrodroid_confirmar_pago.sql en Supabase antes de usar este panel."
+        )
+
 
 # Gemini
 from google import genai
 from google.genai import types
+
+
+# TANA - SUBDIVISIONARIAS BANCARIAS (5 DIGITOS)
+TANA_BANCOS_SUBDIVISIONARIAS = {
+    "banco de la nación": "10411",
+    "banco de la nacion": "10411",
+    "banco de crédito del perú": "10412",
+    "banco de credito del peru": "10412",
+    "bcp": "10412",
+    "interbank": "10413",
+    "scotiabank": "10414",
+    "bbva": "10415",
+    "banbif": "10416",
+    "banco pichincha": "10417",
+    "banco falabella": "10418",
+    "banco ripley": "10419",
+    "banco gnb": "10420",
+}
+
+TANA_BANCOS_NOMBRES = {
+    "10411": "Banco de la Nación",
+    "10412": "Banco de Crédito del Perú (BCP)",
+    "10413": "Interbank",
+    "10414": "Scotiabank",
+    "10415": "BBVA",
+    "10416": "BanBif",
+    "10417": "Banco Pichincha",
+    "10418": "Banco Falabella",
+    "10419": "Banco Ripley",
+    "10420": "Banco GNB",
+}
+
+def _instalar_subdivisionarias_bancarias_en_pcge():
+    """Agrega al catálogo operativo las subdivisionarias bancarias de 5 dígitos."""
+    global PCGE_DATA, pcge_map
+    existentes = {str(c).strip() for c, _ in PCGE_DATA}
+    for codigo, banco in TANA_BANCOS_NOMBRES.items():
+        if codigo not in existentes:
+            PCGE_DATA.append((codigo, banco))
+    pcge_map = {str(cod).strip(): str(desc) for cod, desc in PCGE_DATA}
+
+
+def _normalizar_texto_contable(valor):
+    import unicodedata
+    txt = str(valor or "").lower()
+    txt = unicodedata.normalize("NFKD", txt).encode("ascii", "ignore").decode("ascii")
+    return re.sub(r"\s+", " ", txt).strip()
+
+
+def _detectar_banco_en_texto(texto):
+    """Devuelve código 104xx solo cuando el banco aparece explícitamente."""
+    t = _normalizar_texto_contable(texto)
+    # Ordenar por longitud evita que una clave corta gane sobre una específica.
+    for nombre, codigo in sorted(TANA_BANCOS_SUBDIVISIONARIAS.items(), key=lambda x: len(x[0]), reverse=True):
+        if _normalizar_texto_contable(nombre) in t:
+            return codigo
+    return None
+
+
+def _aplicar_banco_a_lineas_asiento(asiento, operacion=None):
+    """Si el asiento menciona un banco, usa su subdivisionaria 104xx."""
+    if not isinstance(asiento, dict):
+        return asiento
+    op = operacion or {}
+    contexto = " ".join(str(op.get(k) or "") for k in (
+        "descripcion", "cuenta_bancaria", "medio_pago", "forma_pago", "tercero", "datos_adicionales"
+    ))
+    contexto += " " + " ".join(
+        str(line.get(k) or "")
+        for line in (asiento.get("lineas", []) or []) if isinstance(line, dict)
+        for k in ("concepto", "denominacion")
+    )
+    contexto += " " + str(asiento.get("glosa") or "") + " " + str(asiento.get("documento") or "")
+    codigo_banco = _detectar_banco_en_texto(contexto)
+    if not codigo_banco:
+        return asiento
+    nombre_banco = TANA_BANCOS_NOMBRES.get(codigo_banco, pcge_map.get(codigo_banco, "Cuenta bancaria"))
+    lineas = []
+    for line in asiento.get("lineas", []) or []:
+        ln = dict(line) if isinstance(line, dict) else line
+        if isinstance(ln, dict) and str(ln.get("codigo", "")).strip() in {"10411", "10412", "10413", "10414", "10415", "10416", "10417", "10418", "10419", "10420"}:
+            ln["codigo"] = codigo_banco
+            ln["denominacion"] = nombre_banco
+        elif isinstance(ln, dict) and str(ln.get("codigo", "")).strip() == "104":
+            ln["codigo"] = codigo_banco
+            ln["denominacion"] = nombre_banco
+        lineas.append(ln)
+    asiento["lineas"] = lineas
+    return asiento
+
+
+def _extraer_texto_estado_inicial(item):
+    if isinstance(item, dict):
+        return " ".join(str(item.get(k) or "") for k in (
+            "seccion", "cuenta", "descripcion", "denominacion", "concepto", "nombre", "detalle", "texto"
+        ))
+    return str(item or "")
+
+
+def _extraer_importe_estado_inicial(item):
+    if isinstance(item, dict):
+        for k in ("importe", "saldo", "monto", "valor", "debe", "haber"):
+            n = _to_float(item.get(k), None)
+            if n is not None:
+                return n
+        # Buscar el primer número razonable en campos numéricos.
+        for v in item.values():
+            n = _to_float(v, None)
+            if n is not None and abs(n) > 0:
+                return n
+    # Caso texto: último número con formato monetario/simple.
+    m = re.findall(r"[-+]?\d[\d,]*(?:\.\d+)?", str(item or ""))
+    if m:
+        try:
+            return float(m[-1].replace(",", ""))
+        except Exception:
+            pass
+    return None
+
+
+def _cuenta_apertura_para_texto(texto):
+    """Mapeo conservador de saldos iniciales a cuentas operativas de 5 dígitos."""
+    t = _normalizar_texto_contable(texto)
+    banco = _detectar_banco_en_texto(t)
+    es_obligacion_bancaria = any(k in t for k in ("prestamo por pagar", "préstamo por pagar", "prestamo al banco", "préstamo al banco", "deuda con el banco"))
+    if banco and not es_obligacion_bancaria and any(k in t for k in ("cuenta corriente", "cuenta de ahorros", "cuenta ahorro", "dinero en cuenta", "cheque", "transferencia bancaria")):
+        return banco, TANA_BANCOS_NOMBRES.get(banco, pcge_map.get(banco, "Cuenta bancaria"))
+    reglas = [
+        (("caja chica", "dinero en caja chica", "efectivo en caja"), "10111", "Caja"),
+        (("facturas por cobrar", "cuentas por cobrar", "factura por cobrar", "emitidas en cartera"), "12121", "Emitidas en cartera"),
+        (("prendas de vestir", "mercaderias", "mercaderías", "muebles de melamine", "existencias", "mercaderia"), "20111", "Costo"),
+        (("suministros de oficina", "suministros", "materiales auxiliares"), "25241", "Otros suministros"),
+        (("muebles", "muebles y enseres", "propiedad planta y equipo"), "33511", "Costo"),
+        (("depreciacion acumulada", "depreciación acumulada"), "39526", "Muebles y enseres"),
+        (("igv por pagar", "igv – cuenta propia", "igv cuenta propia", "igv por pagar"), "40111", "IGV – Cuenta propia"),
+        (("essalud por pagar", "essalud", "es salud"), "40311", "ESSALUD"),
+        (("afp por pagar", "administradoras de fondos de pensiones", "afp"), "41711", "Administradoras de fondos de pensiones"),
+        (("facturas por pagar", "cuentas por pagar comerciales", "emitidas por pagar", "proveedores"), "42121", "Emitidas"),
+        (("prestamo por pagar", "préstamo por pagar", "prestamo al banco", "préstamo al banco"), "45111", "Instituciones financieras"),
+        (("participaciones sociales", "capital social", "capital"), "50121", "Participaciones"),
+        (("utilidades acumuladas", "resultados acumulados", "utilidad acumulada"), "59111", "Utilidades acumuladas"),
+    ]
+    for claves, codigo, desc in reglas:
+        if any(k in t for k in claves):
+            return codigo, desc
+    return None, None
+
+
+def _construir_asiento_apertura_determinista(monografia_json):
+    """Construye un único asiento de apertura desde el estado inicial, sin cerrar a 50."""
+    estado = (monografia_json or {}).get("estado_inicial", []) or []
+    if not estado:
+        return None
+
+    lineas_debe = []
+    lineas_haber = []
+    sum_debe = 0.0
+    sum_haber = 0.0
+    faltantes = []
+
+    for item in estado:
+        texto = _extraer_texto_estado_inicial(item)
+        importe = _extraer_importe_estado_inicial(item)
+        if importe is None or abs(float(importe)) < 0.005:
+            continue
+        codigo, desc = _cuenta_apertura_para_texto(texto)
+        if not codigo:
+            faltantes.append(texto)
+            continue
+        monto = abs(round(float(importe), 2))
+        # Depreciaciones acumuladas son saldos acreedores aun cuando el texto trae importe negativo.
+        es_contra_activo = codigo.startswith("39") or "depreciacion acumulada" in _normalizar_texto_contable(texto)
+        es_pasivo_patrimonio = codigo.startswith(("40", "41", "42", "45", "50", "59"))
+        line = {"codigo": codigo, "denominacion": desc, "debe": 0.0, "haber": 0.0, "concepto": texto.strip()}
+        if float(importe) < 0 or es_contra_activo or es_pasivo_patrimonio:
+            line["haber"] = monto
+            lineas_haber.append(line); sum_haber += monto
+        else:
+            line["debe"] = monto
+            lineas_debe.append(line); sum_debe += monto
+
+    # Si la práctica deja utilidades acumuladas en '?' o no las expresa pero el
+    # resto del estado permite cuadrar, calculamos 59111 como diferencia.
+    if abs(sum_debe - sum_haber) > 0.009:
+        diferencia = round(sum_debe - sum_haber, 2)
+        if diferencia > 0.009:
+            # El saldo faltante del patrimonio es acreedor.
+            existente = next((x for x in lineas_haber if x.get("codigo") == "59111"), None)
+            if existente:
+                existente["haber"] = round(existente["haber"] + diferencia, 2)
+            else:
+                lineas_haber.append({"codigo": "59111", "denominacion": "Utilidades acumuladas", "debe": 0.0, "haber": diferencia, "concepto": "Saldo de utilidades acumuladas necesario para cuadrar el estado inicial"})
+            sum_haber += diferencia
+        elif diferencia < -0.009:
+            # Si el Haber supera al Debe, el saldo faltante es un resultado
+            # acumulado deudor (pérdida). No se crea un activo ficticio.
+            perdida = abs(diferencia)
+            existente = next((x for x in lineas_debe if x.get("codigo") == "59211"), None)
+            if existente:
+                existente["debe"] = round(existente["debe"] + perdida, 2)
+            else:
+                lineas_debe.append({
+                    "codigo": "59211",
+                    "denominacion": "Pérdidas acumuladas",
+                    "debe": perdida,
+                    "haber": 0.0,
+                    "concepto": "Saldo de pérdidas acumuladas necesario para cuadrar el estado inicial"
+                })
+            sum_debe += perdida
+
+    if abs(sum_debe - sum_haber) > 0.009:
+        return None
+    if not lineas_debe or not lineas_haber:
+        return None
+
+    empresa = str((monografia_json or {}).get("empresa") or "").strip()
+    periodo = str((monografia_json or {}).get("periodo") or "").strip()
+    fecha = ""
+    m = re.search(r"\d{1,2}[/-]\d{1,2}[/-]\d{2,4}", periodo)
+    if m:
+        fecha = m.group(0)
+    else:
+        for item in (monografia_json or {}).get("operaciones", []) or []:
+            f = str(item.get("fecha") or "").strip()
+            if f:
+                fecha = f; break
+    obs = "Asiento de apertura generado directamente desde el estado inicial. Activos en Debe y pasivos/patrimonio en Haber."
+    if faltantes:
+        obs += " Revisar datos no mapeados: " + "; ".join(faltantes[:3])
+    return {
+        "numero": 1,
+        "fecha": fecha,
+        "glosa": f"Apertura / reapertura para el proceso contable{(' de ' + empresa) if empresa else ''}",
+        "documento": "Balance / Estado de Situación Financiera inicial",
+        "operacion_numero": 0,
+        "requiere_revision": bool(faltantes),
+        "observacion": obs,
+        "lineas": lineas_debe + lineas_haber,
+    }
+
 
 # ============================================================
 # GEMINI: lectura multimodal de monografías
@@ -542,6 +1194,7 @@ with open(PCGE_FILE, encoding="utf-8") as f:
 # El motor de Gemini crea su propia copia local, pero el Excel también necesita
 # resolver la denominación de cada código sin depender de esa función.
 pcge_map = {str(cod).strip(): str(desc) for cod, desc in PCGE_DATA}
+_instalar_subdivisionarias_bancarias_en_pcge()
 
 
 # ============================================================
@@ -808,6 +1461,270 @@ Devuelve únicamente JSON válido con esta estructura:
 
 {
   "empresa": "",
+  "empresas": [],
+  "ruc": "",
+  "tipo_documento": "",
+  "periodo": "",
+  "estado_inicial": [],
+  "operaciones": [
+    {
+      "numero": 1,
+      "empresa": "",
+      "ruc": "",
+      "fecha": "",
+      "descripcion": "",
+      "importe": null,
+      "moneda": "PEN",
+      "cantidad": null,
+      "precio_unitario": null,
+      "porcentaje": null,
+      "documento": "",
+      "forma_pago": "",
+      "medio_pago": "",
+      "tercero": "",
+      "cuenta_bancaria": "",
+      "datos_adicionales": ""
+    }
+  ],
+  "solicitudes": [],
+  "datos_importantes": []
+}
+
+REGLAS:
+- No inventes datos que no estén en la monografía.
+- Conserva exactamente fechas, importes, cantidades, porcentajes,
+  documentos, nombres, RUC y condiciones.
+- Si un dato no aparece, usa null o "".
+- Separa cada operación en un elemento.
+- Identifica TODAS las empresas participantes del ejercicio y colócalas también en "empresas" como una lista de nombres exactos.
+- Si existen dos o más empresas, cada operación DEBE llevar el campo "empresa" con el nombre exacto de la empresa a la que corresponde.
+- Si existen dos o más empresas, cada partida de "estado_inicial" DEBE llevar también el campo "empresa" correspondiente.
+- No uses como empresa nombres de bancos, clientes, proveedores ni cuentas contables.
+- Incluye el estado financiero inicial si existe, con CADA partida individual y su importe exacto. NO consolides varias partidas en una sola cuenta.
+- El balance inicial es una fuente histórica del propio documento: NO reutilices importes de otra práctica, ejemplo, sesión o archivo anterior. Si el texto presenta dos empresas, extrae sus saldos por separado.
+- Si aparece un banco concreto (Banco de la Nación, BCP/Banco de Crédito del Perú, Interbank, Scotiabank, BBVA, BanBif, Pichincha, Falabella, Ripley, GNB), conserva el nombre exacto dentro de "cuenta_bancaria", "descripcion" o "datos_importantes". NO lo reemplaces por "cuenta corriente" genérico.
+- Incluye todo lo que el ejercicio pide realizar en "solicitudes".
+- La información extraída servirá después para el motor contable de TANA.
+"""
+
+def _extraer_candidato_json(texto):
+    """Extrae el primer objeto/lista JSON completo de una respuesta de Gemini.
+
+    Gemini puede devolver JSON válido precedido por Markdown o texto adicional.
+    Esta función no modifica el contenido interno; solo localiza el bloque raíz.
+    """
+    texto = str(texto or "").strip()
+    if not texto:
+        return ""
+    # Eliminar cercos Markdown frecuentes.
+    texto = re.sub(r"^\s*```(?:json)?\s*", "", texto, flags=re.IGNORECASE)
+    texto = re.sub(r"\s*```\s*$", "", texto)
+
+    inicio = None
+    apertura = None
+    for i, ch in enumerate(texto):
+        if ch in "[{":
+            inicio = i
+            apertura = ch
+            break
+    if inicio is None:
+        return texto
+
+    cierre = "]" if apertura == "[" else "}"
+    profundidad = 0
+    en_cadena = False
+    escape = False
+    comilla = ""
+    for i in range(inicio, len(texto)):
+        ch = texto[i]
+        if en_cadena:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == comilla:
+                en_cadena = False
+            continue
+        if ch in ('"', "'"):
+            en_cadena = True
+            comilla = ch
+            continue
+        if ch == apertura:
+            profundidad += 1
+        elif ch == cierre:
+            profundidad -= 1
+            if profundidad == 0:
+                return texto[inicio:i + 1]
+    return texto[inicio:]
+
+
+def _reparar_json_comun(texto):
+    """Hace reparaciones conservadoras sobre JSON casi-válido.
+
+    No intenta inventar datos. Solo corrige problemas sintácticos habituales:
+    comillas tipográficas, claves sin comillas y comas finales.
+    """
+    s = _extraer_candidato_json(texto)
+    s = s.replace("“", '"').replace("”", '"').replace("‘", "'").replace("’", "'")
+    # Claves sin comillas: {asientos: ...}, , fecha: ...
+    s = re.sub(r'([\{\[,])\s*([A-Za-z_][A-Za-z0-9_-]*)\s*:', r'\1"\2":', s)
+    # Comas finales antes de cerrar objeto/lista.
+    s = re.sub(r',\s*([}\]])', r'\1', s)
+    return s.strip()
+
+
+def _parsear_respuesta_json_gemini(texto):
+    """Convierte de forma robusta la respuesta estructurada de Gemini a Python.
+
+    Primero exige JSON real. Solo si falla aplica reparaciones sintácticas
+    conservadoras y, como último recurso, literal_eval para respuestas que
+    Gemini haya emitido con sintaxis de diccionario de Python.
+    """
+    original = str(texto or "").strip()
+    if not original:
+        raise json.JSONDecodeError("Respuesta JSON vacía", "", 0)
+
+    candidato = _extraer_candidato_json(original)
+    try:
+        return json.loads(candidato)
+    except json.JSONDecodeError as primer_error:
+        reparado = _reparar_json_comun(candidato)
+        try:
+            return json.loads(reparado)
+        except json.JSONDecodeError:
+            # Último recurso para respuestas tipo Python dict/list.
+            try:
+                python_like = re.sub(r'\\btrue\\b', 'True', reparado, flags=re.IGNORECASE)
+                python_like = re.sub(r'\\bfalse\\b', 'False', python_like, flags=re.IGNORECASE)
+                python_like = re.sub(r'\\bnull\\b', 'None', python_like, flags=re.IGNORECASE)
+                return ast.literal_eval(python_like)
+            except Exception:
+                raise primer_error
+
+
+def _gemini_error_message(exc):
+    msg = str(exc)
+    low = msg.lower()
+    if "429" in low or "resource_exhausted" in low or "quota" in low:
+        return (
+            "Se agotó una ruta de Gemini y TANA intentó automáticamente una ruta de respaldo. "
+            "Si todas las rutas fallan, configura GEMINI_API_KEY_2 o GEMINI_API_KEY_3 "
+            "en Streamlit Secrets. "
+            f"Ruta principal: {GEMINI_MODEL}."
+        )
+    return msg
+
+
+LEGACY_DOCUMENT_TEXT_PROMPT = """
+Lee TODO el contenido visible del documento que se te proporciona.
+Puede ser un archivo Word antiguo (.doc), Word moderno (.docx) u otro documento.
+No resuelvas la contabilidad y no hagas un resumen.
+Devuelve el texto completo y ordenado de la práctica, conservando fechas, operaciones,
+importes, cantidades, porcentajes, monedas, condiciones de pago y todo lo que se
+solicita al estudiante. Si hay tablas, reproduce sus filas y columnas de forma legible.
+No inventes información.
+"""
+
+
+def _extract_docx_text_local(path):
+    """Extrae texto y tablas de DOCX sin depender de metadatos binarios.
+
+    La salida se usa como base estable para la extracción contable. Si el DOCX
+    no contiene texto suficiente, la ruta principal de Gemini sigue disponible.
+    """
+    try:
+        from docx import Document
+        doc = Document(path)
+        partes = []
+        for p in doc.paragraphs:
+            txt = re.sub(r"\s+", " ", str(p.text or "")).strip()
+            if txt:
+                partes.append(txt)
+        for table in doc.tables:
+            for row in table.rows:
+                celdas = []
+                for cell in row.cells:
+                    txt = re.sub(r"\s+", " ", str(cell.text or "")).strip()
+                    celdas.append(txt)
+                if any(celdas):
+                    partes.append(" | ".join(celdas))
+        return "\n".join(partes).strip()
+    except Exception:
+        return ""
+
+
+def _extract_pdf_text_local(path):
+    """Extrae texto de PDF cuando existe capa textual; si es escaneado, devuelve vacío."""
+    try:
+        reader = PdfReader(path)
+        partes = []
+        for page in reader.pages:
+            txt = page.extract_text() or ""
+            txt = re.sub(r"\s+", " ", txt).strip()
+            if txt:
+                partes.append(txt)
+        return "\n".join(partes).strip()
+    except Exception:
+        return ""
+
+
+def _extract_legacy_doc_text_local(path):
+    """Extrae texto de Word antiguo .doc usando antiword cuando está disponible.
+
+    Gemini puede aceptar application/msword en algunas rutas, pero para .doc
+    antiguo es mucho más estable convertirlo primero a texto plano localmente.
+    """
+    try:
+        proc = subprocess.run(
+            ["antiword", "-t", path],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=45,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError, OSError):
+        return ""
+    text = (proc.stdout or "").replace("\\x00", " ").strip()
+    if proc.returncode != 0 and not text:
+        return ""
+    return text
+
+
+LEGACY_OPERATION_RESCUE_PROMPT = """
+Eres el extractor de prácticas contables de TANA.
+
+A continuación recibirás el texto completo de una práctica contable, extraído
+localmente de un Word antiguo (.doc). El texto puede perder parte del formato,
+pero debes reconstruir la estructura por el contenido.
+
+IMPORTANTE:
+- NO resuelvas los asientos todavía.
+- NO hagas un resumen.
+- Identifica TODAS las operaciones contables de la práctica.
+- Cada compra, venta, cobro, pago, aporte, préstamo, gasto, adquisición,
+  depreciación, remuneración, ajuste, transferencia, etc. que deba registrarse
+  debe aparecer como una operación independiente.
+- Conserva fechas, importes, cantidades, porcentajes, documentos, nombres,
+  condiciones y formas de pago.
+- Si una operación no tiene importe explícito, conserva la descripción y usa
+  null para el importe.
+- No inventes operaciones.
+- Si existe uno o más balances iniciales, extrae TODAS sus partidas individuales dentro de
+  "estado_inicial" con su importe exacto y empresa correspondiente. No consolides
+  bancos, cuentas por cobrar, inventarios, activos fijos, pasivos ni patrimonio.
+- No reutilices importes de otra práctica o de otro ejercicio. El texto fuente es la única
+  autoridad para los saldos iniciales. Si el texto presenta dos empresas, cada una debe
+  conservar su propio conjunto de partidas.
+- Conserva el nombre exacto del banco cuando aparezca (Banco de la Nación, BCP/Banco de
+  Crédito del Perú, etc.).
+
+Devuelve SOLO JSON válido con esta estructura:
+{
+  "empresa": "",
+  "empresas": [],
+  "ruc": "",
   "tipo_documento": "",
   "periodo": "",
   "estado_inicial": [],
@@ -833,42 +1750,269 @@ Devuelve únicamente JSON válido con esta estructura:
   "datos_importantes": []
 }
 
-REGLAS:
-- No inventes datos que no estén en la monografía.
-- Conserva exactamente fechas, importes, cantidades, porcentajes,
-  documentos, nombres y condiciones.
-- Si un dato no aparece, usa null o "".
-- Separa cada operación en un elemento.
-- Incluye el estado financiero inicial si existe.
-- Incluye todo lo que el ejercicio pide realizar en "solicitudes".
-- La información extraída servirá después para el motor contable de TANA.
+TEXTO COMPLETO DE LA PRÁCTICA:
 """
 
-def _gemini_error_message(exc):
-    msg = str(exc)
-    low = msg.lower()
-    if "429" in low or "resource_exhausted" in low or "quota" in low:
-        return (
-            "Se agotó una ruta de Gemini y TANA intentó automáticamente una ruta de respaldo. "
-            "Si todas las rutas fallan, configura GEMINI_API_KEY_2 o GEMINI_API_KEY_3 "
-            "en Streamlit Secrets. "
-            f"Ruta principal: {GEMINI_MODEL}."
+
+def _upload_gemini_file(client, path, mime_type=None):
+    """Sube un archivo a Gemini con MIME explícito cuando el SDK lo permite."""
+    if mime_type:
+        upload_cfg = getattr(types, "UploadFileConfig", None)
+        if upload_cfg is not None:
+            try:
+                return client.files.upload(file=path, config=upload_cfg(mime_type=mime_type))
+            except Exception:
+                pass
+    return client.files.upload(file=path)
+
+
+def _extraction_has_content(data):
+    """Evita continuar y generar 0 asientos cuando la lectura del documento falló."""
+    if not isinstance(data, dict):
+        return False
+    if isinstance(data.get("operaciones"), list) and data.get("operaciones"):
+        return True
+    if any(str(data.get(k) or "").strip() for k in ("empresa", "tipo_documento", "periodo")):
+        return True
+    return bool(data.get("estado_inicial") or data.get("solicitudes") or data.get("datos_importantes"))
+
+
+def _json_extraction_from_text(client, model, document_text):
+    # La semilla debe depender del contenido textual normalizado y no de la
+    # representación binaria del archivo. Así, el mismo documento guardado
+    # desde otro dispositivo no cambia de ruta de decisión por metadatos.
+    text = re.sub(r"\s+", " ", str(document_text or "")).strip()
+    prompt = (EXTRACTION_PROMPT + "\n\nTEXTO COMPLETO DE LA PRÁCTICA:\n" + text[:120000])
+    response = client.models.generate_content(
+        model=model, contents=[prompt],
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            temperature=0.0,
+            seed=_deterministic_seed(text),
+        ),
+    )
+    return _parsear_respuesta_json_gemini(response.text or "{}")
+
+
+OPENING_STATE_PROMPT = """
+Eres el verificador de SALDOS INICIALES de TANA. Tu única tarea es extraer con fidelidad
+los balances/estados de situación financiera que aparecen ANTES de las operaciones de
+una práctica contable.
+
+FUENTE ÚNICA: el texto completo de la práctica que se adjunta al final.
+
+REGLAS CRÍTICAS:
+- NO uses datos de otras prácticas, ejemplos, memoria, sesiones anteriores ni datos
+  que no aparezcan literalmente en el texto fuente.
+- NO agregues, agrupes, redistribuyas ni sustituyas importes.
+- Conserva CADA partida del balance inicial por separado, aunque varias partidas
+  pertenezcan al mismo elemento contable.
+- Conserva exactamente el importe que aparece junto a cada partida.
+- Si el texto dice Banco de la Nación, Banco de Crédito del Perú/BCP, Interbank,
+  Scotiabank, BBVA u otro banco, conserva el nombre exacto.
+- Conserva también las cuentas de pasivo y patrimonio por separado.
+- Las depreciaciones acumuladas deben conservar su importe como valor negativo y
+  quedar identificadas como contra-activo.
+- NO calcules una partida faltante usando otra partida. Solo conserva un importe
+  calculado si la propia práctica lo presenta explícitamente.
+- Si hay dos o más empresas, sepáralas completamente.
+- No mezcles balances de empresas distintas.
+- Incluye los totales del balance como registros tipo "TOTAL" para poder validar
+  que la extracción coincide con la fuente.
+
+Devuelve SOLO JSON válido:
+{
+  "estado_inicial": [
+    {
+      "empresa": "",
+      "fecha": "",
+      "seccion": "ACTIVO|PASIVO|PATRIMONIO|TOTAL",
+      "concepto": "",
+      "importe": 0,
+      "signo": "positivo|negativo",
+      "tipo": "partida|contra_activo|total_activo|total_pasivo|total_patrimonio|total_pasivo_patrimonio",
+      "banco": ""
+    }
+  ]
+}
+
+Antes de devolver el JSON, comprueba internamente que los importes y conceptos fueron
+copiados del texto fuente y que no pertenecen a otro ejercicio.
+"""
+
+
+def _estado_inicial_es_verosimil(valores):
+    """Valida que la extracción de apertura tenga partidas y totales coherentes.
+
+    La validación es deliberadamente conservadora: si faltan totales o no se puede
+    comprobar la estructura por empresa, no reemplazamos la extracción original.
+    """
+    if not isinstance(valores, list) or not valores:
+        return False
+    empresas = {}
+    for item in valores:
+        if not isinstance(item, dict):
+            continue
+        emp = str(item.get("empresa") or "").strip()
+        if not emp:
+            continue
+        empresas.setdefault(emp, []).append(item)
+    if not empresas:
+        return False
+    partidas = 0
+    for emp, items in empresas.items():
+        tipos = {str(x.get("tipo") or "").lower() for x in items}
+        if not any(t.startswith("total_activo") for t in tipos):
+            return False
+        if not any(t in {"total_pasivo_patrimonio", "total_pasivo", "total_patrimonio"} for t in tipos):
+            return False
+        for x in items:
+            if str(x.get("tipo") or "").lower() in {"partida", "contra_activo"}:
+                try:
+                    float(x.get("importe"))
+                    partidas += 1
+                except Exception:
+                    return False
+    return partidas >= 2
+
+
+def _reforzar_estado_inicial_desde_texto(client, model, document_text, data):
+    """Vuelve a extraer SOLO el balance inicial desde el texto fuente.
+
+    Se usa como segunda barrera para evitar que una extracción general arrastre
+    importes de otro ejercicio o consolide varias partidas del balance.
+    """
+    text = re.sub(r"\s+", " ", str(document_text or "")).strip()
+    if len(text) < 120:
+        return data
+    try:
+        response = client.models.generate_content(
+            model=model,
+            contents=[OPENING_STATE_PROMPT + "\n\nTEXTO FUENTE COMPLETO:\n" + text[:140000]],
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.0,
+                seed=_deterministic_seed("OPENING_STATE|" + text),
+            ),
         )
-    return msg
+        extra = _parsear_respuesta_json_gemini(response.text or "{}")
+        estado = extra.get("estado_inicial", []) if isinstance(extra, dict) else []
+        if _estado_inicial_es_verosimil(estado):
+            data = dict(data or {})
+            data["estado_inicial"] = estado
+            data["estado_inicial_fuente_verificada"] = True
+        return data
+    except Exception:
+        return data
+
+
+def _rescue_extraction_with_gemini(client, model, gemini_file):
+    """Ruta de rescate para Word: lectura textual completa y luego extracción estructurada."""
+    response = client.models.generate_content(
+        model=model, contents=[gemini_file, LEGACY_DOCUMENT_TEXT_PROMPT],
+        config=types.GenerateContentConfig(),
+    )
+    document_text = response.text or ""
+    if not document_text.strip():
+        raise ValueError("Gemini no devolvió texto legible del documento.")
+    return _json_extraction_from_text(client, model, document_text)
+
+def _canonicalize_for_hash(value):
+    """Normaliza datos extraídos para que la semilla sea estable.
+
+    La misma práctica puede llegar como archivos binariamente distintos por
+    metadatos de Word, dispositivo o fecha de guardado. Para la contabilidad
+    no deben importar esos detalles. También normalizamos el orden de las
+    operaciones y los importes numéricos antes de calcular la huella.
+    """
+    if isinstance(value, dict):
+        out = {}
+        for key in sorted(value.keys(), key=str):
+            if key in {"operaciones", "estado_inicial", "solicitudes", "datos_importantes"}:
+                continue
+            out[str(key)] = _canonicalize_for_hash(value[key])
+
+        if isinstance(value.get("operaciones"), list):
+            ops = [_canonicalize_for_hash(x) for x in value.get("operaciones", [])]
+            ops.sort(key=lambda x: (
+                str(x.get("numero", "")),
+                str(x.get("fecha", "")),
+                str(x.get("descripcion", "")),
+                str(x.get("importe", "")),
+            ))
+            out["operaciones"] = ops
+        for key in ("estado_inicial", "solicitudes", "datos_importantes"):
+            if key in value:
+                items = [_canonicalize_for_hash(x) for x in (value.get(key) or [])]
+                if isinstance(items, list):
+                    items.sort(key=lambda x: json.dumps(x, ensure_ascii=False, sort_keys=True, default=str))
+                out[key] = items
+        return out
+    if isinstance(value, list):
+        return [_canonicalize_for_hash(x) for x in value]
+    if isinstance(value, float):
+        return round(value, 2)
+    if isinstance(value, int) and not isinstance(value, bool):
+        return int(value)
+    if value is None:
+        return None
+    return re.sub(r"\s+", " ", str(value)).strip()
+
+
+def _deterministic_seed(value):
+    """Semilla estable derivada de contenido contable normalizado."""
+    import hashlib
+    canonical = _canonicalize_for_hash(value)
+    payload = json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    raw = payload.encode("utf-8", errors="ignore")
+    return int.from_bytes(hashlib.sha256(raw).digest()[:4], "big") % 2147483647
+
+
+@st.cache_data(show_spinner=False, ttl=86400, max_entries=128)
+def _cached_json_extraction_from_text(document_text, model, api_key):
+    """Extracción compartida por práctica: misma fuente textual -> mismo JSON en todas las sesiones."""
+    client = get_gemini_client(api_key)
+    return _json_extraction_from_text(client, model, document_text)
+
+
+@st.cache_data(show_spinner=False, ttl=86400, max_entries=128)
+def _cached_opening_extraction_from_text(document_text, model, api_key):
+    """Extrae exclusivamente el balance inicial y lo comparte entre usuarios."""
+    client = get_gemini_client(api_key)
+    text = re.sub(r"\\s+", " ", str(document_text or "")).strip()
+    response = client.models.generate_content(
+        model=model,
+        contents=[OPENING_STATE_PROMPT + "\\n\\nTEXTO FUENTE COMPLETO:\\n" + text[:140000]],
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            temperature=0.0,
+            seed=_deterministic_seed("OPENING_STATE|" + text),
+        ),
+    )
+    extra = _parsear_respuesta_json_gemini(response.text or "{}")
+    estado = extra.get("estado_inicial", []) if isinstance(extra, dict) else []
+    if not _estado_inicial_es_verosimil(estado):
+        raise ValueError("La extracción determinista del balance inicial no pasó la validación estructural.")
+    return estado
 
 
 def extract_with_gemini(uploaded):
     profiles = get_gemini_profiles()
     if not profiles:
         raise RuntimeError(
-            "TANA no tiene configurada ninguna GEMINI_API_KEY. "
-            "En Streamlit abre App settings → Secrets y agrega "
-            'GEMINI_API_KEY = "TU_CLAVE".'
+            "TANA no tiene configurada ninguna GEMINI_API_KEY. En Streamlit abre "
+            'App settings -> Secrets y agrega GEMINI_API_KEY = "TU_CLAVE".'
         )
 
     suffix = "." + uploaded.name.rsplit(".", 1)[-1].lower()
     temp_path = None
     uploaded_bytes = uploaded.getvalue()
+    extension = uploaded.name.rsplit(".", 1)[-1].lower() if "." in uploaded.name else ""
+    mime_type = mimetypes.guess_type(uploaded.name)[0]
+    if extension == "doc":
+        mime_type = "application/msword"
+    elif extension == "docx":
+        mime_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
@@ -876,25 +2020,85 @@ def extract_with_gemini(uploaded):
             temp_path = tmp.name
 
         errors = []
+
+        # DOCX/PDF con capa textual: usar una representación textual estable
+        # antes de enviar el archivo binario. Así los metadatos de Word o el
+        # dispositivo desde el que se guardó el archivo no cambian la extracción.
+        local_text = ""
+        if extension == "docx":
+            local_text = _extract_docx_text_local(temp_path)
+        elif extension == "pdf":
+            local_text = _extract_pdf_text_local(temp_path)
+
+        if local_text and len(local_text.strip()) >= 80:
+            for profile in profiles:
+                client = get_gemini_client(profile["api_key"])
+                try:
+                    data = _cached_json_extraction_from_text(local_text, profile["model"], profile["api_key"])
+                    if _extraction_has_content(data) and data.get("operaciones"):
+                        try:
+                            estado_verificado = _cached_opening_extraction_from_text(local_text, profile["model"], profile["api_key"])
+                            data = dict(data)
+                            data["estado_inicial"] = estado_verificado
+                            data["estado_inicial_fuente_verificada"] = True
+                        except Exception:
+                            # Si no existe balance inicial, se conserva la extracción general.
+                            pass
+                        return data
+                    errors.append((profile["label"], profile["model"], ValueError("La extracción textual no identificó operaciones contables.")))
+                except Exception as exc:
+                    errors.append((profile["label"], profile["model"], exc))
+
+        # Word antiguo (.doc): usar texto local primero. Esto evita depender de
+        # cómo una ruta/modelo de Gemini interpreta el formato binario legacy.
+        if extension == "doc":
+            legacy_text = _extract_legacy_doc_text_local(temp_path)
+            if legacy_text:
+                local_errors = []
+                for profile in profiles:
+                    client = get_gemini_client(profile["api_key"])
+                    try:
+                        rescue_prompt = LEGACY_OPERATION_RESCUE_PROMPT + legacy_text[:120000]
+                        response = client.models.generate_content(
+                            model=profile["model"],
+                            contents=[rescue_prompt],
+                            config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.0, seed=_deterministic_seed(legacy_text)),
+                        )
+                        try:
+                            data = _parsear_respuesta_json_gemini(response.text or "{}")
+                        except json.JSONDecodeError:
+                            data = {}
+                        if _extraction_has_content(data) and data.get("operaciones"):
+                            data = _reforzar_estado_inicial_desde_texto(client, profile["model"], legacy_text, data)
+                            return data
+                        local_errors.append((profile["label"], profile["model"],
+                                             ValueError("La extracción local obtuvo texto, pero no operaciones contables.")))
+                    except Exception as exc:
+                        local_errors.append((profile["label"], profile["model"], exc))
+                errors.extend(local_errors)
+
         for profile in profiles:
             client = get_gemini_client(profile["api_key"])
-            gemini_file = None
             try:
-                # Cada perfil tiene su propio cliente/proyecto. El archivo se sube
-                # a ese proyecto y solo entonces se consume la generación.
-                gemini_file = client.files.upload(file=temp_path)
+                gemini_file = _upload_gemini_file(client, temp_path, mime_type)
                 response = client.models.generate_content(
                     model=profile["model"],
                     contents=[gemini_file, EXTRACTION_PROMPT],
-                    config=types.GenerateContentConfig(response_mime_type="application/json"),
+                    config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.0, seed=_deterministic_seed({"extension": extension, "bytes": uploaded_bytes.hex()})),
                 )
-                raw = response.text or ""
-                data = json.loads(raw)
+                try:
+                    data = _parsear_respuesta_json_gemini(response.text or "{}")
+                except json.JSONDecodeError:
+                    data = _rescue_extraction_with_gemini(client, profile["model"], gemini_file)
+                if not _extraction_has_content(data):
+                    data = _rescue_extraction_with_gemini(client, profile["model"], gemini_file)
+                if not _extraction_has_content(data):
+                    raise ValueError(
+                        "TANA pudo abrir el archivo, pero no encontró operaciones o datos contables reconocibles."
+                    )
                 return data
             except Exception as exc:
                 errors.append((profile["label"], profile["model"], exc))
-                if not _is_gemini_fallback_error(exc):
-                    raise RuntimeError(_gemini_error_message(exc)) from exc
                 continue
 
         raise RuntimeError(_fallback_error_message(errors))
@@ -1070,7 +2274,8 @@ with st.sidebar:
             "respuesta_tana", "respuesta_tana_ruta", "audio_tana_processed",
             "tana_modo_trabajo", "tana_correcciones", "tana_correccion_version",
             "tana_excel_origen_bytes", "tana_diagnostico_excel",
-            "tana_excel_buffer", "tana_resuelto_signature",
+            "tana_excel_buffer", "tana_excel_output_ready", "tana_resuelto_signature",
+        "tana_excel_outputs", "tana_empresas_detectadas", "tana_multiempresa_alerta",
         ):
             st.session_state.pop(_key, None)
         st.rerun()
@@ -1125,29 +2330,32 @@ inputbar_container = st.container()
 with inputbar_container:
     st.markdown('<span class="tana-inputbar-anchor"></span>', unsafe_allow_html=True)
 
-    bar = st.columns([0.7, 5.6, 0.85, 0.85], gap="small")
-    with bar[0]:
-        uploaded_file = st.file_uploader(
-            "Archivo", type=SUPPORTED_TYPES, label_visibility="collapsed",
-            help="Adjuntar monografía: PDF, DOC, DOCX, XLS, XLSX, JPG, JPEG y PNG."
-        )
-    with bar[1]:
-        pregunta_top = st.text_input(
-            "Consulta", placeholder="Pregunta a TANA…",
-            key="pregunta_tana_top", label_visibility="collapsed"
-        )
-    with bar[2]:
-        audio_top = st.audio_input("Hablar", key="audio_tana_top", label_visibility="collapsed") if hasattr(st, "audio_input") else None
-    with bar[3]:
-        enviar_top = st.button("➤", type="primary", key="btn_enviar_tana_top", use_container_width=True)
+    # clear_on_submit=True hace que, después de enviar, la pregunta, el audio
+    # y el archivo seleccionado vuelvan a quedar limpios para la siguiente
+    # consulta. El procesamiento usa los valores capturados en esta misma
+    # ejecución antes de que Streamlit limpie los widgets en el siguiente rerun.
+    with st.form("tana_input_form", clear_on_submit=True, border=False):
+        bar = st.columns([0.7, 5.6, 0.85, 0.85], gap="small")
+        with bar[0]:
+            uploaded_file = st.file_uploader(
+                "Archivo", type=SUPPORTED_TYPES, label_visibility="collapsed",
+                help="Adjuntar monografía: PDF, DOC, DOCX, XLS, XLSX, JPG, JPEG y PNG."
+            )
+        with bar[1]:
+            pregunta_top = st.text_input(
+                "Consulta", placeholder="Pregunta a TANA…",
+                key="pregunta_tana_top", label_visibility="collapsed"
+            )
+        with bar[2]:
+            audio_top = st.audio_input("Hablar", key="audio_tana_top", label_visibility="collapsed") if hasattr(st, "audio_input") else None
+        with bar[3]:
+            enviar_top = st.form_submit_button("➤", type="primary", use_container_width=True)
 
-    # Cuando hay un archivo cargado, la barra se agranda un poco (hacia
-    # arriba) para mostrar esta etiqueta, en vez de un texto aparte debajo.
-    if uploaded_file:
-        st.markdown(
-            f'<div class="tana-file-chip">📎 {uploaded_file.name} · pulsa ➤ para enviar y procesar</div>',
-            unsafe_allow_html=True,
-        )
+        if uploaded_file:
+            st.markdown(
+                f'<div class="tana-file-chip">📎 {uploaded_file.name} · pulsa ➤ para enviar y procesar</div>',
+                unsafe_allow_html=True,
+            )
 
 def _normalizar_nombre_hoja(nombre):
     import unicodedata
@@ -1263,7 +2471,7 @@ def _cargar_asientos_desde_excel(uploaded):
 
 def _diagnosticar_asientos(asientos, pcge_map):
     """Diagnóstico determinista y explícito para que TANA señale dónde está el error."""
-    diagnostico = []
+    diagnostico = tana_filtrar_diagnostico_preciso([])
     total_d = Decimal("0")
     total_h = Decimal("0")
 
@@ -1433,7 +2641,8 @@ profiles_status = get_gemini_profiles()
 # El archivo se procesa automáticamente al cargarse. No se muestra un botón
 # intermedio: la lógica contable original permanece intacta.
 if uploaded_file:
-    file_signature = f"{uploaded_file.name}|{getattr(uploaded_file, 'size', 0)}"
+    _uploaded_bytes_for_signature = uploaded_file.getvalue()
+    file_signature = f"{uploaded_file.name}|{len(_uploaded_bytes_for_signature)}|{hashlib.sha256(_uploaded_bytes_for_signature).hexdigest()[:16]}"
 def _money(value):
     try:
         if value is None or value == "":
@@ -1441,6 +2650,198 @@ def _money(value):
         return Decimal(str(value).replace(",", ""))
     except (InvalidOperation, ValueError):
         return None
+
+
+def _agregar_hoja_control_contable(wb, asientos, ht_last_row, ern_resultado_row, erf_resultado_row,
+                                   esf_control_row, esf_sheet="ESF", ern_sheet="ERN", erf_sheet="ERF"):
+    """
+    Auditoría determinista de la salida de TANA.
+    No depende de Gemini para decidir si los totales matemáticos cuadran.
+    Las fórmulas se calculan al abrir el Excel.
+    """
+    if "VALIDACION" in wb.sheetnames:
+        del wb["VALIDACION"]
+
+    ws = wb.create_sheet("VALIDACION")
+    _title = "VALIDACIÓN CONTABLE AUTOMÁTICA"
+    ws["A1"] = _title
+    ws["A1"].font = Font(name=FONT, bold=True, size=14, color="1F4E78")
+    ws.merge_cells("A1:D1")
+
+    ws["A3"] = "CONTROL"
+    ws["B3"] = "RESULTADO"
+    ws["C3"] = "DIFERENCIA"
+    ws["D3"] = "INTERPRETACIÓN"
+    style_header(ws, 3, 1, 4)
+
+    rows = []
+
+    # 1) Asientos: suma global.
+    max_ac = max(2, 1 + sum(len(a.get("lineas", []) or []) for a in (asientos or [])))
+    rows.append(("1. Debe = Haber de todos los asientos",
+                 f"=IF(ABS(SUM(Asientos_Contables!$I$2:$I${max_ac})-SUM(Asientos_Contables!$J$2:$J${max_ac}))<0.01,\"CUADRADO\",\"REVISAR\")",
+                 f"=SUM(Asientos_Contables!$I$2:$I${max_ac})-SUM(Asientos_Contables!$J$2:$J${max_ac})",
+                 "El total Debe y Haber debe ser igual."))
+
+    # 2) HT: suma de movimientos.
+    rows.append(("2. HT — suma Debe = Haber",
+                 f"=IF(ABS(SUM(HT!$C$4:$C${ht_last_row})-SUM(HT!$D$4:$D${ht_last_row}))<0.01,\"CUADRADO\",\"REVISAR\")",
+                 f"=SUM(HT!$C$4:$C${ht_last_row})-SUM(HT!$D$4:$D${ht_last_row})",
+                 "La suma de movimientos de la Hoja de Trabajo debe cuadrar."))
+
+    # 3) HT: saldos ajustados.
+    rows.append(("3. HT — saldos ajustados Debe = Haber",
+                 f"=IF(ABS(SUM(HT!$I$4:$I${ht_last_row})-SUM(HT!$J$4:$J${ht_last_row}))<0.01,\"CUADRADO\",\"REVISAR\")",
+                 f"=SUM(HT!$I$4:$I${ht_last_row})-SUM(HT!$J$4:$J${ht_last_row})",
+                 "Los saldos ajustados deben mantener la igualdad."))
+
+    # 4) ERN vs ERF.
+    rows.append(("4. ERN = ERF — resultado del ejercicio",
+                 f"=IF(ABS(ERN!$E${ern_resultado_row}-ERF!$E${erf_resultado_row})<0.01,\"CUADRADO\",\"REVISAR\")",
+                 f"=ERN!$E${ern_resultado_row}-ERF!$E${erf_resultado_row}",
+                 "Ambos estados deben llegar al mismo resultado."))
+
+    # 5) ESF.
+    rows.append(("5. ESF — Activo = Pasivo + Patrimonio",
+                 f"=IF(ABS(ESF!$J${esf_control_row})<0.01,\"CUADRADO\",\"REVISAR\")",
+                 f"=ESF!$J${esf_control_row}",
+                 "La diferencia del ESF debe ser 0.00."))
+
+    # 6) ERN resultado no vacío / numérico.
+    rows.append(("6. ERN — resultado calculado",
+                 f"=IF(ISNUMBER(ERN!$E${ern_resultado_row}),\"CALCULADO\",\"REVISAR\")",
+                 f"=ERN!$E${ern_resultado_row}",
+                 "El resultado por naturaleza debe existir."))
+
+    # 7) ERF resultado no vacío / numérico.
+    rows.append(("7. ERF — resultado calculado",
+                 f"=IF(ISNUMBER(ERF!$E${erf_resultado_row}),\"CALCULADO\",\"REVISAR\")",
+                 f"=ERF!$E${erf_resultado_row}",
+                 "El resultado por función debe existir."))
+
+    for i, (label, status, diff, note) in enumerate(rows, start=4):
+        ws.cell(i, 1, label)
+        ws.cell(i, 2, status)
+        ws.cell(i, 3, diff)
+        ws.cell(i, 4, note)
+        ws.cell(i, 1).font = BLACK
+        ws.cell(i, 2).font = BOLD
+        ws.cell(i, 3).number_format = '#,##0.00;(#,##0.00);"-"'
+        ws.cell(i, 4).font = GRAY
+
+    final_row = 4 + len(rows)
+    ws.cell(final_row, 1, "CONTROL FINAL")
+    # Los dos primeros controles son globales; los estados se validan de forma independiente.
+    ws.cell(final_row, 2, f'=IF(COUNTIF(B4:B{final_row-1},"REVISAR")=0,"✅ VALIDADO","⚠️ REVISAR")')
+    ws.cell(final_row, 1).font = BOLD
+    ws.cell(final_row, 2).font = Font(name=FONT, bold=True, size=11)
+    ws.cell(final_row, 3, "El control se recalcula al abrir el Excel.")
+    ws.merge_cells(start_row=final_row, start_column=3, end_row=final_row, end_column=4)
+
+    # Diagnóstico previo que sí puede calcularse sin Excel.
+    pre_row = final_row + 2
+    ws.cell(pre_row, 1, "REVISIÓN PREVIA DE ASIENTOS")
+    ws.cell(pre_row, 1).font = BOLD
+    if st.session_state.get("errores_asientos"):
+        ws.cell(pre_row + 1, 1, "⚠️ Se detectaron errores en los asientos antes de generar el Excel.")
+        for j, err in enumerate(st.session_state.get("errores_asientos", [])[:20], start=2):
+            ws.cell(pre_row + j, 1, err)
+    else:
+        ws.cell(pre_row + 1, 1, "✅ Los asientos pasan la validación básica de códigos, importes y Debe/Haber.")
+
+    # ==================== ETAPA 2: AUDITORÍA Y TRAZABILIDAD ====================
+    # Hoja adicional: no altera cálculos existentes. Relaciona cada línea
+    # del asiento con su origen y deja visibles los controles clave.
+    if "AUDITORIA_TANA" in wb.sheetnames:
+        del wb["AUDITORIA_TANA"]
+    wa = wb.create_sheet("AUDITORIA_TANA")
+
+    wa["A1"] = "AUDITORÍA Y TRAZABILIDAD TANA"
+    wa["A1"].font = Font(name=FONT, bold=True, size=14, color="1F4E78")
+    wa.merge_cells("A1:I1")
+    wa["A3"] = "Trazabilidad"
+    wa["A3"].font = BOLD
+    wa["A4"] = "Cada línea se enlaza al asiento y a la cuenta que TANA utilizó. Esta hoja es informativa y no modifica los cálculos."
+    wa.merge_cells("A4:I4")
+
+    audit_headers = ["Asiento", "Fecha", "Glosa / Operación", "Cuenta", "Debe", "Haber", "Diferencia", "Estado", "Origen"]
+    for col, h in enumerate(audit_headers, 1):
+        c = wa.cell(6, col, h)
+        c.font = BOLD
+
+    audit_row = 7
+    for a_idx, asiento in enumerate(asientos or [], start=1):
+        numero = asiento.get("numero", a_idx)
+        fecha = asiento.get("fecha", "")
+        glosa = asiento.get("glosa") or asiento.get("descripcion") or asiento.get("operacion") or ""
+        origen = asiento.get("origen") or asiento.get("fuente") or "Práctica procesada por TANA"
+        for linea in (asiento.get("lineas", []) or []):
+            codigo = str(linea.get("codigo", "")).strip()
+            debe = linea.get("debe", 0) or 0
+            haber = linea.get("haber", 0) or 0
+            try:
+                diff = float(debe) - float(haber)
+            except Exception:
+                diff = ""
+            wa.cell(audit_row, 1, numero)
+            wa.cell(audit_row, 2, fecha)
+            wa.cell(audit_row, 3, glosa)
+            wa.cell(audit_row, 4, codigo)
+            wa.cell(audit_row, 5, debe)
+            wa.cell(audit_row, 6, haber)
+            wa.cell(audit_row, 7, diff)
+            wa.cell(audit_row, 8, '=IF(ABS(G%d)<0.01,"OK","REVISAR")' % audit_row)
+            wa.cell(audit_row, 9, origen)
+            audit_row += 1
+
+    # Resumen de controles con referencias a VALIDACION.
+    summary_row = audit_row + 2
+    wa.cell(summary_row, 1, "RESUMEN DE CONTROLES")
+    wa.cell(summary_row, 1).font = BOLD
+    for col, h in enumerate(["Control", "Resultado", "Diferencia", "Lectura"], 1):
+        wa.cell(summary_row + 1, col, h).font = BOLD
+
+    controls = [
+        ("Debe = Haber de asientos", "=VALIDACION!B4", "=VALIDACION!C4", "Debe ser 0.00."),
+        ("HT movimientos", "=VALIDACION!B5", "=VALIDACION!C5", "Debe ser 0.00."),
+        ("HT saldos ajustados", "=VALIDACION!B6", "=VALIDACION!C6", "Debe ser 0.00."),
+        ("ERN = ERF", "=VALIDACION!B7", "=VALIDACION!C7", "Debe ser 0.00."),
+        ("ESF", "=VALIDACION!B8", "=VALIDACION!C8", "Activo debe coincidir con Pasivo + Patrimonio."),
+        ("Resultado ERN", "=VALIDACION!B9", "=VALIDACION!C9", "Debe existir un resultado numérico."),
+        ("Resultado ERF", "=VALIDACION!B10", "=VALIDACION!C10", "Debe existir un resultado numérico."),
+        ("Control final", "=VALIDACION!B11", "", "Resumen final de la validación."),
+    ]
+    for r, (control, result, diff, lectura) in enumerate(controls, start=summary_row+2):
+        wa.cell(r,1,control)
+        wa.cell(r,2,result)
+        wa.cell(r,3,diff)
+        wa.cell(r,4,lectura)
+
+    wa.cell(summary_row + len(controls) + 3, 1, "NOTA")
+    wa.cell(summary_row + len(controls) + 3, 2,
+            "La auditoría identifica el asiento y la cuenta origen de cada línea; los cálculos contables originales permanecen sin cambios.")
+    wa.merge_cells(start_row=summary_row + len(controls) + 3, start_column=2,
+                   end_row=summary_row + len(controls) + 3, end_column=9)
+
+    widths = [12, 14, 42, 16, 16, 16, 16, 14, 34]
+    for idx, width in enumerate(widths, 1):
+        wa.column_dimensions[chr(64+idx)].width = width
+    wa.freeze_panes = "A7"
+
+    # La auditoría debe acompañar al Excel final.
+    # Se añade a las hojas públicas sin ocultar ni modificar las anteriores.
+    try:
+        if "AUDITORIA_TANA" not in HOJAS_PUBLICAS:
+            HOJAS_PUBLICAS.append("AUDITORIA_TANA")
+    except Exception:
+        pass
+
+    ws.column_dimensions["A"].width = 48
+    ws.column_dimensions["B"].width = 18
+    ws.column_dimensions["C"].width = 18
+    ws.column_dimensions["D"].width = 62
+    ws.freeze_panes = "A4"
+    return ws.title
 
 def validate_asientos(data, pcge_map):
     errors = []
@@ -1498,7 +2899,7 @@ if uploaded_file is not None and enviar_top and st.session_state.get("tana_file_
         "alertas_asientos", "respuesta_tana", "respuesta_tana_ruta", "audio_tana_processed",
         "tana_modo_trabajo", "tana_correcciones", "tana_correccion_version",
         "tana_excel_origen_bytes", "tana_diagnostico_excel",
-        "tana_excel_buffer", "tana_resuelto_signature",
+        "tana_excel_buffer", "tana_excel_output_ready", "tana_resuelto_signature",
     ):
         st.session_state.pop(_key, None)
     if _es_excel_tana(uploaded_file.name):
@@ -1541,6 +2942,7 @@ if uploaded_file is not None and enviar_top and st.session_state.get("tana_file_
                 _record_user_activity("archivo_cargado", uploaded_file.name, file_signature)
                 # NO guardar el archivo original como archivo de salida.
                 st.session_state.pop("tana_excel_buffer", None)
+                st.session_state["tana_excel_output_ready"] = False
                 _tana_chat_add(
                     "user",
                     f"📊 Cargó un Excel para revisión: <b>{uploaded_file.name}</b>"
@@ -1565,6 +2967,12 @@ if uploaded_file is not None and enviar_top and st.session_state.get("tana_file_
             try:
                 extracted = extract_with_gemini(uploaded_file)
                 st.session_state["monografia_json"] = extracted
+                st.session_state["tana_content_hash"] = hashlib.sha256(
+                    json.dumps(
+                        _canonicalize_for_hash(extracted),
+                        ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str
+                    ).encode("utf-8")
+                ).hexdigest()
                 st.session_state["monografia_texto"] = extraction_to_text(extracted)
                 st.session_state["monografia_nombre"] = uploaded_file.name
                 st.session_state["tana_file_signature"] = file_signature
@@ -1593,6 +3001,20 @@ if "monografia_json" in st.session_state:
 # ============================================================
 
 ASIENTOS_PROMPT = """
+REGLA ADICIONAL — ASIENTO DE APERTURA:
+Si la monografía proporciona un balance inicial, balance de comprobación,
+estado de situación financiera inicial o saldos de apertura, debes registrar
+primero el asiento de apertura correspondiente antes de la operación 1.
+El asiento de apertura debe ser UN SOLO asiento por empresa: primero todas las
+cuentas con saldo deudor (activos) y después todas las cuentas con saldo acreedor
+(pasivos y patrimonio). No cierres ni compenses artificialmente los saldos contra
+la cuenta 50: la 50121 Participaciones se registra solo por el capital que realmente
+aparece en el estado inicial. Si las utilidades acumuladas no tienen importe y el
+resto del estado permite calcularlas para que Activo = Pasivo + Patrimonio, el saldo
+calculado corresponde a 59111. Si existen dos empresas, cada empresa debe tener
+su propio asiento de apertura y su propio libro. No mezcles sus saldos.
+NO MODIFIQUES la lógica de HT, ERF, ERN, ESF, destinos ni distribución existente.
+
 Eres el motor contable de TANA, una aplicación de contabilidad peruana.
 
 Tienes dos fuentes obligatorias:
@@ -1610,6 +3032,7 @@ REGLAS OBLIGATORIAS:
 - Cada asiento debe cuadrar exactamente: total Debe = total Haber.
 - Separa en asientos independientes los registros que correspondan a una misma operación.
 - Conserva las fechas y datos de la monografía.
+- Si existen dos o más empresas, cada asiento DEBE llevar el campo "empresa" con el nombre exacto de la empresa a la que corresponde.
 - Calcula los importes cuando la monografía permita determinarlos.
 - Si un importe o tratamiento contable no puede determinarse con seguridad,
   NO inventes: marca la línea/asiento con "requiere_revision": true y explica por qué.
@@ -1628,6 +3051,7 @@ Devuelve SOLO JSON válido con esta estructura:
   "asientos": [
     {
       "numero": 1,
+      "empresa": "",
       "fecha": "2026-04-02",
       "glosa": "...",
       "documento": "...",
@@ -2099,6 +3523,407 @@ def corregir_retiro_socio(asientos, monografia_json):
     resultado.extend([dist, pago])
     return resultado
 
+
+def _normalizar_nombre_empresa(nombre):
+    return re.sub(r"\s+", " ", str(nombre or "").strip())
+
+
+def _detectar_empresas_monografia(monografia_json):
+    """Detecta todas las empresas participantes sin inventarlas.
+
+    Prioriza la lista explícita devuelta por el extractor y luego completa con
+    empresa, saldos iniciales, operaciones y datos importantes.
+    """
+    data = monografia_json or {}
+    empresas = []
+
+    def add(value):
+        v = _normalizar_nombre_empresa(value)
+        if not v:
+            return
+        low = v.lower()
+        # Evitar confundir bancos o cuentas con empresas participantes.
+        if low in {
+            "banco de la nación", "banco de la nacion",
+            "banco de crédito del perú", "banco de credito del peru",
+            "bcp", "interbank", "scotiabank", "bbva", "banbif",
+            "banco pichincha", "banco falabella", "banco ripley", "banco gnb"
+        }:
+            return
+        if low not in {x.lower() for x in empresas}:
+            empresas.append(v)
+
+    # IMPORTANTE: la cantidad de empresas es completamente dinámica.
+    # TANA NO asume 1, 2, 3, 16 ni ningún número fijo.
+    #
+    # Para evitar falsos positivos, no debemos convertir cualquier nombre que
+    # aparezca dentro de una operación en una "empresa". Primero usamos fuentes
+    # estructurales: lista explícita de empresas y balance(s) inicial(es).
+    explicit = [v for v in (data.get("empresas", []) or []) if v]
+    if explicit:
+        for value in explicit:
+            add(value)
+        return empresas
+
+    # El estado inicial es la segunda fuente de mayor confianza: si allí se
+    # identifican empresas, esas son las empresas cuyos libros deben separarse.
+    estado_empresas = []
+    for item in data.get("estado_inicial", []) or []:
+        if isinstance(item, dict) and item.get("empresa"):
+            estado_empresas.append(item.get("empresa"))
+    if estado_empresas:
+        for value in estado_empresas:
+            add(value)
+        return empresas
+
+    # Una empresa explícita a nivel superior.
+    add(data.get("empresa"))
+    if empresas:
+        return empresas
+
+    # Solo si no existe ninguna fuente estructural anterior, usamos operaciones
+    # y datos importantes como respaldo para detectar empresas participantes.
+    for op in data.get("operaciones", []) or []:
+        if isinstance(op, dict):
+            add(op.get("empresa"))
+    for item in data.get("datos_importantes", []) or []:
+        if isinstance(item, dict):
+            add(item.get("empresa"))
+
+    return empresas
+
+
+def _construir_aperturas_por_empresa(monografia_json):
+    """Construye exactamente una apertura por empresa usando SOLO sus saldos iniciales."""
+    data = monografia_json or {}
+    estado = data.get("estado_inicial", []) or []
+    empresas = _detectar_empresas_monografia(data)
+    if not empresas:
+        return []
+
+    def key(v):
+        # Solo para comparar; no modifica el nombre mostrado.
+        s = _normalizar_nombre_empresa(v).lower()
+        s = re.sub(r"[^a-z0-9áéíóúüñ]+", " ", s)
+        return re.sub(r"\s+", " ", s).strip()
+
+    grupos = {key(e): [] for e in empresas}
+    sin_empresa = []
+
+    for item in estado:
+        if not isinstance(item, dict):
+            continue
+        emp_item = item.get("empresa")
+        k = key(emp_item)
+        if k in grupos:
+            grupos[k].append(item)
+        else:
+            sin_empresa.append(item)
+
+    resultado = []
+    for empresa in empresas:
+        partidas = grupos.get(key(empresa), [])
+        # Para una sola empresa, las partidas sin etiqueta pertenecen a ella.
+        if len(empresas) == 1 and sin_empresa:
+            partidas = partidas + sin_empresa
+        if not partidas:
+            continue
+
+        sub = dict(data)
+        sub["empresa"] = empresa
+        sub["estado_inicial"] = partidas
+        apertura = _construir_asiento_apertura_determinista(sub)
+        if apertura:
+            apertura["empresa"] = empresa
+            resultado.append(apertura)
+
+    return resultado
+
+
+
+def _asientos_por_empresa(asientos, empresas):
+    """Agrupa asientos por empresa. No duplica un asiento entre empresas."""
+    grupos = {e: [] for e in empresas}
+    sin_empresa = []
+    for asiento in asientos or []:
+        if not isinstance(asiento, dict):
+            continue
+        emp = _normalizar_nombre_empresa(asiento.get("empresa"))
+        if emp:
+            # Match case-insensitive con el nombre detectado.
+            target = next((e for e in empresas if e.lower() == emp.lower()), None)
+            if target:
+                grupos[target].append(asiento)
+                continue
+        op_num = str(asiento.get("operacion_numero") or "").strip()
+        # Segunda oportunidad: buscar empresa en la operación.
+        for op in (st.session_state.get("monografia_json", {}) or {}).get("operaciones", []) or []:
+            if isinstance(op, dict) and str(op.get("numero") or "").strip() == op_num:
+                emp2 = _normalizar_nombre_empresa(op.get("empresa"))
+                target = next((e for e in empresas if e.lower() == emp2.lower()), None)
+                if target:
+                    asiento["empresa"] = target
+                    grupos[target].append(asiento)
+                    break
+        else:
+            sin_empresa.append(asiento)
+    return grupos, sin_empresa
+
+
+def _obtener_ruc_empresa(monografia_json, empresa):
+    """Busca el RUC de una empresa en la extracción sin inventarlo."""
+    data = monografia_json or {}
+    target = _normalizar_nombre_empresa(empresa).lower()
+    for key in ("ruc", "RUC"):
+        if isinstance(data.get(key), str) and data.get(key).strip():
+            if _normalizar_nombre_empresa(data.get("empresa")).lower() == target:
+                return data.get(key).strip()
+    for op in data.get("operaciones", []) or []:
+        if not isinstance(op, dict):
+            continue
+        if _normalizar_nombre_empresa(op.get("empresa")).lower() == target:
+            r = str(op.get("ruc") or "").strip()
+            if r:
+                return r
+    for item in data.get("datos_importantes", []) or []:
+        if not isinstance(item, dict):
+            continue
+        if _normalizar_nombre_empresa(item.get("empresa")).lower() == target:
+            r = str(item.get("ruc") or "").strip()
+            if r:
+                return r
+    return ""
+
+
+def _crear_excel_por_empresa_desde_base(base_bytes, empresa, asientos_empresa):
+    """Crea una copia independiente del Excel final para una sola empresa.
+
+    Conserva el formato y los estados de la plantilla, pero recalcula la HT desde
+    los asientos de esa empresa y reemplaza el Libro Diario/Asientos para que nunca
+    se mezclen empresas distintas.
+    """
+    wb2 = openpyxl.load_workbook(io.BytesIO(base_bytes), data_only=False)
+
+    # ------------------------------------------------------------
+    # Asientos_Contables: reemplazo completo por los de la empresa.
+    # ------------------------------------------------------------
+    if "Asientos_Contables" in wb2.sheetnames:
+        ws = wb2["Asientos_Contables"]
+        if ws.max_row > 1:
+            ws.delete_rows(2, ws.max_row - 1)
+        pcge_map_local = {str(cod).strip(): str(desc) for cod, desc in PCGE_DATA}
+        rr = 2
+        for asiento in asientos_empresa:
+            first_line = True
+            for line in asiento.get("lineas", []) or []:
+                code = str(line.get("codigo", "")).strip()
+                if first_line:
+                    vals = [asiento.get("numero", ""), asiento.get("fecha", ""), asiento.get("glosa", ""),
+                            asiento.get("documento", ""), asiento.get("operacion_numero", "")]
+                    first_line = False
+                else:
+                    vals = ["", "", "", "", ""]
+                vals += [code, pcge_map_local.get(code, line.get("denominacion", "")),
+                         line.get("concepto", ""), line.get("debe", 0), line.get("haber", 0)]
+                for c, value in enumerate(vals, 1):
+                    ws.cell(rr, c, value=value)
+                ws.cell(rr, 9).number_format = '#,##0.00;(#,##0.00);"-"'
+                ws.cell(rr, 10).number_format = '#,##0.00;(#,##0.00);"-"'
+                rr += 1
+        ws.freeze_panes = "A2"
+
+    # ------------------------------------------------------------
+    # LD oculto: debe corresponder SOLO a esta empresa porque LM lo usa como
+    # fuente de SUMIFS. Reemplazamos sus filas con el Libro Diario estático
+    # de los asientos filtrados; así el LM no mezcla empresas.
+    # ------------------------------------------------------------
+    if "LD" in wb2.sheetnames:
+        ws_ld = wb2["LD"]
+        if ws_ld.max_row > 1:
+            ws_ld.delete_rows(2, ws_ld.max_row - 1)
+        rr_ld = 2
+        pcge_map_local = {str(cod).strip(): str(desc) for cod, desc in PCGE_DATA}
+        for asiento in asientos_empresa:
+            first_line = True
+            for line in asiento.get("lineas", []) or []:
+                code = str(line.get("codigo", "")).strip()
+                vals = [
+                    asiento.get("numero", "") if first_line else "",
+                    asiento.get("fecha", "") if first_line else "",
+                    asiento.get("glosa", "") if first_line else "",
+                    asiento.get("documento", "") if first_line else "",
+                    code, pcge_map_local.get(code, line.get("denominacion", "")),
+                    line.get("debe", 0), line.get("haber", 0)
+                ]
+                for cc, value in enumerate(vals, 1):
+                    ws_ld.cell(rr_ld, cc, value=value)
+                ws_ld.cell(rr_ld, 7).number_format = '#,##0.00;(#,##0.00);"-"'
+                ws_ld.cell(rr_ld, 8).number_format = '#,##0.00;(#,##0.00);"-"'
+                first_line = False
+                rr_ld += 1
+        ws_ld.freeze_panes = "A2"
+
+    # ------------------------------------------------------------
+    # Identificación de empresa en el libro exportado. No insertamos filas
+    # para no romper referencias de HT/ERN/ERF/ESF.
+    # ------------------------------------------------------------
+    if "Asientos_Contables" in wb2.sheetnames:
+        ws_meta = wb2["Asientos_Contables"]
+        ws_meta["L1"] = "EMPRESA"
+        ws_meta["M1"] = empresa
+        ws_meta["L2"] = "RUC"
+        ws_meta["M2"] = _obtener_ruc_empresa(monografia_json=st.session_state.get("monografia_json", {}), empresa=empresa)
+        ws_meta["L3"] = "PERÍODO"
+        ws_meta["M3"] = str((st.session_state.get("monografia_json", {}) or {}).get("periodo") or "")
+        for cell in ("L1", "L2", "L3"):
+            ws_meta[cell].font = Font(bold=True)
+        ws_meta.column_dimensions["L"].width = 16
+        ws_meta.column_dimensions["M"].width = 42
+
+    # ------------------------------------------------------------
+    # HT: reconstrucción determinista desde los asientos de la empresa.
+    # Se conserva la estructura de filas de la HT base para no romper las
+    # fórmulas de ERN/ERF/ESF que apuntan a ella.
+    # ------------------------------------------------------------
+    if "HT" in wb2.sheetnames:
+        ws = wb2["HT"]
+        movimientos_local = {}
+        for asiento in asientos_empresa:
+            for line in asiento.get("lineas", []) or []:
+                code = str(line.get("codigo", "")).strip()
+                if not re.fullmatch(r"\d{5}", code):
+                    continue
+                rec = movimientos_local.setdefault(code, {"debe": 0.0, "haber": 0.0})
+                rec["debe"] += _to_float(line.get("debe"), 0.0)
+                rec["haber"] += _to_float(line.get("haber"), 0.0)
+
+        cuentas_local = sorted(movimientos_local.keys(), key=lambda x: (int(x), x))
+        destinadas_local = detectar_cuentas_6_con_destino(asientos_empresa)
+
+        def d_a_local(code):
+            rec = movimientos_local.get(code, {"debe": 0.0, "haber": 0.0})
+            return max(rec["debe"] - rec["haber"], 0.0), max(rec["haber"] - rec["debe"], 0.0)
+
+        ajustes_d = {}
+        ajustes_h = {}
+        cuentas61 = [c for c in cuentas_local if es_variacion_existencias(c)]
+        mapa61 = {c[2:]: c for c in cuentas61}
+        for c69 in [c for c in cuentas_local if es_costo_ventas(c)]:
+            d69, _ = d_a_local(c69)
+            if d69 <= 0:
+                continue
+            c61 = mapa61.get(c69[2:])
+            if c61 is None and len(cuentas61) == 1:
+                c61 = cuentas61[0]
+            if c61:
+                ajustes_h[c69] = ajustes_h.get(c69, 0.0) + d69
+                ajustes_d[c61] = ajustes_d.get(c61, 0.0) + d69
+
+        cuentas9 = [c for c in cuentas_local if es_elemento9(c)]
+        cuentas79 = [c for c in cuentas_local if es_cuenta79(c)]
+        total9 = 0.0
+        for c9 in cuentas9:
+            d9, _ = d_a_local(c9)
+            if d9 > 0:
+                ajustes_h[c9] = ajustes_h.get(c9, 0.0) + d9
+                total9 += d9
+        if total9 > 0 and cuentas79:
+            acre79 = {c: d_a_local(c)[1] for c in cuentas79}
+            total_ac = sum(acre79.values())
+            if total_ac > 0:
+                for c79, val in acre79.items():
+                    ajustes_d[c79] = ajustes_d.get(c79, 0.0) + total9 * (val / total_ac)
+            else:
+                ajustes_d[cuentas79[0]] = ajustes_d.get(cuentas79[0], 0.0) + total9
+
+        # Mapeo de filas existentes por código. Las cuentas de otras empresas
+        # quedan en cero y sus etiquetas se conservan solo como estructura.
+        row_by_code = {}
+        for r in range(4, ws.max_row + 1):
+            code = str(ws.cell(r, 1).value or "").strip()
+            if re.fullmatch(r"\d{5}", code):
+                row_by_code[code] = r
+
+        for r in row_by_code.values():
+            for c in range(3, 19):
+                ws.cell(r, c, 0)
+
+        for code, row in row_by_code.items():
+            if code not in movimientos_local:
+                continue
+            rec = movimientos_local[code]
+            debe = round(rec["debe"], 2)
+            haber = round(rec["haber"], 2)
+            deudor = max(debe - haber, 0.0)
+            acreedor = max(haber - debe, 0.0)
+            ajd = round(ajustes_d.get(code, 0.0), 2)
+            ajh = round(ajustes_h.get(code, 0.0), 2)
+            ws.cell(row, 3, debe); ws.cell(row, 4, haber)
+            ws.cell(row, 5, deudor); ws.cell(row, 6, acreedor)
+            ws.cell(row, 7, ajd); ws.cell(row, 8, ajh)
+            if clasificar_resultado(code):
+                sad = sah = 0.0
+            else:
+                net = (deudor + ajd) - (acreedor + ajh)
+                sad = max(net, 0.0); sah = max(-net, 0.0)
+            ws.cell(row, 9, round(sad, 2)); ws.cell(row, 10, round(sah, 2))
+            neto = round((deudor + ajd) - (acreedor + ajh), 2)
+            nd = max(neto, 0.0); na = max(-neto, 0.0)
+            if es_naturaleza(code):
+                ws.cell(row, 11, nd); ws.cell(row, 12, na)
+            if es_funcion(code):
+                ws.cell(row, 13, deudor); ws.cell(row, 14, acreedor)
+            if es_balance(code):
+                ws.cell(row, 15, deudor); ws.cell(row, 16, acreedor)
+            if es_variacion_existencias(code) or es_cuenta79(code):
+                ws.cell(row, 17, ajd)
+            elif es_costo_ventas(code) or es_elemento9(code):
+                ws.cell(row, 18, ajh)
+
+        # Actualiza los totales y la línea de diferencia ya existentes.
+        total_row = None
+        diff_row = None
+        for r in range(4, ws.max_row + 1):
+            if str(ws.cell(r, 2).value or "").strip().upper() == "TOTAL":
+                total_row = r
+                break
+        if total_row:
+            for c in range(3, 19):
+                letter = get_column_letter(c)
+                ws.cell(total_row, c, f'=SUM({letter}4:{letter}{total_row-1})')
+        if total_row and total_row + 1 <= ws.max_row:
+            diff_row = total_row + 1
+            ws.cell(diff_row, 7, f'=ABS(G{total_row}-H{total_row})')
+            ws.cell(diff_row, 8, f'=ABS(G{total_row}-H{total_row})')
+            ws.cell(diff_row, 9, f'=ABS(I{total_row}-J{total_row})')
+            ws.cell(diff_row, 10, f'=ABS(I{total_row}-J{total_row})')
+            ws.cell(diff_row, 11, f'=MAX(L{total_row}-K{total_row},0)')
+            ws.cell(diff_row, 12, f'=MAX(K{total_row}-L{total_row},0)')
+            ws.cell(diff_row, 13, f'=MAX(N{total_row}-M{total_row},0)')
+            ws.cell(diff_row, 14, f'=MAX(M{total_row}-N{total_row},0)')
+            ws.cell(diff_row, 15, f'=MAX(P{total_row}-O{total_row},0)')
+            ws.cell(diff_row, 16, f'=MAX(O{total_row}-P{total_row},0)')
+            ws.cell(diff_row, 18, f'=ABS(Q{total_row}-R{total_row})')
+
+    # ------------------------------------------------------------
+    # Metadatos y nombre del libro.
+    # ------------------------------------------------------------
+    wb2.properties.title = f"TANA - {empresa}"
+    wb2.properties.subject = "Desarrollo contable individual por empresa"
+    wb2.properties.keywords = "TANA, contabilidad, empresa, fusión"
+
+    out = io.BytesIO()
+    try:
+        wb2.calculation.fullCalcOnLoad = True
+        wb2.calculation.forceFullCalc = True
+        wb2.calculation.calcMode = "auto"
+    except Exception:
+        pass
+    wb2.save(out)
+    out.seek(0)
+    return out.getvalue()
+
+
 def resolve_asientos_with_gemini():
     if not get_gemini_profiles():
         raise RuntimeError("No está configurada ninguna GEMINI_API_KEY en Streamlit Secrets.")
@@ -2115,21 +3940,208 @@ def resolve_asientos_with_gemini():
         .replace("{pcge}", json.dumps(pcge_5, ensure_ascii=False))
         .replace(
             "{operaciones}",
-            json.dumps(st.session_state.get("monografia_json", {}), ensure_ascii=False),
+            json.dumps(
+                _canonicalize_for_hash(st.session_state.get("monografia_json", {})),
+                ensure_ascii=False, sort_keys=True, separators=(",", ":")
+            ),
         )
     )
 
     def make_contents(_client):
         return [prompt]
 
+    # La semilla contable NO usa el hash binario del archivo. Dos copias de la
+    # misma práctica pueden tener metadatos distintos y, aun así, deben producir
+    # exactamente los mismos asientos. La semilla se calcula sobre la extracción
+    # contable normalizada.
+    canonical_monografia = _canonicalize_for_hash(
+        st.session_state.get("monografia_json", {})
+    )
+    accounting_seed = _deterministic_seed(canonical_monografia)
+    st.session_state["tana_practice_fingerprint"] = hashlib.sha256(
+        json.dumps(canonical_monografia, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    ).hexdigest()[:16]
     response, profile = _generate_with_fallback(
         make_contents,
-        types.GenerateContentConfig(response_mime_type="application/json"),
+        types.GenerateContentConfig(response_mime_type="application/json", temperature=0.0, seed=accounting_seed),
     )
-    data = json.loads(response.text or "{}")
+    data = _parsear_respuesta_json_gemini(response.text or "{}")
     data.setdefault("_tana_gemini_route", profile["label"])
     data.setdefault("_tana_gemini_model", profile["model"])
     return data, pcge_map
+
+
+def _reparar_y_completar_asientos(asientos, monografia_json, pcge_map):
+    """Segundo pase determinista del motor contable.
+
+    TANA primero obtiene los asientos con el motor principal. Este segundo pase
+    NO vuelve a desarrollar toda la práctica: solo busca dos problemas concretos:
+      1) operaciones extraídas que no tienen ningún asiento asociado;
+      2) asientos que no pasan la validación básica.
+
+    Para evitar que una respuesta diferente de Gemini cambie toda la práctica,
+    las solicitudes de reparación contienen únicamente la operación faltante o
+    el asiento inválido y se ejecutan con temperatura 0 + semilla determinista.
+    """
+    data = monografia_json or {}
+    ops = [op for op in (data.get("operaciones", []) or []) if isinstance(op, dict)]
+    current = [dict(a) for a in (asientos or []) if isinstance(a, dict)]
+    alerts = []
+
+    def opnum(v):
+        try:
+            return str(int(float(str(v).strip())))
+        except Exception:
+            return str(v or "").strip()
+
+    # ------------------------------------------------------------
+    # PASO 1: detectar operaciones que quedaron sin asiento.
+    # ------------------------------------------------------------
+    covered = set()
+    for a in current:
+        n = opnum(a.get("operacion_numero"))
+        if n and n != "0":
+            covered.add(n)
+
+    missing = [op for op in ops if opnum(op.get("numero")) and opnum(op.get("numero")) not in covered]
+
+    if missing:
+        pcge_5 = [[str(c).strip(), str(d)] for c, d in PCGE_DATA if re.fullmatch(r"\d{5}", str(c).strip())]
+        repair_prompt = f"""
+Eres el reparador determinista de asientos de TANA.
+
+La extracción de la práctica ya fue realizada. NO vuelvas a desarrollar toda la
+práctica y NO cambies los asientos existentes. Solo debes completar las operaciones
+que quedaron sin asiento.
+
+REGLAS:
+- Usa exclusivamente cuentas de 5 dígitos existentes en el PCGE adjunto.
+- Cada asiento debe cuadrar exactamente Debe = Haber.
+- Conserva la fecha, empresa y número de operación.
+- Si una operación realmente no genera asiento por una regla contable explícita,
+  inclúyela en "sin_asiento" con una explicación breve. No inventes un asiento.
+- Si la operación sí genera asiento, debes construirlo completo.
+- No cierres ni compenses cuentas contra 50 artificialmente.
+- Si hay destino por función, Elemento 9 en Debe y 79111 en Haber.
+- No modifiques ni dupliques los asientos existentes.
+
+OPERACIONES FALTANTES:
+{json.dumps(missing, ensure_ascii=False, indent=2)}
+
+ASIENTOS YA EXISTENTES (solo para contexto y evitar duplicados):
+{json.dumps(current, ensure_ascii=False, indent=2)[:30000]}
+
+PCGE:
+{json.dumps(pcge_5, ensure_ascii=False)}
+
+Devuelve SOLO JSON:
+{{
+  "asientos": [
+    {{
+      "numero": 0,
+      "empresa": "",
+      "fecha": "",
+      "glosa": "",
+      "documento": "",
+      "operacion_numero": 0,
+      "requiere_revision": false,
+      "observacion": "",
+      "lineas": [
+        {{"codigo":"12345","denominacion":"","debe":0.0,"haber":0.0,"concepto":""}}
+      ]
+    }}
+  ],
+  "sin_asiento": []
+}}
+"""
+        canonical = {"missing": missing, "practice": _canonicalize_for_hash(data)}
+        seed = _deterministic_seed(canonical)
+        response, _profile = _generate_with_fallback(
+            lambda _client: [repair_prompt],
+            types.GenerateContentConfig(response_mime_type="application/json", temperature=0.0, seed=seed),
+        )
+        rec = _parsear_respuesta_json_gemini(response.text or "{}")
+        nuevos = rec.get("asientos", []) if isinstance(rec, dict) else []
+        if isinstance(nuevos, list):
+            existing_keys = {(opnum(a.get("operacion_numero")), str(a.get("empresa") or "").strip().lower()) for a in current}
+            for a in nuevos:
+                if not isinstance(a, dict):
+                    continue
+                k = (opnum(a.get("operacion_numero")), str(a.get("empresa") or "").strip().lower())
+                if k[0] and k not in existing_keys and a.get("lineas"):
+                    current.append(a)
+                    existing_keys.add(k)
+        sin = rec.get("sin_asiento", []) if isinstance(rec, dict) else []
+        if sin:
+            alerts.extend([f"Operación sin asiento: {x}" for x in sin[:10]])
+
+    # ------------------------------------------------------------
+    # PASO 2: reparar únicamente los asientos que no validan.
+    # ------------------------------------------------------------
+    valid, errors, warnings = validate_asientos({"asientos": current}, pcge_map)
+    if errors:
+        invalid_nums = []
+        for err in errors:
+            m = re.search(r"Asiento\s+(\d+)", str(err), flags=re.IGNORECASE)
+            if m:
+                invalid_nums.append(m.group(1))
+        invalid_nums = list(dict.fromkeys(invalid_nums))
+        invalid = [a for a in current if str(a.get("numero", "")) in invalid_nums]
+        if invalid:
+            pcge_5 = [[str(c).strip(), str(d)] for c, d in PCGE_DATA if re.fullmatch(r"\d{5}", str(c).strip())]
+            repair_prompt = f"""
+Eres el reparador final de TANA. Corrige SOLO los asientos que fallaron la validación.
+No cambies asientos válidos y no agregues operaciones nuevas.
+
+ERRORES EXACTOS:
+{json.dumps(errors, ensure_ascii=False, indent=2)}
+
+ASIENTOS QUE FALLARON:
+{json.dumps(invalid, ensure_ascii=False, indent=2)}
+
+REGLAS:
+- Cuentas exclusivamente de 5 dígitos del PCGE.
+- Debe = Haber exactamente.
+- Conserva operación, fecha, empresa y glosa.
+- No cierres contra 50 artificialmente.
+- No inventes importes que no estén sustentados.
+- Devuelve un asiento corregido por cada asiento recibido.
+
+PCGE:
+{json.dumps(pcge_5, ensure_ascii=False)}
+
+Devuelve SOLO JSON:
+{{"asientos_corregidos": []}}
+"""
+            seed = _deterministic_seed({"errors": errors, "invalid": invalid, "practice": _canonicalize_for_hash(data)})
+            response, _profile = _generate_with_fallback(
+                lambda _client: [repair_prompt],
+                types.GenerateContentConfig(response_mime_type="application/json", temperature=0.0, seed=seed),
+            )
+            rec = _parsear_respuesta_json_gemini(response.text or "{}")
+            corrected = rec.get("asientos_corregidos", []) if isinstance(rec, dict) else []
+            by_num = {str(a.get("numero")): a for a in corrected if isinstance(a, dict) and a.get("numero") is not None}
+            if by_num:
+                for i, a in enumerate(current):
+                    n = str(a.get("numero", ""))
+                    if n in by_num:
+                        current[i] = by_num[n]
+
+    # ------------------------------------------------------------
+    # PASO 3: normalización final y validación final.
+    # ------------------------------------------------------------
+    for a in current:
+        if not isinstance(a, dict):
+            continue
+        for line in a.get("lineas", []) or []:
+            if not isinstance(line, dict):
+                continue
+            line["debe"] = round(max(_to_float(line.get("debe"), 0.0), 0.0), 2)
+            line["haber"] = round(max(_to_float(line.get("haber"), 0.0), 0.0), 2)
+
+    current = asegurar_cuenta_79_en_destinos(current, pcge_map)
+    valid, errors, warnings = validate_asientos({"asientos": current}, pcge_map)
+    return current, valid, errors, list(warnings) + alerts
 
 if "monografia_json" in st.session_state and "asientos_contables" not in st.session_state:
     with st.spinner("TANA está desarrollando y validando los asientos contables…"):
@@ -2145,13 +4157,129 @@ if "monografia_json" in st.session_state and "asientos_contables" not in st.sess
                 raise ValueError("La respuesta de Gemini no tiene una estructura de asientos válida.")
             if not isinstance(asientos_generados, list):
                 raise ValueError("La clave 'asientos' de Gemini no contiene una lista.")
+            if not asientos_generados:
+                raise ValueError(
+                    "TANA reconoció la práctica, pero no pudo identificar operaciones contables suficientes para generar asientos. "
+                    "No se generará un Excel vacío."
+                )
+
+            # Apertura determinista: la fuente única es el estado inicial de la monografía.
+            # Si hay varias empresas, se construye UN asiento de apertura independiente
+            # para cada una y nunca se mezclan sus saldos.
+            mono_actual = st.session_state.get("monografia_json", {}) or {}
+            empresas_detectadas = _detectar_empresas_monografia(mono_actual)
+            aperturas = _construir_aperturas_por_empresa(mono_actual)
+
+            # El balance inicial es obligatorio cuando la monografía lo contiene.
+            # La cantidad de aperturas es DINÁMICA: una por cada empresa realmente
+            # identificada en el balance inicial. No se fija ningún número.
+            estado_inicial = mono_actual.get("estado_inicial", []) or []
+            if estado_inicial:
+                if empresas_detectadas:
+                    # Para varias empresas, cada empresa que tenga un balance inicial
+                    # debe recibir su propia apertura. No se exige una cantidad fija.
+                    empresas_con_estado = {
+                        _normalizar_nombre_empresa(x.get("empresa")).lower()
+                        for x in estado_inicial
+                        if isinstance(x, dict) and x.get("empresa")
+                    }
+                    empresas_con_apertura = {
+                        _normalizar_nombre_empresa(a.get("empresa")).lower()
+                        for a in aperturas
+                        if isinstance(a, dict) and a.get("empresa")
+                    }
+                    faltan_aperturas = sorted(empresas_con_estado - empresas_con_apertura)
+                    if faltan_aperturas:
+                        raise ValueError(
+                            "No se pudo construir el asiento de apertura para: "
+                            + ", ".join(faltan_aperturas)
+                            + ". TANA no generará un Excel incompleto."
+                        )
+                elif len(aperturas) != 1:
+                    raise ValueError(
+                        "Se detectó un balance inicial, pero TANA no pudo construir el asiento de apertura. "
+                        "No se generará el Excel hasta corregir la apertura."
+                    )
+
+            asientos_sin_apertura = []
+            for a in asientos_generados:
+                if not isinstance(a, dict):
+                    asientos_sin_apertura.append(a); continue
+                texto_a = _normalizar_texto_contable(" ".join(str(a.get(k) or "") for k in ("glosa", "observacion", "documento")))
+                if a.get("operacion_numero") in (0, "0") or any(k in texto_a for k in ("asiento de apertura", "reapertura", "saldo inicial", "balance inicial")):
+                    continue
+                # Completa la empresa del asiento usando la operación extraída si Gemini no la devolvió.
+                if not str(a.get("empresa") or "").strip():
+                    op_num = str(a.get("operacion_numero") or "").strip()
+                    for op in (mono_actual.get("operaciones", []) or []):
+                        if isinstance(op, dict) and str(op.get("numero") or "").strip() == op_num:
+                            if str(op.get("empresa") or "").strip():
+                                a["empresa"] = str(op.get("empresa")).strip()
+                            break
+                asientos_sin_apertura.append(a)
+
+            if len(empresas_detectadas) > 1:
+                # La cantidad de empresas es libre. Se agregan exactamente las
+                # aperturas que correspondan a las empresas detectadas en el estado inicial.
+                if aperturas:
+                    asientos_generados = aperturas + asientos_sin_apertura
+                else:
+                    asientos_generados = asientos_sin_apertura
+            else:
+                apertura_det = _construir_asiento_apertura_determinista(mono_actual)
+                if apertura_det:
+                    asientos_generados = [apertura_det] + asientos_sin_apertura
+                else:
+                    asientos_generados = asientos_sin_apertura
+
+            # Correlativo global, preservando el orden: cada empresa conserva su
+            # apertura como el primer asiento que le corresponde.
+            for idx, a in enumerate(asientos_generados, start=1):
+                if isinstance(a, dict):
+                    a["numero"] = idx
+
+            # Normaliza bancos únicamente cuando el banco aparece explícitamente
+            # en la práctica. Así BCP, Nación, BBVA, etc. quedan con su 104xx propio.
+            operaciones_map = {str(op.get("numero")): op for op in (st.session_state.get("monografia_json", {}).get("operaciones", []) or []) if isinstance(op, dict)}
+            for a in asientos_generados:
+                if isinstance(a, dict):
+                    _aplicar_banco_a_lineas_asiento(a, operaciones_map.get(str(a.get("operacion_numero")), {}))
+
             asientos_generados = asegurar_cuenta_79_en_destinos(asientos_generados, pcge_map)
             asientos_generados = corregir_retiro_socio(asientos_generados, st.session_state.get("monografia_json", {}))
-            valid, errors, warnings = validate_asientos({"asientos": asientos_generados}, pcge_map)
+
+            # Normalización determinista: todos los importes operativos de TANA
+            # quedan a 2 decimales antes de construir HT. Esto evita que pequeñas
+            # variaciones de representación de Gemini terminen alterando los estados.
+            for _asiento in asientos_generados:
+                if not isinstance(_asiento, dict):
+                    continue
+                for _linea in _asiento.get("lineas", []) or []:
+                    if not isinstance(_linea, dict):
+                        continue
+                    _linea["debe"] = round(max(_to_float(_linea.get("debe"), 0.0), 0.0), 2)
+                    _linea["haber"] = round(max(_to_float(_linea.get("haber"), 0.0), 0.0), 2)
+
+            # Segundo pase: si Gemini omitió una operación o produjo un asiento
+            # inválido, TANA intenta reparar SOLO ese punto. Esto evita que una
+            # práctica de 16 operaciones termine con 14/15 asientos válidos.
+            asientos_generados, valid, errors, warnings_pase2 = _reparar_y_completar_asientos(
+                asientos_generados, mono_actual, pcge_map
+            )
+
+            # Si hubo una reparación, vuelve a aplicar bancos y destinos y valida
+            # por última vez antes de guardar el resultado.
+            operaciones_map = {str(op.get("numero")): op for op in (mono_actual.get("operaciones", []) or []) if isinstance(op, dict)}
+            for _a in asientos_generados:
+                if isinstance(_a, dict):
+                    _aplicar_banco_a_lineas_asiento(_a, operaciones_map.get(str(_a.get("operacion_numero")), {}))
+            asientos_generados = asegurar_cuenta_79_en_destinos(asientos_generados, pcge_map)
+            valid, errors, warnings_finales = validate_asientos({"asientos": asientos_generados}, pcge_map)
+
             st.session_state["asientos_contables"] = asientos_generados
             st.session_state["asientos_validos"] = valid
             st.session_state["errores_asientos"] = errors
-            st.session_state["alertas_asientos"] = list(alertas_gemini) + list(warnings)
+            st.session_state["alertas_asientos"] = list(alertas_gemini) + list(warnings_pase2) + list(warnings_finales)
         except Exception as exc:
             st.error(f"No se pudieron desarrollar los asientos: {exc}")
             st.stop()
@@ -2206,26 +4334,20 @@ REGLAS ABSOLUTAS:
 1. Analiza TODAS las hojas del Excel, no solamente el Libro Diario.
 2. La hoja puede llamarse HT, Hoja de Trabajo, Balance, Hoja1 o cualquier otro nombre.
 3. El nombre de la hoja es solo una pista; usa el contenido para localizarla.
-4. Si el estudiante indica una hoja y una cuenta/fila concreta, modifica ÚNICAMENTE
-   esa fila y las celdas estrictamente necesarias de esa fila.
-5. NO modifiques otras filas, otras hojas, formatos, fórmulas o valores no relacionados.
-6. Si el error es una fórmula desplazada/desalineada, devuelve la fórmula correcta
-   para la celda concreta, respetando las referencias relativas de esa fila.
-7. Si el estudiante pide "corrige solo esa fila", la respuesta debe contener solo
-   las celdas de esa fila.
-8. No inventes valores. Usa las demás hojas como evidencia cruzada (LD/HT/EF/ES,
-   aunque tengan otros nombres).
-9. Antes de proponer el cambio, comprueba que la celda actual y la fila coinciden
-   con la evidencia del Excel.
+4. Puedes proponer VARIOS cambios en VARIAS hojas si el diagnóstico demuestra que están relacionados.
+5. NO modifiques celdas que no estén justificadas por el diagnóstico, la instrucción del estudiante o evidencia cruzada.
+6. Si el error es una fórmula desplazada/desalineada, devuelve la fórmula correcta para la celda concreta, respetando las referencias relativas de esa fila.
+7. Si el estudiante pide corregir todos los errores encontrados, incluye todos los cambios que puedas justificar; no te limites a una sola fila.
+8. No inventes valores. Usa las demás hojas como evidencia cruzada (LD/HT/EF/ES, aunque tengan otros nombres) y el diagnóstico determinista.
+9. Antes de proponer cada cambio, comprueba que la celda actual coincide con la evidencia del Excel.
 10. Devuelve JSON válido, sin Markdown.
 
 FORMATO OBLIGATORIO:
 {{
   "estado": "corregible" | "no_hay_evidencia",
-  "hoja": "nombre exacto de la hoja",
-  "fila": 0,
   "cambios": [
     {{
+      "hoja": "nombre exacto de la hoja",
       "celda": "C23",
       "valor_actual": "valor o fórmula actual",
       "valor_nuevo": "valor o fórmula nueva",
@@ -2248,72 +4370,51 @@ SOLICITUD EXACTA DEL ESTUDIANTE:
         lambda client: [prompt],
         types.GenerateContentConfig(response_mime_type="application/json"),
     )
-    data = json.loads(response.text or "{}")
+    data = _parsear_respuesta_json_gemini(response.text or "{}")
     return data, profile
 
 
 def _aplicar_cambios_celdas_excel(propuesta):
-    """Aplica cambios explícitos sobre una COPIA del Excel original."""
+    """Aplica múltiples cambios explícitos sobre una COPIA del Excel original."""
     raw = st.session_state.get("tana_excel_origen_bytes")
     if not raw:
         raise ValueError("No hay Excel original cargado.")
     if propuesta.get("estado") != "corregible":
-        raise ValueError(propuesta.get("observacion") or "No existe evidencia suficiente para corregir el Excel.")
+        raise ValueError(propuesta.get("observacion") or "No existe evidencia suficiente para una corrección segura.")
 
-    hoja = str(propuesta.get("hoja") or "").strip()
-    fila = int(propuesta.get("fila") or 0)
     cambios = propuesta.get("cambios") or []
-    if not hoja or fila < 1 or not cambios:
-        raise ValueError("La propuesta de corrección no contiene hoja, fila y cambios concretos.")
+    if not isinstance(cambios, list) or not cambios:
+        raise ValueError("La propuesta no contiene cambios concretos.")
 
     wb = openpyxl.load_workbook(io.BytesIO(raw), data_only=False)
-    if hoja not in wb.sheetnames:
-        raise ValueError(f"La hoja '{hoja}' no existe en el Excel original.")
-
-    # Seguridad: todos los cambios deben pertenecer a la fila indicada.
-    for cambio in cambios:
-        celda = str(cambio.get("celda") or "").strip()
-        m = re.fullmatch(r"([A-Za-z]+)(\d+)", celda)
-        if not m or int(m.group(2)) != fila:
-            raise ValueError(f"Cambio rechazado: {celda} no pertenece a la fila {fila}.")
-
-    ws = wb[hoja]
     aplicados=[]
     for cambio in cambios:
-        celda = str(cambio["celda"]).strip()
+        hoja = str(cambio.get("hoja") or "").strip()
+        celda = str(cambio.get("celda") or "").strip()
+        if not hoja or hoja not in wb.sheetnames:
+            raise ValueError(f"La hoja '{hoja}' no existe en el Excel original.")
+        if not re.fullmatch(r"[A-Za-z]+\d+", celda):
+            raise ValueError(f"Celda inválida: {celda}")
+        ws = wb[hoja]
         valor_actual = cambio.get("valor_actual")
         valor_nuevo = cambio.get("valor_nuevo")
         actual = ws[celda].value
-        # Si Gemini recibió una celda vacía, permitimos None/""; si no, exigimos
-        # coincidencia para evitar escribir encima de una versión distinta.
-        if valor_actual not in (None, ""):
-            if str(actual).strip() != str(valor_actual).strip():
-                raise ValueError(
-                    f"La celda {hoja}!{celda} cambió desde el diagnóstico. "
-                    f"Actual='{actual}' / esperado='{valor_actual}'. No se aplicó ningún cambio."
-                )
+        if valor_actual not in (None, "") and str(actual).strip() != str(valor_actual).strip():
+            raise ValueError(f"La celda {hoja}!{celda} cambió desde el diagnóstico. Actual='{actual}' / esperado='{valor_actual}'.")
         ws[celda] = valor_nuevo
-        aplicados.append((celda, actual, valor_nuevo, cambio.get("motivo", "")))
+        aplicados.append((hoja, celda, actual, valor_nuevo, cambio.get("motivo", "")))
 
+    if "Revision_TANA" in wb.sheetnames:
+        del wb["Revision_TANA"]
     ws_rev = wb.create_sheet("Revision_TANA")
-    ws_rev["A1"] = "TANA — CORRECCIÓN DE CELDAS"
-    ws_rev["A2"] = "Estado"
-    ws_rev["B2"] = "CORRECCIÓN APLICADA"
-    ws_rev["A3"] = "Hoja"
-    ws_rev["B3"] = hoja
-    ws_rev["A4"] = "Fila corregida"
-    ws_rev["B4"] = fila
-    ws_rev["A6"] = "Celda"
-    ws_rev["B6"] = "Valor anterior"
-    ws_rev["C6"] = "Valor nuevo"
-    ws_rev["D6"] = "Motivo"
-    for i,(celda,antes,nuevo,motivo) in enumerate(aplicados,start=7):
-        ws_rev.cell(i,1,celda); ws_rev.cell(i,2,str(antes)); ws_rev.cell(i,3,str(nuevo)); ws_rev.cell(i,4,str(motivo))
-    ws_rev.column_dimensions["A"].width=15; ws_rev.column_dimensions["B"].width=30
-    ws_rev.column_dimensions["C"].width=30; ws_rev.column_dimensions["D"].width=80
-    ws_rev["A"+str(len(aplicados)+9)] = "Advertencia"
-    ws_rev["B"+str(len(aplicados)+9)] = "Soy una inteligencia artificial y puedo cometer errores. Revisa siempre el resultado antes de utilizarlo."
-
+    ws_rev["A1"] = "TANA — CORRECCIÓN PROPUESTA"
+    ws_rev["A2"] = "Estado"; ws_rev["B2"] = "CORRECCIÓN APLICADA — REVISAR RESULTADO"
+    ws_rev["A4"] = "Hoja"; ws_rev["B4"] = "Celda"; ws_rev["C4"] = "Valor anterior"; ws_rev["D4"] = "Valor nuevo"; ws_rev["E4"] = "Motivo"
+    for i,(hoja,celda,antes,nuevo,motivo) in enumerate(aplicados,start=5):
+        ws_rev.cell(i,1,hoja); ws_rev.cell(i,2,celda); ws_rev.cell(i,3,str(antes)); ws_rev.cell(i,4,str(nuevo)); ws_rev.cell(i,5,str(motivo))
+    ws_rev.column_dimensions["A"].width=24; ws_rev.column_dimensions["B"].width=15; ws_rev.column_dimensions["C"].width=28; ws_rev.column_dimensions["D"].width=28; ws_rev.column_dimensions["E"].width=80
+    ws_rev["A"+str(len(aplicados)+7)] = "Advertencia"
+    ws_rev["B"+str(len(aplicados)+7)] = "Soy una inteligencia artificial y puedo cometer errores. Revisa siempre el resultado antes de utilizarlo."
     try:
         wb.calculation.fullCalcOnLoad=True; wb.calculation.forceFullCalc=True; wb.calculation.calcMode="auto"
     except Exception:
@@ -2379,7 +4480,7 @@ SOLICITUD DEL ESTUDIANTE:
         lambda client: [prompt],
         types.GenerateContentConfig(response_mime_type="application/json"),
     )
-    data = json.loads(response.text or "{}")
+    data = _parsear_respuesta_json_gemini(response.text or "{}")
     return data, profile
 
 
@@ -2479,16 +4580,41 @@ def _aplicar_correccion_si_corresponde(pregunta):
                     _tana_chat_add("assistant", f"<b>⚠️ No hice cambios.</b><br>{propuesta.get('observacion','No encontré evidencia suficiente para una corrección segura.')}<br><br><small>El Excel original permanece intacto.</small>")
                     return True
                 nuevo_buffer, aplicados = _aplicar_cambios_celdas_excel(propuesta)
-                # Segunda revisión del libro completo.
+                # Segunda revisión completa. El archivo SOLO queda descargable si
+                # la revisión posterior no detecta errores de fórmula/estructura y,
+                # cuando es posible reconstruir asientos, éstos también cuadran.
                 hojas_post, resumen_post = _revisar_bytes_excel_completo(nuevo_buffer)
-                st.session_state["tana_excel_buffer"] = nuevo_buffer
+                formula_errors = sum(int(h.get("errores_formula_muestra", 0) or 0) for h in hojas_post)
+                validacion_asientos_ok = True
+                validacion_detalle = ""
+                try:
+                    obj_post = _MemoryUpload(nuevo_buffer, name="corregido.xlsx")
+                    as_post = _cargar_asientos_desde_excel(obj_post)
+                    v_post, e_post, w_post = validate_asientos({"asientos": as_post}, pcge_map)
+                    validacion_asientos_ok = bool(v_post)
+                    if e_post:
+                        validacion_detalle = "<br>".join(str(e) for e in e_post[:10])
+                except Exception:
+                    # Algunos Excel de revisión pueden no tener un diario reconstruible.
+                    # En ese caso la revisión de todas las hojas sigue siendo válida,
+                    # pero no se declara validación de asientos.
+                    validacion_asientos_ok = True
+                salida_valida = formula_errors == 0 and validacion_asientos_ok
                 st.session_state["tana_excel_hojas"] = hojas_post
                 st.session_state["tana_excel_resumen_completo"] = resumen_post
                 st.session_state["tana_excel_revisado_post"] = True
                 st.session_state["tana_correcciones"] = st.session_state.get("tana_correcciones", 0) + 1
                 st.session_state["tana_correccion_version"] = st.session_state.get("tana_correccion_version", 1) + 1
-                detalle = "<br>".join(f"<b>{c}</b>: {a} → {n}<br><small>{m}</small>" for c,a,n,m in aplicados)
-                _tana_chat_add("assistant", f"<b>✅ Corrección aplicada en el Excel.</b><br><br><b>Hoja:</b> {propuesta.get('hoja')}<br><b>Fila:</b> {propuesta.get('fila')}<br><br>{detalle}<br><br><b>Nuevo Excel generado.</b><br>TANA volvió a revisar todas las hojas del archivo corregido.<br><br><small>El Excel original permanece intacto.</small>")
+                detalle = "<br>".join(f"<b>{h}!{c}</b>: {a} → {n}<br><small>{m}</small>" for h,c,a,n,m in aplicados)
+                if salida_valida:
+                    st.session_state["tana_excel_buffer"] = nuevo_buffer
+                    st.session_state["tana_excel_output_ready"] = True
+                    _tana_chat_add("assistant", f"<b>✅ Corrección aplicada y revisada.</b><br><br>{detalle}<br><br><b>Nuevo Excel generado y habilitado para descarga.</b><br><small>El Excel original permanece intacto. Soy una inteligencia artificial y puedo cometer errores; revisa siempre el resultado.</small>")
+                else:
+                    st.session_state.pop("tana_excel_buffer", None)
+                    st.session_state["tana_excel_output_ready"] = False
+                    extra = (f"<br><b>Observaciones:</b><br>{validacion_detalle}" if validacion_detalle else "")
+                    _tana_chat_add("assistant", f"<b>⚠️ Encontré una propuesta de corrección, pero la nueva versión no pasó la validación.</b><br><br>{detalle}{extra}<br><br><b>No habilité la descarga.</b> El Excel original permanece intacto.<br><small>Soy una inteligencia artificial y puedo cometer errores; revisa siempre el resultado.</small>")
                 return True
 
             data, profile = _corregir_asientos_con_gemini(pregunta)
@@ -2549,7 +4675,7 @@ def _tana_contexto_tutor():
     mono = st.session_state.get("monografia_texto", "")
     asientos = st.session_state.get("asientos_contables", [])
     asientos_txt = json.dumps(asientos, ensure_ascii=False, indent=2)
-    diagnostico = st.session_state.get("tana_diagnostico_excel", "")
+    diagnostico = tana_filtrar_diagnostico_preciso(st.session_state.get("tana_diagnostico_excel", ""))
     excel_contexto = st.session_state.get("tana_excel_resumen_completo", "")
     return (
         "MONOGRAFÍA / FUENTE:\n" + mono[:12000]
@@ -2595,7 +4721,7 @@ PREGUNTA:
 
 # La consulta y el audio se capturan arriba. Aquí solo se procesa la acción,
 # una vez que las funciones del tutor ya están definidas.
-if enviar_top and (pregunta_top.strip() or audio_top is not None) and (st.session_state.get("asientos_contables") or st.session_state.get("tana_excel_revisado") or st.session_state.get("monografia_json")):
+if enviar_top and (pregunta_top.strip() or audio_top is not None):
     if enviar_top and pregunta_top.strip():
         _record_user_activity("consulta_realizada", pregunta_top.strip())
         _tana_chat_add("user", pregunta_top.strip())
@@ -2609,7 +4735,7 @@ if enviar_top and (pregunta_top.strip() or audio_top is not None) and (st.sessio
             for k in ("no cuadra", "no cuadran", "diferencia", "dónde está el error", "donde esta el error",
                       "qué está mal", "que esta mal", "revisa el excel", "revisa este excel")
         ):
-            diagnostico = st.session_state.get("tana_diagnostico_excel", "")
+            diagnostico = tana_filtrar_diagnostico_preciso(st.session_state.get("tana_diagnostico_excel", ""))
             _tana_chat_add(
                 "assistant",
                 "<b>Revisión exacta del Excel:</b><br>" +
@@ -2629,12 +4755,7 @@ if enviar_top and (pregunta_top.strip() or audio_top is not None) and (st.sessio
     elif audio_top is not None:
         import hashlib
         _audio_sig = hashlib.sha1(audio_top.getvalue()).hexdigest()
-        if st.session_state.get("audio_tana_processed") == _audio_sig:
-            audio_top = None
-        else:
-            st.session_state["audio_tana_processed"] = _audio_sig
-        if audio_top is not None:
-            _record_user_activity("consulta_realizada", "Pregunta enviada por voz", _audio_sig)
+        if st.session_state.get("audio_tana_processed") != _audio_sig:
             _tana_chat_add("user", "🎤 Pregunta enviada por voz")
             with st.spinner("TANA está escuchando y preparando la respuesta…"):
                 temp_audio = None
@@ -2642,21 +4763,37 @@ if enviar_top and (pregunta_top.strip() or audio_top is not None) and (st.sessio
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
                         tmp.write(audio_top.getvalue())
                         temp_audio = tmp.name
+
+                    audio_bytes = audio_top.getvalue()
+
                     def audio_contents(client):
-                        audio_file = client.files.upload(file=temp_audio)
-                        return [audio_file, "Escucha el audio del estudiante, transcribe su pregunta y luego respóndela. No inventes datos. Usa el siguiente contexto:\n" + _tana_contexto_tutor()]
-                    response, profile = _generate_with_fallback(audio_contents, types.GenerateContentConfig())
+                        audio_part = types.Part.from_bytes(data=audio_bytes, mime_type="audio/wav")
+                        return [
+                            audio_part,
+                            "Escucha el audio del estudiante, transcribe su pregunta y luego respóndela. "
+                            "No inventes datos. Si hay una monografía o Excel cargado, usa su contexto. "
+                            "Si no hay documento cargado, responde normalmente a la pregunta hablada. "
+                            "Devuelve únicamente la respuesta para el estudiante.\n\n"
+                            + _tana_contexto_tutor()
+                        ]
+
+                    response, profile = _generate_with_fallback(
+                        audio_contents, types.GenerateContentConfig()
+                    )
                     respuesta_audio = response.text or "No pude interpretar el audio."
                     st.session_state["respuesta_tana"] = respuesta_audio
                     st.session_state["respuesta_tana_ruta"] = profile["label"]
+                    st.session_state["audio_tana_processed"] = _audio_sig
+                    _record_user_activity("consulta_realizada", "Pregunta enviada por voz", _audio_sig)
                     _tana_chat_add("assistant", respuesta_audio)
                 except Exception as exc:
-                    st.error(f"No se pudo procesar el audio: {_gemini_error_message(exc)}")
+                    # El error queda en el historial y el audio NO se marca como procesado.
+                    _tana_chat_add("assistant", f"⚠️ No pude procesar el audio: {_gemini_error_message(exc)}")
                 finally:
                     if temp_audio and os.path.exists(temp_audio):
                         os.remove(temp_audio)
     st.rerun()
-if st.session_state.get("asientos_contables"):
+if st.session_state.get("asientos_contables") and st.session_state.get("tana_modo_trabajo") != "revision_excel":
     st.markdown(
         '<div class="tana-success-card">✅&nbsp; TANA terminó el desarrollo contable. Tu Excel está listo para descargar.</div>',
         unsafe_allow_html=True,
@@ -2687,8 +4824,9 @@ GRAY = Font(name=FONT, size=9, color="808080")
 
 with open("pcge_data.json") as f:
     PCGE_DATA = json.load(f)
+_instalar_subdivisionarias_bancarias_en_pcge()
 
-print("Setup listo,", len(PCGE_DATA), "cuentas PCGE cargadas")
+print("Setup listo,", len(PCGE_DATA), "cuentas PCGE cargadas (incluidas subdivisionarias bancarias)")
 
 # ============================================================
 # HOJA: PCGE (catálogo oficial, tal cual tu plantilla)
@@ -3026,68 +5164,215 @@ def es_variacion_existencias(code):
 def es_cuenta79(code):
     return code[:2] == "79"
 
-def es_naturaleza(code):
-    # 69 (costo de ventas) y el elemento 9 se reclasifican íntegramente a
-    # R.Función; 79 es cuenta puente y no aparece en ningún resultado.
-    if not clasificar_resultado(code):
-        return False
-    if es_costo_ventas(code) or es_elemento9(code) or es_cuenta79(code):
-        return False
-    return True
 
-# Cuentas del Elemento 6 que ya tienen un destino explícito a 94/95.
-# Se detectan a partir de los asientos desarrollados por TANA, para que
-# el ERF no vuelva a incluir un gasto por naturaleza que ya fue llevado
-# a una cuenta de función.
 def detectar_cuentas_6_con_destino(asientos):
-    con_destino = set()
-    for asiento in asientos or []:
-        lineas = asiento.get("lineas", []) if isinstance(asiento, dict) else []
-        hay_94_95 = any(
-            str(x.get("codigo", "")).strip().startswith(("94", "95"))
-            for x in lineas if isinstance(x, dict)
-        )
-        if not hay_94_95:
-            continue
-        for x in lineas:
-            if not isinstance(x, dict):
-                continue
-            codigo = str(x.get("codigo", "")).strip()
-            if codigo[:1] == "6" and len(codigo) == 5:
-                con_destino.add(codigo)
-    return con_destino
-
-CUENTAS_6_CON_DESTINO = detectar_cuentas_6_con_destino(
-    st.session_state.get("asientos_contables", [])
-)
-
-def es_funcion(code):
     """
-    Clasificación EXACTA para Resultado por Función según la plantilla
-    revisada por el usuario:
+    Detecta cuentas de naturaleza (65/67) que realmente fueron llevadas a
+    cuentas por función (94/95).
 
-    OBLIGATORIAS:
-      - 70: ventas (detecta cualquier cuenta 70xxxxx presente).
-      - 69: costo de ventas (detecta cualquier cuenta 69xxxxx presente).
-      - 94 y 95: gastos por función.
+    La versión anterior marcaba una cuenta 6 como "con destino" solo porque
+    aparecía en el mismo asiento que una 94/95. Eso es demasiado amplio y
+    podía eliminar una 65/67 del ERF aunque su destino estuviera en otro
+    asiento, generando diferencias entre ERN y ERF.
 
-    ADICIONALES SOLO SI CORRESPONDE:
-      - 78: otros ingresos, si existe en la práctica.
-      - 65 y 67: solo si la cuenta existe y NO tiene destino a 94/95.
+    Ahora:
+      1) Identificamos asientos de destino por la presencia de 94/95 + 79
+         y/o glosas explícitas de "destino".
+      2) Calculamos el importe destinado.
+      3) Buscamos una combinación exacta de cuentas del elemento 6 cuyo
+         saldo deudor explique ese importe. Solo marcamos como destinadas
+         las cuentas 65/67 que pertenecen a una combinación única.
+      4) Si no existe una combinación inequívoca, no se elimina ninguna 65/67
+         del ERF: se conserva para no ocultar gasto real.
+    """
+    # Saldos deudores por cuenta del elemento 6.
+    saldos_6 = {}
+    for asiento in asientos or []:
+        for line in (asiento.get("lineas", []) if isinstance(asiento, dict) else []):
+            if not isinstance(line, dict):
+                continue
+            codigo = str(line.get("codigo", "")).strip()
+            if not re.fullmatch(r"6\d{4}", codigo):
+                continue
+            debe = _to_float(line.get("debe"), 0.0)
+            haber = _to_float(line.get("haber"), 0.0)
+            saldos_6[codigo] = saldos_6.get(codigo, 0.0) + debe - haber
 
-    NO pertenecen al ERF:
-      - 60, 61, 62, 63, 64, 66 y 68 por el solo hecho de ser
-        cuentas del elemento 6.
-      - 79: es cuenta puente de distribución y nunca se presenta
-        como componente del ERF.
+    # Solo nos interesan importes positivos.
+    saldos_6 = {c: round(v, 2) for c, v in saldos_6.items() if v > 0.009}
+    if not saldos_6:
+        return set()
+
+    importes_destino = []
+    for asiento in asientos or []:
+        if not isinstance(asiento, dict):
+            continue
+        lineas = asiento.get("lineas", []) or []
+        codigos = {str(x.get("codigo", "")).strip() for x in lineas if isinstance(x, dict)}
+        texto = " ".join(
+            str(asiento.get(k, "") or "") for k in ("glosa", "observacion", "documento")
+        ).lower()
+        tiene_94_95 = any(c.startswith(("94", "95")) for c in codigos)
+        tiene_79 = any(c.startswith("79") for c in codigos)
+        es_destino = (
+            tiene_94_95 and tiene_79
+        ) or (
+            tiene_94_95 and any(
+                palabra in texto for palabra in (
+                    "destino", "distribución", "distribucion",
+                    "por función", "por funcion", "imputación", "imputacion"
+                )
+            )
+        )
+        if not es_destino:
+            continue
+
+        total = 0.0
+        for line in lineas:
+            if not isinstance(line, dict):
+                continue
+            codigo = str(line.get("codigo", "")).strip()
+            if codigo.startswith(("94", "95")):
+                total += max(_to_float(line.get("debe"), 0.0), 0.0)
+        if total > 0.009:
+            importes_destino.append(round(total, 2))
+
+    if not importes_destino:
+        return set()
+
+    # Resolver cada importe de destino contra las cuentas 6.
+    # Se usa búsqueda de subconjuntos con centavos para prácticas pequeñas.
+    cuentas = sorted(saldos_6)
+    valores = [saldos_6[c] for c in cuentas]
+
+    def buscar_subconjunto_objetivo(objetivo, limite=2):
+        objetivo = round(objetivo, 2)
+        soluciones = []
+
+        # Orden descendente para encontrar rápidamente combinaciones plausibles.
+        pares = sorted(zip(cuentas, valores), key=lambda x: x[1], reverse=True)
+
+        def backtrack(i, restante, elegidas):
+            if len(soluciones) >= limite:
+                return
+            restante = round(restante, 2)
+            if abs(restante) < 0.01:
+                soluciones.append(tuple(elegidas))
+                return
+            if restante < -0.009 or i >= len(pares):
+                return
+
+            # Cota simple.
+            if sum(v for _, v in pares[i:]) + 0.009 < restante:
+                return
+
+            codigo, valor = pares[i]
+            if valor <= restante + 0.009:
+                backtrack(i + 1, restante - valor, elegidas + [codigo])
+            backtrack(i + 1, restante, elegidas)
+
+        backtrack(0, objetivo, [])
+        return soluciones
+
+    destinadas = set()
+    usados = set()
+
+    for importe in importes_destino:
+        # Excluir cuentas ya asignadas para no contar dos veces el mismo gasto.
+        cuentas_previas = cuentas[:]
+        if usados:
+            cuentas_previas = [c for c in cuentas_previas if c not in usados]
+
+        # Buscar sobre el conjunto restante.
+        pares = sorted(
+            ((c, saldos_6[c]) for c in cuentas_previas),
+            key=lambda x: x[1],
+            reverse=True,
+        )
+        soluciones = []
+
+        def backtrack_local(i, restante, elegidas):
+            if len(soluciones) >= 2:
+                return
+            restante = round(restante, 2)
+            if abs(restante) < 0.01:
+                soluciones.append(tuple(elegidas))
+                return
+            if restante < -0.009 or i >= len(pares):
+                return
+            if sum(v for _, v in pares[i:]) + 0.009 < restante:
+                return
+            codigo, valor = pares[i]
+            if valor <= restante + 0.009:
+                backtrack_local(i + 1, restante - valor, elegidas + [codigo])
+            backtrack_local(i + 1, restante, elegidas)
+
+        backtrack_local(0, importe, [])
+
+        # Solo aceptamos una solución inequívoca.
+        if len(soluciones) == 1:
+            sol = set(soluciones[0])
+            usados.update(sol)
+            destinadas.update(c for c in sol if c.startswith(("65", "67")))
+
+    return destinadas
+
+def es_naturaleza(code):
+    """
+    Clasificación para Resultado por Naturaleza.
+
+    Incluye:
+      - cuentas de naturaleza 6 y 7 que realmente forman el resultado;
+      - 87 Participaciones y 88 Impuesto a la Renta, cuando existan.
+
+    Excluye:
+      - 69, porque en la naturaleza se representa mediante 60/61;
+      - 79 y 89, cuentas puente/de cierre;
+      - cuentas 8 y cuentas del elemento 9 (94/95, etc.), que corresponden
+        a función, situación financiera o cierres.
     """
     if not code:
         return False
-    if code[:2] in {"70", "69", "78", "94", "95"}:
+    pref2 = code[:2]
+    if pref2 in {"69", "79", "89"}:
+        return False
+    if code[:1] == "9":
+        return pref2 in {"87", "88"}
+    if code[:1] == "8":
+        return False
+    return code[:1] in {"6", "7"}
+
+
+def es_funcion(code):
+    """
+    Clasificación para Resultado por Función.
+
+    Estructurales:
+      - 70 ventas
+      - 69 costo de ventas
+      - 94 y 95 gastos por función
+
+    Adicionales:
+      - 78 y 77 si existen como ingresos
+      - 65 y 67 solo cuando no se puede demostrar que fueron destinados
+        a 94/95
+      - 87 y 88 para que participaciones e impuesto también formen parte
+        del resultado final y concilien con ERN.
+
+    79 no se presenta en el ERF.
+    """
+    if not code:
+        return False
+    if code[:2] in {"70", "69", "78", "77", "94", "95", "87", "88"}:
         return True
     if code[:2] in {"65", "67"} and len(code) == 5:
         return code not in CUENTAS_6_CON_DESTINO
     return False
+
+
+CUENTAS_6_CON_DESTINO = detectar_cuentas_6_con_destino(
+    st.session_state.get("asientos_contables", [])
+)
 
 def es_balance(code):
     return not clasificar_resultado(code)
@@ -3176,12 +5461,15 @@ for code in cuentas_reporte:
     # Saldos ajustados: SOLO cuentas de balance (elemento 1 al 5).
     # Las cuentas de resultados (elemento 6-9) no se muestran aquí;
     # su saldo neto se refleja directamente en R.Naturaleza/R.Función.
+    # Para cuentas de balance con ajustes, el saldo ajustado es el NETO
+    # después de aplicar Debe/Haber del bloque de ajustes. Nunca se borra
+    # una cuenta completa solo porque tenga un ajuste parcial.
     if clasificar_resultado(code):
         sa_debe, sa_haber = 0.0, 0.0
-    elif aj_deudor or aj_acreedor:
-        sa_debe, sa_haber = 0.0, 0.0
     else:
-        sa_debe, sa_haber = deudor, acreedor
+        saldo_ajustado_neto = (deudor + aj_deudor) - (acreedor + aj_acreedor)
+        sa_debe = max(saldo_ajustado_neto, 0.0)
+        sa_haber = max(-saldo_ajustado_neto, 0.0)
     ws6.cell(r, 9, sa_debe)
     ws6.cell(r, 10, sa_haber)
 
@@ -3189,7 +5477,9 @@ for code in cuentas_reporte:
     # IMPORTANTE: para Naturaleza usamos el saldo después de 69 <-> 61;
     # para Función NO debemos borrar 69 ni las cuentas del elemento 9,
     # porque esas cuentas son precisamente las que alimentan el ERF.
-    neto = (deudor + aj_deudor) - (acreedor + aj_acreedor)
+    # Cálculo determinista a centavos. Los estados nunca deben depender de
+    # redondeos intermedios ni de una nueva interpretación de la IA.
+    neto = round((deudor + aj_deudor) - (acreedor + aj_acreedor), 2)
     neto_deudor = max(neto, 0.0)
     neto_acreedor = max(-neto, 0.0)
 
@@ -3236,6 +5526,61 @@ for c in range(3, 19):
     letter = get_column_letter(c)
     ws6.cell(r, c, f'=SUM({letter}4:{letter}{HT_LAST_ROW})').font = BOLD
     ws6.cell(r, c).number_format = '#,##0.00;(#,##0.00);"-"'
+
+# ------------------------------------------------------------
+# DIFERENCIA / RESTA — línea de cierre de la Hoja de Trabajo
+# ------------------------------------------------------------
+# La plantilla de referencia del usuario muestra una línea adicional debajo
+# de TOTAL para hacer explícita la resta entre los dos lados de cada bloque.
+# TANA antes dejaba esa diferencia implícita en los estados, lo que hacía
+# difícil localizar un descuadre. Aquí se calcula de forma determinista y
+# visible, sin inventar cuentas ni modificar los movimientos originales.
+#
+# En R.NAT y R.FUNCIÓN la diferencia es el resultado neto: lado acreedor
+# menos lado deudor cuando los ingresos superan a los gastos, o viceversa.
+# En E.S.F. se coloca la diferencia en el lado menor para mostrar qué importe
+# debe explicar el patrimonio/resultado.
+HT_DIF_ROW = r + 1
+ws6.cell(HT_DIF_ROW, 2, "DIFERENCIA / RESTA").font = BOLD
+ws6.cell(HT_DIF_ROW, 2).fill = PatternFill('solid', fgColor='FFF2CC')
+
+# DIFERENCIA DE CADA BLOQUE DE LA HT.
+# La fila de diferencia es INFORMATIVA: nunca se suma al TOTAL.
+# Se calcula directamente desde los TOTALES reales de la Hoja de Trabajo.
+for left_col, right_col in (
+    (3, 4),    # SUMA: Debe / Haber
+    (5, 6),    # SALDOS: Deudor / Acreedor
+    (7, 8),    # AJUSTES: Debe / Haber
+    (9, 10),   # SALDOS AJUSTADOS: Debe / Haber
+):
+    left = get_column_letter(left_col)
+    right = get_column_letter(right_col)
+    diff_formula = f'=ABS({left}{HT_TOTAL_ROW}-{right}{HT_TOTAL_ROW})'
+    ws6.cell(HT_DIF_ROW, left_col, diff_formula)
+    ws6.cell(HT_DIF_ROW, right_col, diff_formula)
+
+# Resultado por naturaleza: la diferencia se coloca EN EL LADO MENOR.
+# Haber > Debe = utilidad; Debe > Haber = pérdida.
+ws6.cell(HT_DIF_ROW, 11, f'=MAX(L{HT_TOTAL_ROW}-K{HT_TOTAL_ROW},0)')
+ws6.cell(HT_DIF_ROW, 12, f'=MAX(K{HT_TOTAL_ROW}-L{HT_TOTAL_ROW},0)')
+
+# Resultado por función: misma regla.
+ws6.cell(HT_DIF_ROW, 13, f'=MAX(N{HT_TOTAL_ROW}-M{HT_TOTAL_ROW},0)')
+ws6.cell(HT_DIF_ROW, 14, f'=MAX(M{HT_TOTAL_ROW}-N{HT_TOTAL_ROW},0)')
+
+# Estado de situación: la diferencia se coloca en el lado menor.
+ws6.cell(HT_DIF_ROW, 15, f'=MAX(P{HT_TOTAL_ROW}-O{HT_TOTAL_ROW},0)')
+ws6.cell(HT_DIF_ROW, 16, f'=MAX(O{HT_TOTAL_ROW}-P{HT_TOTAL_ROW},0)')
+
+for c in range(3, 19):
+    ws6.cell(HT_DIF_ROW, c).number_format = '#,##0.00;(#,##0.00);"-"'
+    ws6.cell(HT_DIF_ROW, c).fill = PatternFill('solid', fgColor='FFF2CC')
+    ws6.cell(HT_DIF_ROW, c).font = BOLD
+
+# Distribución / ajustes: diferencia visible entre ambos lados.
+# También es informativa y no se suma al TOTAL.
+ws6.cell(HT_DIF_ROW, 17, f'=ABS(Q{HT_TOTAL_ROW}-R{HT_TOTAL_ROW})')
+ws6.cell(HT_DIF_ROW, 18, f'=ABS(Q{HT_TOTAL_ROW}-R{HT_TOTAL_ROW})')
 
 ws6.freeze_panes = "A4"
 autofit(ws6, [11, 44, 14, 14, 14, 14, 13, 13, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14])
@@ -3287,6 +5632,30 @@ def _sum_ht_codes(codes, column):
         for code in codes
     ]
     return '=' + '+'.join(formulas)
+
+
+def _signed_ht(prefix, credit_col="L", debit_col="K"):
+    """Saldo neto de una familia: crédito menos débito."""
+    return (
+        f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*'
+        f'HT!${credit_col}$4:${credit_col}${HT_LAST_ROW})'
+        f'-SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*'
+        f'HT!${debit_col}$4:${debit_col}${HT_LAST_ROW})'
+    )
+
+
+def _signed_ht_codes(codes, credit_col="L", debit_col="K"):
+    if not codes:
+        return '=0'
+    parts = []
+    for code in codes:
+        parts.append(
+            f'SUMPRODUCT((HT!$A$4:$A${HT_LAST_ROW}="{code}")*'
+            f'HT!${credit_col}$4:${credit_col}${HT_LAST_ROW})'
+            f'-SUMPRODUCT((HT!$A$4:$A${HT_LAST_ROW}="{code}")*'
+            f'HT!${debit_col}$4:${debit_col}${HT_LAST_ROW})'
+        )
+    return '=' + '+'.join(parts)
 
 
 def _set_report_value(ws, row, col, formula, bold=False):
@@ -3341,17 +5710,19 @@ _report_header(ws8, 4)
 
 r = 5
 _write_label(ws8, r, 'INGRESOS OPERACIONALES', True); r += 1
+
 ventas_row = r
 _write_label(ws8, r, 'VENTAS')
-_write_amount(ws8, r, _sum_ht('70', 'N'), False)
+# Ingreso neto = HABER - DEBE. Así se contemplan también eventuales
+# devoluciones/rectificaciones sin romper la conciliación.
+_write_amount(ws8, r, _signed_ht('70', 'N', 'M'))
 r += 1
 
-# Líneas de detalle de ventas: solo se muestran cuando existen cuentas 70 adicionales.
 ventas_codes = sorted(c for c in cuentas_reporte if c.startswith('70'))
 if len(ventas_codes) > 1:
     for code in ventas_codes:
         _write_label(ws8, r, f'{code} - {pcge_map.get(code, code)}')
-        _write_amount(ws8, r, _sum_ht_codes([code], 'N'))
+        _write_amount(ws8, r, _signed_ht_codes([code], 'N', 'M'))
         r += 1
 
 ventas_total_row = r
@@ -3359,9 +5730,14 @@ _write_label(ws8, r, 'INGRESOS OPERACIONALES', True)
 _write_amount(ws8, r, f'=E{ventas_row}', True)
 r += 1
 
-_write_label(ws8, r, 'COSTO DE VENTA', True)
 costo_row = r
-_write_amount(ws8, r, _sum_ht('69', 'M'))
+_write_label(ws8, r, 'COSTO DE VENTA', True)
+# Gasto neto = DEBE - HABER.
+_write_amount(
+    ws8, r,
+    f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="69")*HT!$M$4:$M${HT_LAST_ROW})-'
+    f'SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="69")*HT!$N$4:$N${HT_LAST_ROW})'
+)
 r += 1
 
 utilidad_bruta_row = r
@@ -3370,21 +5746,29 @@ _write_amount(ws8, r, f'=E{ventas_total_row}-E{costo_row}', True)
 r += 2
 
 _write_label(ws8, r, 'GASTOS OPERACIONALES', True); r += 1
-
 gasto_operativo_rows = []
-# 95 y 94 son obligatorias en la estructura, aunque su saldo sea cero.
+
 for prefix, label in [('95', 'Gastos de venta'), ('94', 'Gastos de administración')]:
     rr = r
     _write_label(ws8, r, label.upper())
-    _write_amount(ws8, r, f'=-{_sum_ht(prefix, "M")[1:]}')
+    _write_amount(
+        ws8, r,
+        f'=-(SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*'
+        f'HT!$M$4:$M${HT_LAST_ROW})-SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*'
+        f'HT!$N$4:$N${HT_LAST_ROW}))'
+    )
     gasto_operativo_rows.append(rr)
     r += 1
 
-# 65: solo si existe y no fue destinada a 94/95.
+# 65: solo si existe y NO se pudo demostrar que fue destinada a 94/95.
 for code in sorted(c for c in cuentas_reporte if len(c) == 5 and c.startswith('65') and c not in CUENTAS_6_CON_DESTINO):
     rr = r
     _write_label(ws8, r, f'{code} - {pcge_map.get(code, code)}')
-    _write_amount(ws8, r, f'=-{_sum_ht_codes([code], "M")[1:]}')
+    _write_amount(
+        ws8, r,
+        f'=-(SUMPRODUCT((HT!$A$4:$A${HT_LAST_ROW}="{code}")*HT!$M$4:$M${HT_LAST_ROW})-'
+        f'SUMPRODUCT((HT!$A$4:$A${HT_LAST_ROW}="{code}")*HT!$N$4:$N${HT_LAST_ROW}))'
+    )
     gasto_operativo_rows.append(rr)
     r += 1
 
@@ -3396,28 +5780,29 @@ r += 2
 
 _write_label(ws8, r, 'OTROS INGRESOS Y GASTOS', True); r += 1
 
-# 78: se incorpora si existe.
 otros_78_row = None
 if _prefix_exists('78'):
     otros_78_row = r
     _write_label(ws8, r, 'OTROS INGRESOS')
-    _write_amount(ws8, r, _sum_ht('78', 'N'))
+    _write_amount(ws8, r, _signed_ht('78', 'N', 'M'))
     r += 1
 
-# Ingreso financiero 77, si existe.
 ingreso_fin_row = None
 if _prefix_exists('77'):
     ingreso_fin_row = r
     _write_label(ws8, r, 'INGRESO FINANCIERO')
-    _write_amount(ws8, r, _sum_ht('77', 'N'))
+    _write_amount(ws8, r, _signed_ht('77', 'N', 'M'))
     r += 1
 
-# 67: solo si existe y no tiene destino a 94/95; se presenta como gasto financiero.
 gasto_fin_rows = []
 for code in sorted(c for c in cuentas_reporte if len(c) == 5 and c.startswith('67') and c not in CUENTAS_6_CON_DESTINO):
     rr = r
     _write_label(ws8, r, f'{code} - {pcge_map.get(code, code)}')
-    _write_amount(ws8, r, f'=-{_sum_ht_codes([code], "M")[1:]}')
+    _write_amount(
+        ws8, r,
+        f'=-(SUMPRODUCT((HT!$A$4:$A${HT_LAST_ROW}="{code}")*HT!$M$4:$M${HT_LAST_ROW})-'
+        f'SUMPRODUCT((HT!$A$4:$A${HT_LAST_ROW}="{code}")*HT!$N$4:$N${HT_LAST_ROW}))'
+    )
     gasto_fin_rows.append(rr)
     r += 1
 
@@ -3432,16 +5817,22 @@ parts += [f'+E{x}' for x in gasto_fin_rows]
 _write_amount(ws8, r, '=' + ''.join(parts), True)
 r += 1
 
-# Participaciones: solo si existe elemento 87; si no existe, se mantiene 0.
 part_row = r
 _write_label(ws8, r, 'PARTICIPACIONES')
-_write_amount(ws8, r, f'=-{_sum_ht("87", "M")[1:]}')
+_write_amount(
+    ws8, r,
+    f'=-(SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="87")*HT!$M$4:$M${HT_LAST_ROW})-'
+    f'SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="87")*HT!$N$4:$N${HT_LAST_ROW}))'
+)
 r += 1
 
-# Impuesto a la renta: solo si existe elemento 88; si no existe, 0.
 impuesto_row = r
 _write_label(ws8, r, 'IMPUESTO A LA RENTA')
-_write_amount(ws8, r, f'=-{_sum_ht("88", "M")[1:]}')
+_write_amount(
+    ws8, r,
+    f'=-(SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="88")*HT!$M$4:$M${HT_LAST_ROW})-'
+    f'SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="88")*HT!$N$4:$N${HT_LAST_ROW}))'
+)
 r += 1
 
 resultado_erf_row = r
@@ -3449,7 +5840,6 @@ _write_label(ws8, r, 'RESULTADO DEL EJERCICIO', True)
 _write_amount(ws8, r, f'=E{resultado_antes_part_row}+E{part_row}+E{impuesto_row}', True)
 r += 2
 
-# Control interno: no se muestra en el informe, pero permite comprobar que ERF = ERN.
 control_erf_row = r
 _write_label(ws8, r, 'CONTROL INTERNO ERF')
 _write_amount(ws8, r, '=0')
@@ -3472,13 +5862,11 @@ _report_header(ws7, 4)
 r = 5
 _write_label(ws7, r, 'INGRESOS OPERACIONALES', True); r += 1
 
-# Ventas y otros ingresos: se detectan por prefijo, sin inventar cuentas.
 ventas_ern_row = r
 _write_label(ws7, r, 'VENTAS')
-_write_amount(ws7, r, _sum_ht('70', 'L'))
+_write_amount(ws7, r, _signed_ht('70', 'L', 'K'))
 r += 1
 
-# Ingresos por naturaleza que efectivamente existan. La 74 es gasto.
 for prefix, label in [
     ('71', 'Variación de la producción almacenada'),
     ('72', 'Producción de activo inmovilizado'),
@@ -3490,7 +5878,7 @@ for prefix, label in [
 ]:
     if _prefix_exists(prefix):
         _write_label(ws7, r, label.upper())
-        _write_amount(ws7, r, _sum_ht(prefix, 'L'))
+        _write_amount(ws7, r, _signed_ht(prefix, 'L', 'K'))
         r += 1
 
 ventas_total_ern_row = r
@@ -3499,8 +5887,8 @@ _write_amount(ws7, r, f'=SUM(E{ventas_ern_row}:E{r-1})', True)
 r += 2
 
 _write_label(ws7, r, 'COSTO Y GASTOS POR NATURALEZA', True); r += 1
-
 naturaleza_rows = []
+
 for prefix, label in [
     ('60', 'Compras'),
     ('61', 'Variación de existencias'),
@@ -3516,29 +5904,51 @@ for prefix, label in [
     if _prefix_exists(prefix):
         rr = r
         _write_label(ws7, r, label.upper())
-        _write_amount(ws7, r, _sum_ht(prefix, 'K'))
+        # Gasto neto = DEBE - HABER. Si hubiera una reversión (saldo acreedor),
+        # se resta del gasto en vez de ignorarla.
+        _write_amount(ws7, r, f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*'
+                              f'HT!$K$4:$K${HT_LAST_ROW})-SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*'
+                              f'HT!$L$4:$L${HT_LAST_ROW})')
         naturaleza_rows.append(rr)
         r += 1
 
 total_gastos_ern_row = r
 _write_label(ws7, r, 'TOTAL COSTO Y GASTOS', True)
 _write_amount(ws7, r, '=' + '+'.join(f'E{x}' for x in naturaleza_rows) if naturaleza_rows else '=0', True)
+r += 1
+
+# Participaciones e impuesto: se incorporan también en ERN cuando existen,
+# para que el resultado final sea exactamente conciliable con ERF.
+ern_part_row = r
+_write_label(ws7, r, 'PARTICIPACIONES')
+_write_amount(
+    ws7, r,
+    f'=-(SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="87")*HT!$K$4:$K${HT_LAST_ROW})-'
+    f'SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="87")*HT!$L$4:$L${HT_LAST_ROW}))'
+)
+r += 1
+
+ern_impuesto_row = r
+_write_label(ws7, r, 'IMPUESTO A LA RENTA')
+_write_amount(
+    ws7, r,
+    f'=-(SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="88")*HT!$K$4:$K${HT_LAST_ROW})-'
+    f'SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="88")*HT!$L$4:$L${HT_LAST_ROW}))'
+)
 r += 2
 
 resultado_ern_row = r
 _write_label(ws7, r, 'RESULTADO DEL EJERCICIO', True)
-_write_amount(ws7, r, f'=E{ventas_total_ern_row}-E{total_gastos_ern_row}', True)
+_write_amount(ws7, r, f'=E{ventas_total_ern_row}-E{total_gastos_ern_row}+E{ern_part_row}+E{ern_impuesto_row}', True)
 ERN_RESULTADO_ROW = r
 r += 1
 
-# Control interno oculto.
 control_ern_row = r
 _write_label(ws7, r, 'CONTROL INTERNO ERN')
 _write_amount(ws7, r, f'=E{resultado_ern_row}-ERF!E{resultado_erf_row}')
 ws7.cell(r, 6, f'=IF(ABS(E{r})<0.01,"CUADRADO","REVISAR")')
 _hide_control_row(ws7, control_ern_row)
 
-# Ahora que ERN_RESULTADO_ROW ya existe, completamos el control cruzado del ERF.
 ws8.cell(control_erf_row, 5, f'=E{resultado_erf_row}-ERN!E{ERN_RESULTADO_ROW}')
 ws8.cell(control_erf_row, 5).number_format = '#,##0.00;(#,##0.00);"-"'
 
@@ -3834,6 +6244,25 @@ if "monografia_texto" in st.session_state:
     ws_mono.freeze_panes = "A4"
 
 # ============================================================
+# VALIDACIÓN CONTABLE AUTOMÁTICA
+# ============================================================
+# Se agrega al Excel final para que el estudiante pueda ver los controles
+# matemáticos antes de utilizar el resultado.
+try:
+    _agregar_hoja_control_contable(
+        wb,
+        st.session_state.get("asientos_contables", []) or [],
+        HT_LAST_ROW,
+        ERN_RESULTADO_ROW,
+        resultado_erf_row,
+        control_esf_row,
+    )
+except Exception as _control_exc:
+    # La auditoría nunca debe impedir que TANA genere el Excel.
+    # Si falla su construcción, queda registrada en el chat/diagnóstico.
+    st.session_state["tana_control_contable_error"] = str(_control_exc)
+
+# ============================================================
 # PRESENTACIÓN DEL EXCEL FINAL
 # ============================================================
 # Las hojas auxiliares siguen existiendo durante la construcción porque
@@ -3841,7 +6270,7 @@ if "monografia_texto" in st.session_state:
 # al usuario. El archivo final muestra únicamente los reportes solicitados.
 if st.session_state.get("tana_modo_trabajo") == "asientos":
     # Modo básico: el estudiante pidió únicamente asientos / libro diario.
-    HOJAS_PUBLICAS = ["Asientos_Contables"]
+    HOJAS_PUBLICAS = ["Asientos_Contables", "VALIDACION", "AUDITORIA_TANA"]
 else:
     HOJAS_PUBLICAS = [
         "Asientos_Contables",
@@ -3850,6 +6279,8 @@ else:
         "ESF",
         "ERF",
         "ERN",
+        "VALIDACION",
+        "AUDITORIA_TANA",
     ]
 
 for ws in wb.worksheets:
@@ -3879,8 +6310,43 @@ buffer = io.BytesIO()
 wb.save(buffer)
 buffer.seek(0)
 
+# ============================================================
+# EXPORTACIÓN MULTIEMPRESA — UNA MONOGRAFÍA, UN EXCEL POR EMPRESA
+# ============================================================
+# Si TANA detectó 2 o más empresas, nunca se entrega un libro mezclado.
+# Se parte del Excel validado y se genera una copia independiente por empresa.
+_empresas_export = _detectar_empresas_monografia(st.session_state.get("monografia_json", {}) or {})
+if len(_empresas_export) > 1 and st.session_state.get("tana_modo_trabajo") != "revision_excel":
+    _grupos_export, _sin_empresa_export = _asientos_por_empresa(
+        st.session_state.get("asientos_contables", []) or [], _empresas_export
+    )
+    st.session_state["tana_empresas_detectadas"] = _empresas_export
+    st.session_state["tana_excel_outputs"] = {}
+    for _empresa_export in _empresas_export:
+        _as_emp = _grupos_export.get(_empresa_export, [])
+        if not _as_emp:
+            continue
+        _nombre_seguro = re.sub(r"[^A-Za-z0-9ÁÉÍÓÚáéíóúÑñÜü _.-]+", "", _empresa_export).strip()
+        _nombre_seguro = re.sub(r"\s+", "_", _nombre_seguro)[:80] or "Empresa"
+        st.session_state["tana_excel_outputs"][_empresa_export] = {
+            "bytes": _crear_excel_por_empresa_desde_base(buffer.getvalue(), _empresa_export, _as_emp),
+            "filename": f"TANA_{_nombre_seguro}.xlsx",
+            "asientos": len(_as_emp),
+        }
+    if _sin_empresa_export:
+        st.session_state["tana_multiempresa_alerta"] = (
+            f"Hay {len(_sin_empresa_export)} asiento(s) que no pudieron asociarse a una empresa. "
+            "No se mezclaron automáticamente; revisa la práctica si esto ocurre."
+        )
+    else:
+        st.session_state.pop("tana_multiempresa_alerta", None)
+else:
+    st.session_state.pop("tana_excel_outputs", None)
+    st.session_state.pop("tana_empresas_detectadas", None)
+    st.session_state.pop("tana_multiempresa_alerta", None)
+
 _sig = st.session_state.get("tana_file_signature")
-if _sig and st.session_state.get("tana_resuelto_signature") != _sig:
+if _sig and st.session_state.get("tana_resuelto_signature") != _sig and st.session_state.get("tana_modo_trabajo") != "revision_excel":
     _tana_chat_add(
         "assistant",
         "TANA ha resuelto tu monografía:<br>" + (
@@ -3890,10 +6356,11 @@ if _sig and st.session_state.get("tana_resuelto_signature") != _sig:
     )
     st.session_state["tana_resuelto_signature"] = _sig
     st.session_state["tana_excel_buffer"] = buffer.getvalue()
+    st.session_state["tana_excel_output_ready"] = True
     _record_user_activity("desarrollo_completado", st.session_state.get("monografia_nombre", "archivo"), _sig)
     st.rerun()
 
-if st.session_state.get("tana_excel_buffer"):
+if st.session_state.get("tana_excel_buffer") and st.session_state.get("tana_excel_output_ready", False):
     _n_asientos = len(st.session_state.get("asientos_contables", []) or [])
     _n_validos = len(st.session_state.get("asientos_validos", []) or [])
     st.markdown(
@@ -3912,18 +6379,49 @@ if st.session_state.get("tana_excel_buffer"):
             st.session_state.get("tana_resuelto_signature", ""),
         )
 
-    st.download_button(
-        label="⬇️  Descargar Excel",
-        data=st.session_state["tana_excel_buffer"],
-        on_click=_registrar_descarga_excel,
-        file_name=(
-            f"TANA_Contabilidad_corregido_v{st.session_state.get('tana_correccion_version', 1)}.xlsx"
-            if st.session_state.get("tana_correcciones", 0) else
-            ("TANA_Asientos.xlsx" if st.session_state.get("tana_modo_trabajo") == "asientos" else "TANA_Contabilidad.xlsx")
-        ),
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        type="primary",
-        use_container_width=True,
-    )
+    # Una empresa = un Excel. Dos o más empresas = un botón independiente por empresa.
+    _salidas_multi = st.session_state.get("tana_excel_outputs", {}) or {}
+    if _salidas_multi:
+        st.markdown(
+            f"<div class='tana-success-card'>📚 TANA detectó <b>{len(_salidas_multi)} empresas</b> y generó un Excel independiente para cada una.</div>",
+            unsafe_allow_html=True,
+        )
+        if st.session_state.get("tana_multiempresa_alerta"):
+            st.warning(st.session_state["tana_multiempresa_alerta"])
+        for _emp_name, _salida in _salidas_multi.items():
+            st.markdown(f"<div style='margin:10px 0 4px 0;font-weight:700;'>📄 {_emp_name}</div>", unsafe_allow_html=True)
+            def _registrar_descarga_multi(_emp=_emp_name, _sig_local=st.session_state.get("tana_resuelto_signature", "")):
+                _record_user_activity("excel_descargado", _emp, _sig_local)
+            st.download_button(
+                label=f"⬇️ Descargar Excel — {_emp_name}",
+                data=_salida["bytes"],
+                file_name=_salida["filename"],
+                on_click=_registrar_descarga_multi,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary",
+                use_container_width=True,
+                key=f"download_empresa_{hash(_emp_name)}",
+            )
+    else:
+        def _registrar_descarga_excel():
+            _record_user_activity(
+                "excel_descargado",
+                st.session_state.get("monografia_nombre", "TANA_Contabilidad.xlsx"),
+                st.session_state.get("tana_resuelto_signature", ""),
+            )
+
+        st.download_button(
+            label="⬇️  Descargar Excel",
+            data=st.session_state["tana_excel_buffer"],
+            on_click=_registrar_descarga_excel,
+            file_name=(
+                f"TANA_Contabilidad_corregido_v{st.session_state.get('tana_correccion_version', 1)}.xlsx"
+                if st.session_state.get("tana_correcciones", 0) else
+                ("TANA_Asientos.xlsx" if st.session_state.get("tana_modo_trabajo") == "asientos" else "TANA_Contabilidad.xlsx")
+            ),
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="primary",
+            use_container_width=True,
+        )
     if "monografia_nombre" in st.session_state:
         st.caption("La hoja Monografia conserva el texto extraído para revisión.")
