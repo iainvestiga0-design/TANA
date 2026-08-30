@@ -966,6 +966,11 @@ def _instalar_subdivisionarias_bancarias_en_pcge():
     pcge_map = {str(cod).strip(): str(desc) for cod, desc in PCGE_DATA}
 
 
+def _normalizar_nombre_empresa(nombre):
+    """Normaliza nombres de empresa de forma conservadora."""
+    return re.sub(r"\s+", " ", str(nombre or "").strip())
+
+
 def _normalizar_texto_contable(valor):
     import unicodedata
     txt = str(valor or "").lower()
@@ -3876,10 +3881,6 @@ def corregir_retiro_socio(asientos, monografia_json):
 
     resultado.extend([dist, pago])
     return resultado
-
-
-def _normalizar_nombre_empresa(nombre):
-    return re.sub(r"\s+", " ", str(nombre or "").strip())
 
 
 def _detectar_empresas_monografia(monografia_json):
