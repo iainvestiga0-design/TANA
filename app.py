@@ -1063,21 +1063,25 @@ def _cuenta_apertura_para_texto(texto, codigo_explicito=None):
             return candidato, pcge_map.get(candidato, "")
     banco = _detectar_banco_en_texto(t)
     es_obligacion_bancaria = any(k in t for k in ("prestamo por pagar", "préstamo por pagar", "prestamo al banco", "préstamo al banco", "deuda con el banco"))
-    if banco and not es_obligacion_bancaria and any(k in t for k in ("cuenta corriente", "cuenta de ahorros", "cuenta ahorro", "dinero en cuenta", "cheque", "transferencia bancaria")):
+    if banco and not es_obligacion_bancaria and any(k in t for k in ("cuenta corriente", "cta cte", "cta. cte", "cuenta de ahorros", "cuenta ahorro", "dinero en cuenta", "cheque", "transferencia bancaria")):
         return banco, TANA_BANCOS_NOMBRES.get(banco, pcge_map.get(banco, "Cuenta bancaria"))
     reglas = [
         (("caja chica", "dinero en caja chica", "efectivo en caja"), "10111", "Caja"),
         (("facturas por cobrar", "cuentas por cobrar", "factura por cobrar", "emitidas en cartera"), "12121", "Emitidas en cartera"),
-        (("prendas de vestir", "mercaderias", "mercaderías", "muebles de melamine", "existencias", "mercaderia"), "20111", "Costo"),
+        (("prendas de vestir", "mercaderias", "mercaderías", "muebles de melamine", "existencias", "mercaderia", "girasoles", "girasol", "claveles", "clavel", "productos terminados", "productos", "inventario"), "20111", "Costo"),
         (("suministros de oficina", "suministros", "materiales auxiliares"), "25241", "Otros suministros"),
         (("muebles", "muebles y enseres", "propiedad planta y equipo"), "33511", "Costo"),
         (("depreciacion acumulada", "depreciación acumulada"), "39526", "Muebles y enseres"),
         (("igv por pagar", "igv – cuenta propia", "igv cuenta propia", "igv por pagar"), "40111", "IGV – Cuenta propia"),
         (("essalud por pagar", "essalud", "es salud"), "40311", "ESSALUD"),
         (("afp por pagar", "administradoras de fondos de pensiones", "afp"), "41711", "Administradoras de fondos de pensiones"),
+        (("cts por pagar", "cts", "compensacion por tiempo de servicios", "compensación por tiempo de servicios"), "41511", "Compensación por tiempo de servicios"),
         (("facturas por pagar", "cuentas por pagar comerciales", "emitidas por pagar", "proveedores"), "42121", "Emitidas"),
+        (("otras cuentas por pagar", "otras cuentas por pagar diversas"), "46991", "Otras cuentas por pagar"),
         (("prestamo por pagar", "préstamo por pagar", "prestamo al banco", "préstamo al banco"), "45111", "Instituciones financieras"),
-        (("participaciones sociales", "capital social", "capital"), "50121", "Participaciones"),
+        (("acciones", "acciones sociales"), "50111", "Acciones"),
+        (("participaciones", "participaciones sociales"), "50121", "Participaciones"),
+        (("reserva legal", "reserva legal"), "58211", "Legal"),
         (("utilidades acumuladas", "resultados acumulados", "utilidad acumulada"), "59111", "Utilidades acumuladas"),
     ]
     for claves, codigo, desc in reglas:
@@ -1100,6 +1104,11 @@ def _construir_asiento_apertura_determinista(monografia_json):
 
     for item in estado:
         texto = _extraer_texto_estado_inicial(item)
+        tipo_item = str(item.get("tipo") or "").strip().lower() if isinstance(item, dict) else ""
+        # Los totales sirven para verificar la extracción, pero NO son cuentas
+        # contables y nunca deben convertirse en una línea del asiento.
+        if tipo_item.startswith("total") or "total activo" in _normalizar_texto_contable(texto) or "total pasivo" in _normalizar_texto_contable(texto) or "total patrimonio" in _normalizar_texto_contable(texto):
+            continue
         importe = _extraer_importe_estado_inicial(item)
         if importe is None or abs(float(importe)) < 0.005:
             continue
@@ -1122,37 +1131,16 @@ def _construir_asiento_apertura_determinista(monografia_json):
             line["debe"] = monto
             lineas_debe.append(line); sum_debe += monto
 
-    # Si la práctica deja utilidades acumuladas en '?' o no las expresa pero el
-    # resto del estado permite cuadrar, calculamos 59111 como diferencia.
-    if abs(sum_debe - sum_haber) > 0.009:
-        diferencia = round(sum_debe - sum_haber, 2)
-        if diferencia > 0.009:
-            # El saldo faltante del patrimonio es acreedor.
-            existente = next((x for x in lineas_haber if x.get("codigo") == "59111"), None)
-            if existente:
-                existente["haber"] = round(existente["haber"] + diferencia, 2)
-            else:
-                lineas_haber.append({"codigo": "59111", "denominacion": "Utilidades acumuladas", "debe": 0.0, "haber": diferencia, "concepto": "Saldo de utilidades acumuladas necesario para cuadrar el estado inicial"})
-            sum_haber += diferencia
-        elif diferencia < -0.009:
-            # Si el Haber supera al Debe, el saldo faltante es un resultado
-            # acumulado deudor (pérdida). No se crea un activo ficticio.
-            perdida = abs(diferencia)
-            existente = next((x for x in lineas_debe if x.get("codigo") == "59211"), None)
-            if existente:
-                existente["debe"] = round(existente["debe"] + perdida, 2)
-            else:
-                lineas_debe.append({
-                    "codigo": "59211",
-                    "denominacion": "Pérdidas acumuladas",
-                    "debe": perdida,
-                    "haber": 0.0,
-                    "concepto": "Saldo de pérdidas acumuladas necesario para cuadrar el estado inicial"
-                })
-            sum_debe += perdida
-
+    # NO hacemos "cuadres" creando 59111/59211 por diferencia. Si una partida
+    # del balance inicial no fue reconocida, fabricar una cuenta de diferencia
+    # oculta precisamente el error que debemos detectar (por ejemplo, perder
+    # la cuenta 20, 10 o 50). La apertura solo se acepta cuando todas las
+    # partidas reales fueron mapeadas y el Debe/Haber coincide.
+    if faltantes:
+        return None
     if abs(sum_debe - sum_haber) > 0.009:
         return None
+
     if not lineas_debe or not lineas_haber:
         return None
 
@@ -1796,43 +1784,73 @@ def _extraction_has_content(data):
     return bool(data.get("estado_inicial") or data.get("solicitudes") or data.get("datos_importantes"))
 
 
+def _detectar_claves_operaciones_fuente(texto):
+    """Detecta (empresa, número) de cada operación en prácticas multiempresa.
+
+    En una práctica como Fusión por Incorporación es normal que El Girasol
+    tenga operaciones 1..5 y El Clavel también tenga operaciones 1..5. Un set
+    formado solo por números los confunde y hace que el segundo bloque parezca
+    ya resuelto.
+    """
+    text = str(texto or '')
+    claves = set()
+    # Encabezados tipo "a. Empresa El Girasol S.R.L." / "b. Empresa ...".
+    headings = list(re.finditer(r'(?im)^\s*[a-z]\.\s*Empresa\s+([^\n\r]+?)\s*$', text))
+    if headings:
+        for i, m in enumerate(headings):
+            empresa = _normalizar_nombre_empresa(m.group(1))
+            section_start = m.end()
+            section_end = headings[i+1].start() if i+1 < len(headings) else len(text)
+            section = text[section_start:section_end]
+            for opm in re.finditer(r'(?m)^\s*(\d{1,3})\.\s+', section):
+                claves.add((empresa.lower(), int(opm.group(1)), empresa))
+        if claves:
+            return claves
+
+    # Respaldo para documentos sin encabezados alfabéticos: detecta bloques
+    # "empresa X ..." y asocia las numeraciones del bloque más cercano.
+    empresas = list(re.finditer(r'(?im)^\s*empresa\s+([^\n\r]+?)\s*$', text))
+    for i, m in enumerate(empresas):
+        empresa = _normalizar_nombre_empresa(m.group(1))
+        section_end = empresas[i+1].start() if i+1 < len(empresas) else len(text)
+        section = text[m.end():section_end]
+        for opm in re.finditer(r'(?m)^\s*(\d{1,3})\.\s+', section):
+            claves.add((empresa.lower(), int(opm.group(1)), empresa))
+    return claves
+
+
 def _detectar_numeros_operaciones_fuente(texto):
-    """Detecta numeración explícita de operaciones en el texto fuente."""
-    encontrados = set()
-    patron = re.compile(
-        r"\b(?:operaci[oó]n|operaci[oó]nes|enunciado|caso)\s*"
-        r"(?:n[º°.]?\s*)?(\d{1,3})\b",
-        flags=re.IGNORECASE,
-    )
-    for m in patron.finditer(str(texto or "")):
-        try:
-            encontrados.add(int(m.group(1)))
-        except Exception:
-            pass
-    return encontrados
+    """Compatibilidad: devuelve los números, sin perder la función histórica."""
+    return {n for _emp, n, _display in _detectar_claves_operaciones_fuente(texto)}
 
 
 def _completar_operaciones_faltantes(client, model, document_text, data):
-    """Segundo pase SOLO cuando la fuente demuestra que faltan operaciones.
-
-    No rehace los asientos ni toca la lógica contable; recupera enunciados que
-    el extractor general haya omitido.
-    """
+    """Recupera operaciones faltantes usando empresa + número como identidad."""
     if not isinstance(data, dict):
         return data
-    text = re.sub(r"\s+", " ", str(document_text or "")).strip()
-    fuente = _detectar_numeros_operaciones_fuente(text)
-    if not fuente:
+    text = re.sub(r'\s+', ' ', str(document_text or '')).strip()
+    fuente_claves = _detectar_claves_operaciones_fuente(document_text)
+    operaciones = [x for x in (data.get('operaciones', []) or []) if isinstance(x, dict)]
+    if not fuente_claves:
         return data
 
-    operaciones = [x for x in (data.get("operaciones", []) or []) if isinstance(x, dict)]
+    def opnum(v):
+        try:
+            return int(float(str(v).strip()))
+        except Exception:
+            return None
+
     extraidas = set()
     for op in operaciones:
-        try:
-            extraidas.add(int(float(str(op.get("numero")).strip())))
-        except Exception:
-            pass
-    faltantes = sorted(fuente - extraidas)
+        n = opnum(op.get('numero'))
+        emp = _normalizar_nombre_empresa(op.get('empresa')).lower()
+        if n is not None:
+            extraidas.add((emp, n))
+
+    faltantes = []
+    for emp_key, n, emp_display in sorted(fuente_claves, key=lambda x: (x[0], x[1])):
+        if (emp_key, n) not in extraidas:
+            faltantes.append({'empresa': emp_display, 'numero': n})
     if not faltantes:
         return data
 
@@ -1840,44 +1858,30 @@ def _completar_operaciones_faltantes(client, model, document_text, data):
 Eres el verificador de completitud documental de TANA.
 
 La extracción principal ya fue realizada. NO cambies ninguna operación existente.
-Solo recupera las operaciones numeradas que la fuente contiene y que faltan.
+Solo recupera las operaciones que realmente faltan, identificadas por EMPRESA + NÚMERO.
 
-NÚMEROS FALTANTES: {faltantes}
+OPERACIONES FALTANTES:
+{json.dumps(faltantes, ensure_ascii=False, indent=2)}
 
 TEXTO COMPLETO DE LA PRÁCTICA:
 {text[:140000]}
 
-Para cada número faltante, devuelve la operación completa según la estructura:
+Para cada faltante devuelve la operación completa con esta estructura:
 {{
-  "operaciones": [
-    {{
-      "numero": 1,
-      "empresa": "",
-      "ruc": "",
-      "fecha": "",
-      "descripcion": "",
-      "importe": null,
-      "moneda": "PEN",
-      "cantidad": null,
-      "precio_unitario": null,
-      "porcentaje": null,
-      "documento": "",
-      "forma_pago": "",
-      "medio_pago": "",
-      "tercero": "",
-      "cuenta_bancaria": "",
-      "datos_adicionales": ""
-    }}
-  ]
+  "operaciones": [{{
+    "numero": 1, "empresa": "", "ruc": "", "fecha": "", "descripcion": "",
+    "importe": null, "moneda": "PEN", "cantidad": null, "precio_unitario": null,
+    "porcentaje": null, "documento": "", "forma_pago": "", "medio_pago": "",
+    "tercero": "", "cuenta_bancaria": "", "datos_adicionales": ""
+  }}]
 }}
 
 REGLAS:
 - Usa SOLO información literalmente sustentada por el texto.
 - No inventes ni resuelvas contabilidad.
-- No conviertas varias operaciones en una sola.
-- Conserva fechas, importes, cantidades, porcentajes y condiciones.
-- Si un número faltante no corresponde realmente a una operación contable,
-  no lo inventes: omítelo.
+- Una misma numeración puede repetirse en empresas distintas: NO la consideres duplicada
+  si la empresa es diferente.
+- Conserva la empresa exacta, fecha, importe, cantidades, porcentajes y condiciones.
 - Devuelve SOLO JSON válido.
 """
     try:
@@ -1885,33 +1889,33 @@ REGLAS:
             model=model,
             contents=[prompt],
             config=types.GenerateContentConfig(
-                response_mime_type="application/json",
+                response_mime_type='application/json',
                 temperature=0.0,
-                seed=_deterministic_seed({"source": text, "missing": faltantes}),
+                seed=_deterministic_seed({'source': text, 'missing': faltantes}),
             ),
         )
-        extra = _parsear_respuesta_json_gemini(response.text or "{}")
-        nuevos = extra.get("operaciones", []) if isinstance(extra, dict) else []
+        extra = _parsear_respuesta_json_gemini(response.text or '{}')
+        nuevos = extra.get('operaciones', []) if isinstance(extra, dict) else []
         if isinstance(nuevos, list):
-            existentes = {str(x.get("numero")).strip() for x in operaciones}
+            existentes = {(_normalizar_nombre_empresa(x.get('empresa')).lower(), opnum(x.get('numero'))) for x in operaciones}
             for op in nuevos:
                 if not isinstance(op, dict):
                     continue
-                n = str(op.get("numero") or "").strip()
-                if n and n not in existentes:
+                k = (_normalizar_nombre_empresa(op.get('empresa')).lower(), opnum(op.get('numero')))
+                if k[1] is not None and k not in existentes:
                     operaciones.append(op)
-                    existentes.add(n)
+                    existentes.add(k)
             operaciones.sort(key=lambda x: (
-                _to_float(x.get("numero"), 10**9),
-                str(x.get("fecha") or ""),
+                _normalizar_nombre_empresa(x.get('empresa')).lower(),
+                opnum(x.get('numero')) if opnum(x.get('numero')) is not None else 10**9,
+                str(x.get('fecha') or ''),
             ))
             result = dict(data)
-            result["operaciones"] = operaciones
+            result['operaciones'] = operaciones
             return result
     except Exception:
         pass
     return data
-
 
 def _json_extraction_from_text(client, model, document_text):
     # La semilla debe depender del contenido textual normalizado y no de la
@@ -3246,14 +3250,15 @@ ASIENTOS_PROMPT = """
 REGLA ADICIONAL — ASIENTO DE APERTURA:
 Si la monografía proporciona un balance inicial, balance de comprobación,
 estado de situación financiera inicial o saldos de apertura, debes registrar
-primero el asiento de apertura correspondiente antes de la operación 1.
+primero el asiento de apertura correspondiente antes de las operaciones.
 El asiento de apertura debe ser UN SOLO asiento por empresa: primero todas las
 cuentas con saldo deudor (activos) y después todas las cuentas con saldo acreedor
 (pasivos y patrimonio). No cierres ni compenses artificialmente los saldos contra
 la cuenta 50: la 50121 Participaciones se registra solo por el capital que realmente
-aparece en el estado inicial. Si las utilidades acumuladas no tienen importe y el
-resto del estado permite calcularlas para que Activo = Pasivo + Patrimonio, el saldo
-calculado corresponde a 59111. Si existen dos empresas, cada empresa debe tener
+aparece en el estado inicial. No inventes una cuenta de diferencia para cuadrar la apertura: todas las partidas
+reales del estado inicial deben estar presentes y mapeadas. Si falta una partida,
+la apertura debe quedar marcada para revisión y no ser reemplazada por una cuenta
+59111/59211 calculada. Si existen dos empresas, cada empresa debe tener
 su propio asiento de apertura y su propio libro. No mezcles sus saldos.
 NO MODIFIQUES la lógica de HT, ERF, ERN, ESF, destinos ni distribución existente.
 
@@ -3899,16 +3904,21 @@ def _asientos_por_empresa(asientos, empresas):
                 continue
         op_num = str(asiento.get("operacion_numero") or "").strip()
         # Segunda oportunidad: buscar empresa en la operación.
-        for op in (st.session_state.get("monografia_json", {}) or {}).get("operaciones", []) or []:
-            if isinstance(op, dict) and str(op.get("numero") or "").strip() == op_num:
-                emp2 = _normalizar_nombre_empresa(op.get("empresa"))
-                target = next((e for e in empresas if e.lower() == emp2.lower()), None)
-                if target:
-                    asiento["empresa"] = target
-                    grupos[target].append(asiento)
-                    break
-        else:
-            sin_empresa.append(asiento)
+        _matches = [
+            op for op in (st.session_state.get("monografia_json", {}) or {}).get("operaciones", []) or []
+            if isinstance(op, dict) and str(op.get("numero") or "").strip() == op_num
+        ]
+        # Si el mismo número existe en más de una empresa, no adivinamos.
+        # Solo asignamos automáticamente cuando el número identifica una única
+        # operación en toda la práctica.
+        if len(_matches) == 1:
+            emp2 = _normalizar_nombre_empresa(_matches[0].get("empresa"))
+            target = next((e for e in empresas if e.lower() == emp2.lower()), None)
+            if target:
+                asiento["empresa"] = target
+                grupos[target].append(asiento)
+                continue
+        sin_empresa.append(asiento)
     return grupos, sin_empresa
 
 
@@ -4078,74 +4088,116 @@ def _crear_excel_por_empresa_desde_base(base_bytes, empresa, asientos_empresa):
             else:
                 ajustes_d[cuentas79[0]] = ajustes_d.get(cuentas79[0], 0.0) + total9
 
-        # Mapeo de filas existentes por código. Las cuentas de otras empresas
-        # quedan en cero y sus etiquetas se conservan solo como estructura.
-        row_by_code = {}
-        for r in range(4, ws.max_row + 1):
-            code = str(ws.cell(r, 1).value or "").strip()
-            if re.fullmatch(r"\d{5}", code):
-                row_by_code[code] = r
+        # HT DINÁMICA: TODAS las cuentas que aparecen en el Libro Diario de esta empresa.
+        # La versión anterior reutilizaba las filas de la plantilla y dejaba cuentas
+        # fantasma (por ejemplo 50) o perdía cuentas reales (20/10) que no estaban
+        # como fila en la plantilla.
+        from copy import copy as _copy_style
 
-        for r in row_by_code.values():
-            for c in range(3, 19):
-                ws.cell(r, c, 0)
+        old_total_row = None
+        old_diff_row = None
+        for _r in range(4, ws.max_row + 1):
+            label = str(ws.cell(_r, 2).value or '').strip().upper()
+            if label == 'TOTAL' and old_total_row is None:
+                old_total_row = _r
+            elif label == 'DIFERENCIA / RESTA' and old_diff_row is None:
+                old_diff_row = _r
 
-        for code, row in row_by_code.items():
-            if code not in movimientos_local:
-                continue
+        old_formula_last_row = max(4, (old_total_row - 1) if old_total_row else ws.max_row)
+        first_data_row = 4
+        new_last_row = first_data_row + len(cuentas_local) - 1
+        new_total_row = new_last_row + 1
+        new_diff_row = new_total_row + 1
+        required_last_row = new_diff_row
+
+        template_account_row = 4 if ws.max_row >= 4 else None
+        template_total_row = old_total_row if old_total_row else max(4, ws.max_row)
+        template_diff_row = old_diff_row if old_diff_row else template_total_row
+
+        for _r in range(first_data_row, max(ws.max_row, required_last_row) + 1):
+            for _c in range(1, 19):
+                ws.cell(_r, _c).value = None
+
+        def _copy_row_style(src_row, dst_row):
+            if not src_row or src_row > ws.max_row:
+                return
+            for _c in range(1, 19):
+                src = ws.cell(src_row, _c)
+                dst = ws.cell(dst_row, _c)
+                if src.has_style:
+                    dst._style = _copy_style(src._style)
+
+        if template_account_row:
+            for _r in range(first_data_row, new_last_row + 1):
+                if _r != template_account_row:
+                    _copy_row_style(template_account_row, _r)
+        _copy_row_style(template_total_row, new_total_row)
+        _copy_row_style(template_diff_row, new_diff_row)
+
+        for idx, code in enumerate(cuentas_local, start=first_data_row):
             rec = movimientos_local[code]
-            debe = round(rec["debe"], 2)
-            haber = round(rec["haber"], 2)
+            debe = round(rec['debe'], 2)
+            haber = round(rec['haber'], 2)
             deudor = max(debe - haber, 0.0)
             acreedor = max(haber - debe, 0.0)
             ajd = round(ajustes_d.get(code, 0.0), 2)
             ajh = round(ajustes_h.get(code, 0.0), 2)
-            ws.cell(row, 3, debe); ws.cell(row, 4, haber)
-            ws.cell(row, 5, deudor); ws.cell(row, 6, acreedor)
-            ws.cell(row, 7, ajd); ws.cell(row, 8, ajh)
+            ws.cell(idx, 1, code)
+            ws.cell(idx, 2, pcge_map_local.get(code, ''))
+            ws.cell(idx, 3, debe); ws.cell(idx, 4, haber)
+            ws.cell(idx, 5, deudor); ws.cell(idx, 6, acreedor)
+            ws.cell(idx, 7, ajd); ws.cell(idx, 8, ajh)
             if clasificar_resultado(code):
                 sad = sah = 0.0
             else:
                 net = (deudor + ajd) - (acreedor + ajh)
                 sad = max(net, 0.0); sah = max(-net, 0.0)
-            ws.cell(row, 9, round(sad, 2)); ws.cell(row, 10, round(sah, 2))
+            ws.cell(idx, 9, round(sad, 2)); ws.cell(idx, 10, round(sah, 2))
             neto = round((deudor + ajd) - (acreedor + ajh), 2)
             nd = max(neto, 0.0); na = max(-neto, 0.0)
             if es_naturaleza(code):
-                ws.cell(row, 11, nd); ws.cell(row, 12, na)
+                ws.cell(idx, 11, nd); ws.cell(idx, 12, na)
             if es_funcion(code):
-                ws.cell(row, 13, deudor); ws.cell(row, 14, acreedor)
+                ws.cell(idx, 13, deudor); ws.cell(idx, 14, acreedor)
             if es_balance(code):
-                ws.cell(row, 15, deudor); ws.cell(row, 16, acreedor)
+                ws.cell(idx, 15, deudor); ws.cell(idx, 16, acreedor)
             if es_variacion_existencias(code) or es_cuenta79(code):
-                ws.cell(row, 17, ajd)
+                ws.cell(idx, 17, ajd)
             elif es_costo_ventas(code) or es_elemento9(code):
-                ws.cell(row, 18, ajh)
+                ws.cell(idx, 18, ajh)
+            for _c in range(3, 19):
+                ws.cell(idx, _c).number_format = '#,##0.00;(#,##0.00);"-"'
 
-        # Actualiza los totales y la línea de diferencia ya existentes.
-        total_row = None
-        diff_row = None
-        for r in range(4, ws.max_row + 1):
-            if str(ws.cell(r, 2).value or "").strip().upper() == "TOTAL":
-                total_row = r
-                break
-        if total_row:
-            for c in range(3, 19):
-                letter = get_column_letter(c)
-                ws.cell(total_row, c, f'=SUM({letter}4:{letter}{total_row-1})')
-        if total_row and total_row + 1 <= ws.max_row:
-            diff_row = total_row + 1
-            ws.cell(diff_row, 7, f'=ABS(G{total_row}-H{total_row})')
-            ws.cell(diff_row, 8, f'=ABS(G{total_row}-H{total_row})')
-            ws.cell(diff_row, 9, f'=ABS(I{total_row}-J{total_row})')
-            ws.cell(diff_row, 10, f'=ABS(I{total_row}-J{total_row})')
-            ws.cell(diff_row, 11, f'=MAX(L{total_row}-K{total_row},0)')
-            ws.cell(diff_row, 12, f'=MAX(K{total_row}-L{total_row},0)')
-            ws.cell(diff_row, 13, f'=MAX(N{total_row}-M{total_row},0)')
-            ws.cell(diff_row, 14, f'=MAX(M{total_row}-N{total_row},0)')
-            ws.cell(diff_row, 15, f'=MAX(P{total_row}-O{total_row},0)')
-            ws.cell(diff_row, 16, f'=MAX(O{total_row}-P{total_row},0)')
-            ws.cell(diff_row, 18, f'=ABS(Q{total_row}-R{total_row})')
+        ws.cell(new_total_row, 2, 'TOTAL')
+        for _c in range(3, 19):
+            _letter = get_column_letter(_c)
+            ws.cell(new_total_row, _c, f'=SUM({_letter}{first_data_row}:{_letter}{new_last_row})')
+            ws.cell(new_total_row, _c).number_format = '#,##0.00;(#,##0.00);"-"'
+
+        ws.cell(new_diff_row, 2, 'DIFERENCIA / RESTA')
+        for _left, _right in ((3,4),(5,6),(7,8),(9,10)):
+            _l = get_column_letter(_left); _rr = get_column_letter(_right)
+            _formula = f'=ABS({_l}{new_total_row}-{_rr}{new_total_row})'
+            ws.cell(new_diff_row, _left, _formula); ws.cell(new_diff_row, _right, _formula)
+        ws.cell(new_diff_row, 11, f'=MAX(L{new_total_row}-K{new_total_row},0)')
+        ws.cell(new_diff_row, 12, f'=MAX(K{new_total_row}-L{new_total_row},0)')
+        ws.cell(new_diff_row, 13, f'=MAX(N{new_total_row}-M{new_total_row},0)')
+        ws.cell(new_diff_row, 14, f'=MAX(M{new_total_row}-N{new_total_row},0)')
+        ws.cell(new_diff_row, 15, f'=MAX(P{new_total_row}-O{new_total_row},0)')
+        ws.cell(new_diff_row, 16, f'=MAX(O{new_total_row}-P{new_total_row},0)')
+        ws.cell(new_diff_row, 17, f'=ABS(Q{new_total_row}-R{new_total_row})')
+        ws.cell(new_diff_row, 18, f'=ABS(Q{new_total_row}-R{new_total_row})')
+        for _c in range(3, 19):
+            ws.cell(new_diff_row, _c).number_format = '#,##0.00;(#,##0.00);"-"'
+
+        if new_last_row != old_formula_last_row:
+            _pat = re.compile(r'(HT!\$[A-Z]+\$4:\$[A-Z]+\$)' + str(old_formula_last_row) + r'\b')
+            for _ws_formula in wb2.worksheets:
+                for _row in _ws_formula.iter_rows():
+                    for _cell in _row:
+                        if isinstance(_cell.value, str) and _cell.value.startswith('='):
+                            _cell.value = _pat.sub(r'\g<1>' + str(new_last_row), _cell.value)
+        ws.freeze_panes = 'A4'
 
     # ------------------------------------------------------------
     # Metadatos y nombre del libro.
@@ -4239,13 +4291,22 @@ def _reparar_y_completar_asientos(asientos, monografia_json, pcge_map):
     # ------------------------------------------------------------
     # PASO 1: detectar operaciones que quedaron sin asiento.
     # ------------------------------------------------------------
+    # La identidad de una operación es EMPRESA + NÚMERO. En multiempresa
+    # pueden existir simultáneamente operación 1 de Girasol y operación 1 de
+    # Clavel; usar solo el número hacía que TANA omitiera las del segundo bloque.
     covered = set()
     for a in current:
         n = opnum(a.get("operacion_numero"))
+        emp = _normalizar_nombre_empresa(a.get("empresa")).lower()
         if n and n != "0":
-            covered.add(n)
+            covered.add((emp, n))
 
-    missing = [op for op in ops if opnum(op.get("numero")) and opnum(op.get("numero")) not in covered]
+    missing = []
+    for op in ops:
+        n = opnum(op.get("numero"))
+        emp = _normalizar_nombre_empresa(op.get("empresa")).lower()
+        if n and (emp, n) not in covered:
+            missing.append(op)
 
     if missing:
         pcge_5 = [[str(c).strip(), str(d)] for c, d in PCGE_DATA if re.fullmatch(r"\d{5}", str(c).strip())]
@@ -4454,9 +4515,12 @@ if "monografia_json" in st.session_state and "asientos_contables" not in st.sess
                 if not str(a.get("empresa") or "").strip():
                     op_num = str(a.get("operacion_numero") or "").strip()
                     for op in (mono_actual.get("operaciones", []) or []):
-                        if isinstance(op, dict) and str(op.get("numero") or "").strip() == op_num:
-                            if str(op.get("empresa") or "").strip():
-                                a["empresa"] = str(op.get("empresa")).strip()
+                        if not isinstance(op, dict):
+                            continue
+                        if str(op.get("numero") or "").strip() != op_num:
+                            continue
+                        if str(op.get("empresa") or "").strip():
+                            a["empresa"] = str(op.get("empresa")).strip()
                             break
                 asientos_sin_apertura.append(a)
 
@@ -4482,10 +4546,15 @@ if "monografia_json" in st.session_state and "asientos_contables" not in st.sess
 
             # Normaliza bancos únicamente cuando el banco aparece explícitamente
             # en la práctica. Así BCP, Nación, BBVA, etc. quedan con su 104xx propio.
-            operaciones_map = {str(op.get("numero")): op for op in (st.session_state.get("monografia_json", {}).get("operaciones", []) or []) if isinstance(op, dict)}
+            operaciones_map = {
+                (_normalizar_nombre_empresa(op.get("empresa")).lower(), str(op.get("numero") or "").strip()): op
+                for op in (st.session_state.get("monografia_json", {}).get("operaciones", []) or [])
+                if isinstance(op, dict)
+            }
             for a in asientos_generados:
                 if isinstance(a, dict):
-                    _aplicar_banco_a_lineas_asiento(a, operaciones_map.get(str(a.get("operacion_numero")), {}))
+                    _op_key = (_normalizar_nombre_empresa(a.get("empresa")).lower(), str(a.get("operacion_numero") or "").strip())
+                    _aplicar_banco_a_lineas_asiento(a, operaciones_map.get(_op_key, {}))
 
             asientos_generados = asegurar_cuenta_79_en_destinos(asientos_generados, pcge_map)
             asientos_generados = corregir_retiro_socio(asientos_generados, st.session_state.get("monografia_json", {}))
