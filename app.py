@@ -4294,8 +4294,36 @@ def _crear_excel_por_empresa_desde_base(base_bytes, empresa, asientos_empresa, a
     # ------------------------------------------------------------
     if "HT" in wb2.sheetnames:
         ws = wb2["HT"]
+        # La HT representa el balance de comprobación ANTES de la distribución
+        # final de utilidades. La distribución se registra en el Libro Diario,
+        # pero ocurre después de preparar la HT y los estados financieros; por
+        # eso NO debe alterar los movimientos de la HT.
+        #
+        # Tampoco se incluyen aquí futuras transferencias por fusión: éstas se
+        # agregan únicamente al diario exportado después del balance final.
+        def _excluir_de_ht(asiento):
+            texto = " ".join(
+                str(asiento.get(k, "") or "")
+                for k in ("glosa", "observacion", "documento")
+            ).lower()
+            return any(palabra in texto for palabra in (
+                "distribución de utilidades",
+                "distribucion de utilidades",
+                "reparto de utilidades",
+                "distribución de utilidades acumuladas",
+                "distribucion de utilidades acumuladas",
+                "transferencia en bloque",
+                "fusión por incorporación",
+                "fusion por incorporacion",
+            ))
+
+        asientos_para_ht = [
+            a for a in asientos_empresa
+            if isinstance(a, dict) and not _excluir_de_ht(a)
+        ]
+
         movimientos_local = {}
-        for asiento in asientos_empresa:
+        for asiento in asientos_para_ht:
             for line in asiento.get("lineas", []) or []:
                 code = str(line.get("codigo", "")).strip()
                 if not re.fullmatch(r"\d{5}", code):
@@ -4305,7 +4333,7 @@ def _crear_excel_por_empresa_desde_base(base_bytes, empresa, asientos_empresa, a
                 rec["haber"] += _to_float(line.get("haber"), 0.0)
 
         cuentas_local = sorted(movimientos_local.keys(), key=lambda x: (int(x), x))
-        destinadas_local = detectar_cuentas_6_con_destino(asientos_empresa)
+        destinadas_local = detectar_cuentas_6_con_destino(asientos_para_ht)
 
         def d_a_local(code):
             rec = movimientos_local.get(code, {"debe": 0.0, "haber": 0.0})
