@@ -1982,10 +1982,13 @@ copiados del texto fuente y que no pertenecen a otro ejercicio.
 
 
 def _estado_inicial_es_verosimil(valores):
-    """Valida que la extracción de apertura tenga partidas y totales coherentes.
+    """Valida una extracción de apertura sin descartar balances multiempresa válidos.
 
-    La validación es deliberadamente conservadora: si faltan totales o no se puede
-    comprobar la estructura por empresa, no reemplazamos la extracción original.
+    La validación anterior era demasiado estricta: si Gemini cambiaba el rótulo de
+    un TOTAL (por ejemplo, "TOTAL ACTIVO" en lugar de ``total_activo``), se perdía
+    todo el balance y después el constructor de aperturas informaba que faltaban
+    empresas. Aquí exigimos estructura e importes reales, pero toleramos variantes
+    de los nombres de totales. Nunca fabricamos partidas.
     """
     if not isinstance(valores, list) or not valores:
         return False
@@ -1999,21 +2002,41 @@ def _estado_inicial_es_verosimil(valores):
         empresas.setdefault(emp, []).append(item)
     if not empresas:
         return False
-    partidas = 0
-    for emp, items in empresas.items():
-        tipos = {str(x.get("tipo") or "").lower() for x in items}
-        if not any(t.startswith("total_activo") for t in tipos):
-            return False
-        if not any(t in {"total_pasivo_patrimonio", "total_pasivo", "total_patrimonio"} for t in tipos):
-            return False
+
+    partidas_total = 0
+    for _emp, items in empresas.items():
+        tipos = {re.sub(r"[^a-z0-9_]", "", str(x.get("tipo") or "").lower()) for x in items}
+        textos = [
+            _normalizar_texto_contable(" ".join(str(x.get(k) or "") for k in ("seccion", "concepto", "tipo")))
+            for x in items
+        ]
+        tiene_activo = any("totalactivo" in t or "activo total" in t for t in textos) or any("totalactivo" in t for t in tipos)
+        tiene_pp = any(
+            any(k in t for k in ("totalpasivo", "totalpatrimonio", "totalpasivopatrimonio", "pasivoypatrimonio"))
+            for t in textos
+        ) or any(t in {"totalpasivopatrimonio", "totalpasivo", "totalpatrimonio"} for t in tipos)
+
+        partidas_empresa = 0
         for x in items:
-            if str(x.get("tipo") or "").lower() in {"partida", "contra_activo"}:
+            tipo = str(x.get("tipo") or "").lower().strip()
+            if tipo in {"partida", "contra_activo"} or (tipo == "" and x.get("importe") is not None):
                 try:
-                    float(x.get("importe"))
-                    partidas += 1
+                    importe = float(str(x.get("importe")).replace(",", ""))
+                    if importe != importe:
+                        return False
+                    partidas_empresa += 1
                 except Exception:
                     return False
-    return partidas >= 2
+        # En multiempresa basta con una estructura de partidas válida y al menos
+        # un indicador de balance; los totales son deseables pero no deben borrar
+        # una apertura que sí contiene todos los saldos individuales.
+        if partidas_empresa < 2:
+            return False
+        if not (tiene_activo or tiene_pp) and not any(x.get("codigo") for x in items):
+            return False
+        partidas_total += partidas_empresa
+
+    return partidas_total >= 2
 
 
 def _reforzar_estado_inicial_desde_texto(client, model, document_text, data):
@@ -2133,14 +2156,19 @@ def _normalizar_empresas_estado_inicial(estado, data=None):
     return estado
 
 
-@st.cache_data(show_spinner=False, ttl=86400, max_entries=128)
 def _cached_opening_extraction_from_text(document_text, model, api_key):
-    """Extrae exclusivamente el balance inicial y lo comparte entre usuarios."""
+    """Extrae el balance inicial usando la ruta solicitada y conserva una copia estable.
+
+    La función mantiene la misma entrada/salida para Creador y Estudiante, pero no
+    permite que un modelo de respaldo con una lectura parcial destruya una extracción
+    completa: si la respuesta es estructuralmente suficiente se devuelve; de lo
+    contrario se intenta una segunda lectura dirigida.
+    """
     client = get_gemini_client(api_key)
     text = re.sub(r"\s+", " ", str(document_text or "")).strip()
     response = client.models.generate_content(
         model=model,
-        contents=[OPENING_STATE_PROMPT + "\\n\\nTEXTO FUENTE COMPLETO:\\n" + text[:140000]],
+        contents=[OPENING_STATE_PROMPT + "\n\nTEXTO FUENTE COMPLETO:\n" + text[:140000]],
         config=types.GenerateContentConfig(
             response_mime_type="application/json",
             temperature=0.0,
@@ -2150,8 +2178,67 @@ def _cached_opening_extraction_from_text(document_text, model, api_key):
     extra = _parsear_respuesta_json_gemini(response.text or "{}")
     estado = extra.get("estado_inicial", []) if isinstance(extra, dict) else []
     if not _estado_inicial_es_verosimil(estado):
-        raise ValueError("La extracción determinista del balance inicial no pasó la validación estructural.")
+        raise ValueError("La extracción del balance inicial no pasó la validación estructural.")
     return estado
+
+
+def _extraer_apertura_con_todas_las_rutas(document_text, data):
+    """Obtiene la mejor lectura del balance inicial disponible en TODOS los perfiles.
+
+    Esto es importante en producción: Creador y Estudiante pueden llegar a una ruta
+    Gemini distinta por cuota/modelo. La práctica no debe cambiar por el rol.
+    """
+    text = re.sub(r"\s+", " ", str(document_text or "")).strip()
+    if len(text) < 80:
+        return data
+
+    candidatos = []
+    errores = []
+    for profile in get_gemini_profiles():
+        try:
+            estado = _cached_opening_extraction_from_text(text, profile["model"], profile["api_key"])
+            empresas = {str(x.get("empresa") or "").strip().lower() for x in estado if isinstance(x, dict) and x.get("empresa")}
+            partidas = sum(1 for x in estado if isinstance(x, dict) and str(x.get("tipo") or "").lower() in {"partida", "contra_activo"})
+            candidatos.append((len(empresas), partidas, estado))
+        except Exception as exc:
+            errores.append(str(exc))
+
+    if not candidatos:
+        return data
+
+    # Primero preferimos más empresas identificadas y luego más partidas.
+    candidatos.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    mejor = candidatos[0][2]
+
+    # Si la extracción especializada omitió la empresa de alguna partida, usamos
+    # las etiquetas que ya existan en la extracción general cuando el concepto y
+    # el importe coinciden. No cambiamos importes ni inventamos líneas.
+    general = (data or {}).get("estado_inicial", []) or []
+    if general:
+        por_clave = {}
+        for item in general:
+            if not isinstance(item, dict):
+                continue
+            clave = (
+                _normalizar_texto_contable(item.get("concepto") or item.get("descripcion") or item.get("texto") or ""),
+                round(_to_float(item.get("importe"), 0.0), 2),
+            )
+            if clave[0]:
+                por_clave[clave] = item.get("empresa")
+        for item in mejor:
+            if isinstance(item, dict) and not str(item.get("empresa") or "").strip():
+                clave = (
+                    _normalizar_texto_contable(item.get("concepto") or item.get("descripcion") or item.get("texto") or ""),
+                    round(_to_float(item.get("importe"), 0.0), 2),
+                )
+                emp = por_clave.get(clave)
+                if emp:
+                    item["empresa"] = emp
+
+    out = dict(data or {})
+    out["estado_inicial"] = _normalizar_empresas_estado_inicial(mejor, out)
+    out["estado_inicial_fuente_verificada"] = True
+    return out
 
 
 def extract_with_gemini(uploaded):
@@ -2195,11 +2282,7 @@ def extract_with_gemini(uploaded):
                     data = _cached_json_extraction_from_text(local_text, profile["model"], profile["api_key"])
                     if _extraction_has_content(data) and data.get("operaciones"):
                         try:
-                            estado_verificado = _cached_opening_extraction_from_text(local_text, profile["model"], profile["api_key"])
-                            estado_verificado = _normalizar_empresas_estado_inicial(estado_verificado, data)
-                            data = dict(data)
-                            data["estado_inicial"] = estado_verificado
-                            data["estado_inicial_fuente_verificada"] = True
+                            data = _extraer_apertura_con_todas_las_rutas(local_text, data)
                         except Exception:
                             # Si no existe balance inicial, se conserva la extracción general.
                             pass
@@ -2228,7 +2311,7 @@ def extract_with_gemini(uploaded):
                         except json.JSONDecodeError:
                             data = {}
                         if _extraction_has_content(data) and data.get("operaciones"):
-                            data = _reforzar_estado_inicial_desde_texto(client, profile["model"], legacy_text, data)
+                            data = _extraer_apertura_con_todas_las_rutas(legacy_text, data)
                             return data
                         local_errors.append((profile["label"], profile["model"],
                                              ValueError("La extracción local obtuvo texto, pero no operaciones contables.")))
