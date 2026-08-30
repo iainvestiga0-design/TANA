@@ -1122,7 +1122,10 @@ def _construir_asiento_apertura_determinista(monografia_json):
         monto = abs(round(float(importe), 2))
         # Depreciaciones acumuladas son saldos acreedores aun cuando el texto trae importe negativo.
         es_contra_activo = codigo.startswith("39") or "depreciacion acumulada" in _normalizar_texto_contable(texto)
-        es_pasivo_patrimonio = codigo.startswith(("40", "41", "42", "45", "50", "59"))
+        # En la apertura, todo Elemento 4 es pasivo y todo Elemento 5 es
+        # patrimonio. No limitarlo a 40/41/42/45: cuentas como 46, 47, 48 y 49
+        # también deben ir al Haber cuando tengan saldo acreedor.
+        es_pasivo_patrimonio = codigo.startswith(("4", "5"))
         line = {"codigo": codigo, "denominacion": desc, "debe": 0.0, "haber": 0.0, "concepto": texto.strip()}
         if float(importe) < 0 or es_contra_activo or es_pasivo_patrimonio:
             line["haber"] = monto
@@ -2186,6 +2189,89 @@ def _cached_opening_extraction_from_text(document_text, model, api_key):
     return estado
 
 
+def _extraer_apertura_determinista_desde_texto(document_text, data=None):
+    """Extrae partidas del balance inicial desde texto legible, separadas por empresa."""
+    text = str(document_text or "")
+    if not text.strip():
+        return []
+    lines = [re.sub(r"[ \t]+", " ", x).strip() for x in text.splitlines() if x.strip()]
+    full = "\n".join(lines)
+    headings = list(re.finditer(r"(?im)^\s*(?:[a-z]\.\s*)?empresa\s+(.+?\s+s\.r\.l\.)\s*$", full))
+    if not headings:
+        return []
+
+    # Ordenado de conceptos específicos a genéricos para evitar colisiones.
+    rules = [
+        ("cuenta corriente del bcp|cta\.?\s*cte\.?\s*banco bcp|banco de credito del peru|bcp", "10412"),
+        ("cta\.?\s*cte\.?\s*banco interbank|cuenta corriente interbank|interbank", "10413"),
+        ("cta\.?\s*cte\.?\s*banco bbva|cuenta corriente bbva|bbva", "10415"),
+        ("banco de la nacion|banco de la nación", "10411"),
+        ("scotiabank", "10414"), ("banbif", "10416"),
+        ("facturas x cobrar a clientes|facturas por cobrar a clientes|facturas x cobrar|facturas por cobrar|cuentas por cobrar", "12121"),
+        ("depreciacion acumulada|depreciación acumulada", "39526"),
+        ("facturas x pagar a proveedores|facturas por pagar a proveedores|facturas x pagar|facturas por pagar|proveedores", "42121"),
+        ("cts por pagar|compensacion por tiempo de servicios|compensación por tiempo de servicios", "41511"),
+        ("otras cuentas por pagar", "46991"),
+        ("reserva legal", "58211"),
+        ("utilidades acumuladas|utilidad acumulada|resultados acumulados", "59111"),
+        ("participaciones", "50121"),
+        ("acciones", "50111"),
+        ("muebles y enseres|muebles", "33511"),
+        ("girasoles|claveles|mercaderias|mercaderías|existencias|inventarios|inventario", "20111"),
+        ("caja chica|efectivo en caja|dinero en caja", "10111"),
+        ("suministros de oficina|suministros", "25241"),
+    ]
+    num_re = re.compile(r"(?<!\d)[(\-]?\s*\d[\d,]*(?:\.\d+)?\s*\)?")
+    result = []
+    for hidx, h in enumerate(headings):
+        company = _normalizar_nombre_empresa(h.group(1))
+        next_h = headings[hidx + 1].start() if hidx + 1 < len(headings) else len(full)
+        tail = full[h.end():next_h]
+        # El encabezado "EL GIRASOL S.R.L." / "EL CLAVEL S.R.L." se repite
+        # inmediatamente después del título de empresa; no es una partida contable.
+        if "\n" in tail:
+            tail = tail.split("\n", 1)[1]
+        m_end = re.search(r"(?im)^\s*desde el acuerdo\b", tail)
+        if m_end:
+            tail = tail[:m_end.start()]
+        # No procesar la línea de título de la empresa ni encabezados de estados.
+        seen_codes = set()
+        for pattern, codigo in rules:
+            for m in re.finditer(r"(?i)" + pattern, tail):
+                # Buscar el primer importe asociado al concepto antes del siguiente salto
+                # excesivamente lejano. Esto funciona tanto con columnas en la misma línea
+                # como cuando Word antiguo coloca el importe debajo del concepto.
+                ventana = tail[m.end():m.end()+80]
+                nm = num_re.search(ventana)
+                if not nm:
+                    continue
+                token = nm.group(0).replace(" ", "")
+                negativo = token.startswith("(") or token.startswith("-")
+                token = token.strip("()")
+                try:
+                    importe = float(token.replace(",", ""))
+                    if negativo:
+                        importe = -importe
+                except Exception:
+                    continue
+                if abs(importe) < 0.005 or codigo in seen_codes:
+                    continue
+                # El concepto debe pertenecer al balance, no a una frase posterior.
+                concepto = tail[max(0, m.start()-25):m.end()].strip().replace("\n", " ")
+                seen_codes.add(codigo)
+                result.append({
+                    "empresa": company,
+                    "tipo": "partida",
+                    "codigo": codigo,
+                    "cuenta": codigo,
+                    "descripcion": concepto,
+                    "concepto": concepto,
+                    "importe": round(importe, 2),
+                    "fuente_determinista": True,
+                })
+                break
+    return result
+
 def _extraer_apertura_con_todas_las_rutas(document_text, data):
     """Obtiene la mejor lectura del balance inicial disponible en TODOS los perfiles.
 
@@ -2300,6 +2386,14 @@ def extract_with_gemini(uploaded):
         if extension == "doc":
             legacy_text = _extract_legacy_doc_text_local(temp_path)
             if legacy_text:
+                # Para .doc antiguo, los balances iniciales legibles se extraen
+                # directamente del texto fuente. Así la apertura no depende de que
+                # Gemini interprete correctamente las columnas del balance.
+                apertura_texto = _extraer_apertura_determinista_desde_texto(legacy_text, data)
+                if apertura_texto:
+                    data = dict(data or {})
+                    data["estado_inicial"] = apertura_texto
+                    data["estado_inicial_fuente_verificada"] = True
                 local_errors = []
                 for profile in profiles:
                     client = get_gemini_client(profile["api_key"])
@@ -2311,11 +2405,20 @@ def extract_with_gemini(uploaded):
                             config=types.GenerateContentConfig(response_mime_type="application/json", temperature=0.0, seed=_deterministic_seed(legacy_text)),
                         )
                         try:
-                            data = _parsear_respuesta_json_gemini(response.text or "{}")
+                            data_gemini = _parsear_respuesta_json_gemini(response.text or "{}")
                         except json.JSONDecodeError:
-                            data = {}
-                        if _extraction_has_content(data) and data.get("operaciones"):
-                            data = _extraer_apertura_con_todas_las_rutas(legacy_text, data)
+                            data_gemini = {}
+                        if _extraction_has_content(data_gemini) and data_gemini.get("operaciones"):
+                            # El .doc ya tiene una lectura determinista del balance inicial.
+                            # Gemini solo aporta las operaciones; nunca puede reemplazar una
+                            # apertura completa por una lectura parcial de las columnas.
+                            estado_apertura = apertura_texto or []
+                            data = dict(data_gemini)
+                            if estado_apertura:
+                                data["estado_inicial"] = estado_apertura
+                                data["estado_inicial_fuente_verificada"] = True
+                            else:
+                                data = _extraer_apertura_con_todas_las_rutas(legacy_text, data)
                             return data
                         local_errors.append((profile["label"], profile["model"],
                                              ValueError("La extracción local obtuvo texto, pero no operaciones contables.")))
