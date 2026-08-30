@@ -973,6 +973,12 @@ def _normalizar_texto_contable(valor):
     return re.sub(r"\s+", " ", txt).strip()
 
 
+
+
+def _normalizar_nombre_empresa(nombre):
+    """Normaliza el nombre de una empresa para comparaciones consistentes."""
+    return re.sub(r"\s+", " ", str(nombre or "").strip())
+
 def _detectar_banco_en_texto(texto):
     """Devuelve código 104xx solo cuando el banco aparece explícitamente."""
     t = _normalizar_texto_contable(texto)
@@ -4018,9 +4024,6 @@ def agregar_transferencias_fusion(asientos, monografia_json):
         if isinstance(a, dict):
             a["numero"] = idx
     return resultado
-
-def _normalizar_nombre_empresa(nombre):
-    return re.sub(r"\s+", " ", str(nombre or "").strip())
 
 
 def _detectar_empresas_monografia(monografia_json):
