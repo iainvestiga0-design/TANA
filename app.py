@@ -1044,9 +1044,23 @@ def _extraer_importe_estado_inicial(item):
     return None
 
 
-def _cuenta_apertura_para_texto(texto):
-    """Mapeo conservador de saldos iniciales a cuentas operativas de 5 dígitos."""
+def _cuenta_apertura_para_texto(texto, codigo_explicito=None):
+    """Mapeo de saldos iniciales a cuentas operativas de 5 dígitos.
+
+    Prioridad:
+      1) código de 5 dígitos que la fuente ya muestre;
+      2) banco explícito;
+      3) reglas semánticas conservadoras.
+    """
     t = _normalizar_texto_contable(texto)
+    # Si la propia fuente trae un código de 5 dígitos, es la referencia más fiable.
+    candidatos = []
+    if codigo_explicito:
+        candidatos.append(str(codigo_explicito).strip())
+    candidatos.extend(re.findall(r"(?<!\d)(\d{5})(?!\d)", str(texto or "")))
+    for candidato in candidatos:
+        if candidato in pcge_map and not candidato.startswith(("6", "7", "8", "9")):
+            return candidato, pcge_map.get(candidato, "")
     banco = _detectar_banco_en_texto(t)
     es_obligacion_bancaria = any(k in t for k in ("prestamo por pagar", "préstamo por pagar", "prestamo al banco", "préstamo al banco", "deuda con el banco"))
     if banco and not es_obligacion_bancaria and any(k in t for k in ("cuenta corriente", "cuenta de ahorros", "cuenta ahorro", "dinero en cuenta", "cheque", "transferencia bancaria")):
@@ -1089,7 +1103,10 @@ def _construir_asiento_apertura_determinista(monografia_json):
         importe = _extraer_importe_estado_inicial(item)
         if importe is None or abs(float(importe)) < 0.005:
             continue
-        codigo, desc = _cuenta_apertura_para_texto(texto)
+        codigo, desc = _cuenta_apertura_para_texto(
+            texto,
+            item.get("codigo") if isinstance(item, dict) else None,
+        )
         if not codigo:
             faltantes.append(texto)
             continue
@@ -1495,7 +1512,9 @@ REGLAS:
 - Conserva exactamente fechas, importes, cantidades, porcentajes,
   documentos, nombres, RUC y condiciones.
 - Si un dato no aparece, usa null o "".
-- Separa cada operación en un elemento.
+- Separa CADA operación o enunciado contable en un elemento. NO omitas operaciones intermedias.
+- Respeta el orden y la numeración original. Si la monografía dice Operación 1, 2, 3... conserva esos números; si una operación contiene varias acciones contables, conserva toda la descripción dentro de esa misma operación.
+- Antes de devolver el JSON, haz una comprobación de completitud: recorre de principio a fin la monografía y verifica que ninguna operación, enunciado con importe, ajuste, pago, cobro, compra, venta, aporte, préstamo, depreciación, remuneración, distribución o cierre solicitado haya quedado fuera.
 - Identifica TODAS las empresas participantes del ejercicio y colócalas también en "empresas" como una lista de nombres exactos.
 - Si existen dos o más empresas, cada operación DEBE llevar el campo "empresa" con el nombre exacto de la empresa a la que corresponde.
 - Si existen dos o más empresas, cada partida de "estado_inicial" DEBE llevar también el campo "empresa" correspondiente.
@@ -1777,6 +1796,123 @@ def _extraction_has_content(data):
     return bool(data.get("estado_inicial") or data.get("solicitudes") or data.get("datos_importantes"))
 
 
+def _detectar_numeros_operaciones_fuente(texto):
+    """Detecta numeración explícita de operaciones en el texto fuente."""
+    encontrados = set()
+    patron = re.compile(
+        r"\b(?:operaci[oó]n|operaci[oó]nes|enunciado|caso)\s*"
+        r"(?:n[º°.]?\s*)?(\d{1,3})\b",
+        flags=re.IGNORECASE,
+    )
+    for m in patron.finditer(str(texto or "")):
+        try:
+            encontrados.add(int(m.group(1)))
+        except Exception:
+            pass
+    return encontrados
+
+
+def _completar_operaciones_faltantes(client, model, document_text, data):
+    """Segundo pase SOLO cuando la fuente demuestra que faltan operaciones.
+
+    No rehace los asientos ni toca la lógica contable; recupera enunciados que
+    el extractor general haya omitido.
+    """
+    if not isinstance(data, dict):
+        return data
+    text = re.sub(r"\s+", " ", str(document_text or "")).strip()
+    fuente = _detectar_numeros_operaciones_fuente(text)
+    if not fuente:
+        return data
+
+    operaciones = [x for x in (data.get("operaciones", []) or []) if isinstance(x, dict)]
+    extraidas = set()
+    for op in operaciones:
+        try:
+            extraidas.add(int(float(str(op.get("numero")).strip())))
+        except Exception:
+            pass
+    faltantes = sorted(fuente - extraidas)
+    if not faltantes:
+        return data
+
+    prompt = f"""
+Eres el verificador de completitud documental de TANA.
+
+La extracción principal ya fue realizada. NO cambies ninguna operación existente.
+Solo recupera las operaciones numeradas que la fuente contiene y que faltan.
+
+NÚMEROS FALTANTES: {faltantes}
+
+TEXTO COMPLETO DE LA PRÁCTICA:
+{text[:140000]}
+
+Para cada número faltante, devuelve la operación completa según la estructura:
+{{
+  "operaciones": [
+    {{
+      "numero": 1,
+      "empresa": "",
+      "ruc": "",
+      "fecha": "",
+      "descripcion": "",
+      "importe": null,
+      "moneda": "PEN",
+      "cantidad": null,
+      "precio_unitario": null,
+      "porcentaje": null,
+      "documento": "",
+      "forma_pago": "",
+      "medio_pago": "",
+      "tercero": "",
+      "cuenta_bancaria": "",
+      "datos_adicionales": ""
+    }}
+  ]
+}}
+
+REGLAS:
+- Usa SOLO información literalmente sustentada por el texto.
+- No inventes ni resuelvas contabilidad.
+- No conviertas varias operaciones en una sola.
+- Conserva fechas, importes, cantidades, porcentajes y condiciones.
+- Si un número faltante no corresponde realmente a una operación contable,
+  no lo inventes: omítelo.
+- Devuelve SOLO JSON válido.
+"""
+    try:
+        response = client.models.generate_content(
+            model=model,
+            contents=[prompt],
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                temperature=0.0,
+                seed=_deterministic_seed({"source": text, "missing": faltantes}),
+            ),
+        )
+        extra = _parsear_respuesta_json_gemini(response.text or "{}")
+        nuevos = extra.get("operaciones", []) if isinstance(extra, dict) else []
+        if isinstance(nuevos, list):
+            existentes = {str(x.get("numero")).strip() for x in operaciones}
+            for op in nuevos:
+                if not isinstance(op, dict):
+                    continue
+                n = str(op.get("numero") or "").strip()
+                if n and n not in existentes:
+                    operaciones.append(op)
+                    existentes.add(n)
+            operaciones.sort(key=lambda x: (
+                _to_float(x.get("numero"), 10**9),
+                str(x.get("fecha") or ""),
+            ))
+            result = dict(data)
+            result["operaciones"] = operaciones
+            return result
+    except Exception:
+        pass
+    return data
+
+
 def _json_extraction_from_text(client, model, document_text):
     # La semilla debe depender del contenido textual normalizado y no de la
     # representación binaria del archivo. Así, el mismo documento guardado
@@ -1791,7 +1927,8 @@ def _json_extraction_from_text(client, model, document_text):
             seed=_deterministic_seed(text),
         ),
     )
-    return _parsear_respuesta_json_gemini(response.text or "{}")
+    data = _parsear_respuesta_json_gemini(response.text or "{}")
+    return _completar_operaciones_faltantes(client, model, text, data)
 
 
 OPENING_STATE_PROMPT = """
@@ -1807,6 +1944,8 @@ REGLAS CRÍTICAS:
 - NO agregues, agrupes, redistribuyas ni sustituyas importes.
 - Conserva CADA partida del balance inicial por separado, aunque varias partidas
   pertenezcan al mismo elemento contable.
+- Si junto a una partida aparece un código de cuenta de 5 dígitos, consérvalo en "codigo"
+  exactamente como aparece. NO inventes un código si no aparece.
 - Conserva exactamente el importe que aparece junto a cada partida.
 - Si el texto dice Banco de la Nación, Banco de Crédito del Perú/BCP, Interbank,
   Scotiabank, BBVA u otro banco, conserva el nombre exacto.
@@ -1828,6 +1967,7 @@ Devuelve SOLO JSON válido:
       "fecha": "",
       "seccion": "ACTIVO|PASIVO|PATRIMONIO|TOTAL",
       "concepto": "",
+      "codigo": "",
       "importe": 0,
       "signo": "positivo|negativo",
       "tipo": "partida|contra_activo|total_activo|total_pasivo|total_patrimonio|total_pasivo_patrimonio",
@@ -1897,6 +2037,7 @@ def _reforzar_estado_inicial_desde_texto(client, model, document_text, data):
         )
         extra = _parsear_respuesta_json_gemini(response.text or "{}")
         estado = extra.get("estado_inicial", []) if isinstance(extra, dict) else []
+        estado = _normalizar_empresas_estado_inicial(estado, data)
         if _estado_inicial_es_verosimil(estado):
             data = dict(data or {})
             data["estado_inicial"] = estado
@@ -1975,11 +2116,28 @@ def _cached_json_extraction_from_text(document_text, model, api_key):
     return _json_extraction_from_text(client, model, document_text)
 
 
+def _normalizar_empresas_estado_inicial(estado, data=None):
+    """Completa etiquetas de empresa faltantes sin cambiar partidas ni importes.
+
+    Si existe una sola empresa conocida, las partidas sin empresa pertenecen a ella.
+    En ejercicios multiempresa no se adivina la empresa.
+    """
+    estado = [dict(x) if isinstance(x, dict) else x for x in (estado or [])]
+    data = data or {}
+    empresas = _detectar_empresas_monografia(data)
+    if len(empresas) == 1:
+        empresa = empresas[0]
+        for item in estado:
+            if isinstance(item, dict) and not str(item.get("empresa") or "").strip():
+                item["empresa"] = empresa
+    return estado
+
+
 @st.cache_data(show_spinner=False, ttl=86400, max_entries=128)
 def _cached_opening_extraction_from_text(document_text, model, api_key):
     """Extrae exclusivamente el balance inicial y lo comparte entre usuarios."""
     client = get_gemini_client(api_key)
-    text = re.sub(r"\\s+", " ", str(document_text or "")).strip()
+    text = re.sub(r"\s+", " ", str(document_text or "")).strip()
     response = client.models.generate_content(
         model=model,
         contents=[OPENING_STATE_PROMPT + "\\n\\nTEXTO FUENTE COMPLETO:\\n" + text[:140000]],
@@ -2038,6 +2196,7 @@ def extract_with_gemini(uploaded):
                     if _extraction_has_content(data) and data.get("operaciones"):
                         try:
                             estado_verificado = _cached_opening_extraction_from_text(local_text, profile["model"], profile["api_key"])
+                            estado_verificado = _normalizar_empresas_estado_inicial(estado_verificado, data)
                             data = dict(data)
                             data["estado_inicial"] = estado_verificado
                             data["estado_inicial_fuente_verificada"] = True
