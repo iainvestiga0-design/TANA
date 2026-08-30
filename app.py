@@ -2355,6 +2355,10 @@ def extract_with_gemini(uploaded):
             temp_path = tmp.name
 
         errors = []
+        # Siempre inicializamos la extracción antes de entrar en las rutas
+        # específicas de formato. La ruta legacy .doc puede necesitar este
+        # contenedor aunque Gemini todavía no haya devuelto JSON.
+        data = {}
 
         # DOCX/PDF con capa textual: usar una representación textual estable
         # antes de enviar el archivo binario. Así los metadatos de Word o el
