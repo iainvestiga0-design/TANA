@@ -294,10 +294,42 @@ def _create_payment_code(email):
     return code if isinstance(rows, list) and rows else None
 
 
+def _claim_orphan_payment(email, codigo):
+    """Si MacroDroid ya confirmó este pago antes de que el estudiante
+    registrara el código (pago 'huérfano', email=NULL), se lo asigna ahora."""
+    if not email or not codigo or not _supabase_enabled():
+        return False
+    rows = _supabase_request(
+        "GET", "tana_payments",
+        params={
+            "select": "id,email,payment_code,status",
+            "payment_code": f"eq.{codigo}",
+            "status": "eq.confirmed",
+            "email": "is.null",
+            "limit": "1",
+        },
+    )
+    if not (isinstance(rows, list) and rows):
+        return False
+    payment_id = rows[0].get("id")
+    if not payment_id:
+        return False
+    patched = _supabase_request(
+        "PATCH", "tana_payments",
+        payload={"email": email},
+        params={"id": f"eq.{payment_id}", "email": "is.null"},
+    )
+    return isinstance(patched, list) and bool(patched)
+
+
 def _registrar_codigo_operacion(email, codigo):
     """El estudiante ingresa el número/código de operación que le dio Yape al pagar.
     Se registra como pendiente para que MacroDroid (o el panel de prueba) lo confirme
-    cuando detecte esa misma operación en la notificación de Yape."""
+    cuando detecte esa misma operación en la notificación de Yape.
+
+    También revisa si ese pago ya fue confirmado como 'huérfano' (llegó antes
+    de que el estudiante alcanzara a registrar el código) y, si es así, lo
+    reclama para esta cuenta de inmediato."""
     if not email or not codigo or not _supabase_enabled():
         return None, "Faltan datos o Supabase no está configurado."
     codigo = str(codigo).strip()
@@ -312,6 +344,7 @@ def _registrar_codigo_operacion(email, codigo):
         owner = str(existing[0].get("email", "")).strip().lower()
         if owner and owner != email.strip().lower():
             return None, "Ese código de operación ya fue registrado con otra cuenta."
+        _claim_orphan_payment(email, codigo)
         return codigo, None
 
     now = datetime.now(timezone.utc)
@@ -327,6 +360,7 @@ def _registrar_codigo_operacion(email, codigo):
         },
     )
     if isinstance(rows, list) and rows:
+        _claim_orphan_payment(email, codigo)
         return codigo, None
     return None, "No se pudo registrar el código. Intenta de nuevo."
 
