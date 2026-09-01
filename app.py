@@ -2447,6 +2447,10 @@ def extract_with_gemini(uploaded):
             local_text = _extract_pdf_text_local(temp_path)
 
         if local_text and len(local_text.strip()) >= 80:
+            try:
+                st.session_state["_tana_source_text"] = local_text
+            except Exception:
+                pass
             for profile in profiles:
                 client = get_gemini_client(profile["api_key"])
                 try:
@@ -2467,6 +2471,10 @@ def extract_with_gemini(uploaded):
         if extension == "doc":
             legacy_text = _extract_legacy_doc_text_local(temp_path)
             if legacy_text:
+                try:
+                    st.session_state["_tana_source_text"] = legacy_text
+                except Exception:
+                    pass
                 # Para .doc antiguo, los balances iniciales legibles se extraen
                 # directamente del texto fuente. Así la apertura no depende de que
                 # Gemini interprete correctamente las columnas del balance.
@@ -4221,6 +4229,46 @@ def _construir_aperturas_por_empresa(monografia_json):
         if apertura:
             apertura["empresa"] = empresa
             resultado.append(apertura)
+
+    # FALLBACK ROBUSTO PARA WORD/PDF: si Gemini puso en TODAS las partidas
+    # un campo empresa contaminado (por ejemplo: "La Económica S.R.L.,
+    # Muebles del Perú S.A.C."), no debemos bloquear toda la práctica.
+    # Volvemos al texto fuente original y extraemos los bloques por encabezado.
+    # Esta ruta no inventa importes: solo usa partidas que estén literalmente
+    # en el documento y conserva una apertura independiente por empresa.
+    if len(resultado) < len(empresas):
+        try:
+            source_text = str(st.session_state.get("_tana_source_text", "") or "")
+        except Exception:
+            source_text = ""
+        if source_text.strip():
+            try:
+                estado_fuente = _extraer_apertura_determinista_desde_texto(source_text, data)
+            except Exception:
+                estado_fuente = []
+            if estado_fuente:
+                grupos_fuente = {key(e): [] for e in empresas}
+                for item in estado_fuente:
+                    if not isinstance(item, dict):
+                        continue
+                    emp = item.get("empresa")
+                    k_emp = key(emp)
+                    if k_emp in grupos_fuente:
+                        grupos_fuente[k_emp].append(item)
+                aperturas_fuente = []
+                for empresa in empresas:
+                    partidas_fuente = grupos_fuente.get(key(empresa), [])
+                    if not partidas_fuente:
+                        continue
+                    sub = dict(data)
+                    sub["empresa"] = empresa
+                    sub["estado_inicial"] = partidas_fuente
+                    apertura = _construir_asiento_apertura_determinista(sub)
+                    if apertura:
+                        apertura["empresa"] = empresa
+                        aperturas_fuente.append(apertura)
+                if len(aperturas_fuente) == len(empresas):
+                    return aperturas_fuente
 
     return resultado
 
