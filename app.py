@@ -976,8 +976,35 @@ def _normalizar_texto_contable(valor):
 
 
 def _normalizar_nombre_empresa(nombre):
-    """Normaliza el nombre de una empresa para comparaciones consistentes."""
-    return re.sub(r"\s+", " ", str(nombre or "").strip())
+    """Normaliza un nombre de empresa sin convertir una lista de empresas en un solo nombre."""
+    s = re.sub(r"\s+", " ", str(nombre or "").strip())
+    s = re.sub(r"^\s*(?:la\s+)?empresa(?:\s+participante)?\s+", "", s, flags=re.I)
+    return s.strip(" .,:;-\n\t")
+
+
+def _extraer_nombres_empresas(valor):
+    """Extrae sociedades reales de un texto, incluso si Gemini devolvió una lista/frase."""
+    s = re.sub(r"\s+", " ", str(valor or "").strip())
+    if not s:
+        return []
+    patron = re.compile(
+        r"(?:^|[,;])\s*(?:la\s+empresa(?:\s+participante)?\s+)?"
+        r"([A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9&'’.-][A-Za-zÁÉÍÓÚÜÑáéíóúüñ0-9&'’ .-]{1,100}?)\s+"
+        r"(S\.?R\.?L\.?|S\.?A\.?C\.?|S\.?A\.?A\.?|S\.?A\.?|E\.?I\.?R\.?L\.?)\b",
+        flags=re.I,
+    )
+    encontrados = []
+    for m in patron.finditer(s):
+        nombre = _normalizar_nombre_empresa(m.group(1) + " " + m.group(2))
+        nombre = re.sub(r"^(?:la\s+empresa(?:\s+participante)?\s+)", "", nombre, flags=re.I)
+        if nombre and nombre.lower() not in {x.lower() for x in encontrados}:
+            encontrados.append(nombre)
+    if encontrados:
+        return encontrados
+    # Si no hubo comas pero el valor es un nombre limpio, devolverlo.
+    if re.search(r"\b(?:S\.?R\.?L\.?|S\.?A\.?C\.?|S\.?A\.?A\.?|S\.?A\.?|E\.?I\.?R\.?L\.?)\b", s, flags=re.I):
+        return [_normalizar_nombre_empresa(s)]
+    return []
 
 def _detectar_banco_en_texto(texto):
     """Devuelve código 104xx solo cuando el banco aparece explícitamente."""
@@ -4080,20 +4107,21 @@ def _detectar_empresas_monografia(monografia_json):
     empresas = []
 
     def add(value):
-        v = _normalizar_nombre_empresa(value)
-        if not v:
-            return
-        low = v.lower()
-        # Evitar confundir bancos o cuentas con empresas participantes.
-        if low in {
-            "banco de la nación", "banco de la nacion",
-            "banco de crédito del perú", "banco de credito del peru",
-            "bcp", "interbank", "scotiabank", "bbva", "banbif",
-            "banco pichincha", "banco falabella", "banco ripley", "banco gnb"
-        }:
-            return
-        if low not in {x.lower() for x in empresas}:
-            empresas.append(v)
+        candidatos = _extraer_nombres_empresas(value) or [_normalizar_nombre_empresa(value)]
+        for v in candidatos:
+            if not v:
+                continue
+            low = v.lower()
+            # Evitar confundir bancos o cuentas con empresas participantes.
+            if low in {
+                "banco de la nación", "banco de la nacion",
+                "banco de crédito del perú", "banco de credito del peru",
+                "bcp", "interbank", "scotiabank", "bbva", "banbif",
+                "banco pichincha", "banco falabella", "banco ripley", "banco gnb"
+            }:
+                continue
+            if low not in {x.lower() for x in empresas}:
+                empresas.append(v)
 
     # IMPORTANTE: la cantidad de empresas es completamente dinámica.
     # TANA NO asume 1, 2, 3, 16 ni ningún número fijo.
@@ -4158,9 +4186,24 @@ def _construir_aperturas_por_empresa(monografia_json):
         emp_item = item.get("empresa")
         k = key(emp_item)
         if k in grupos:
+            item["empresa"] = next((e for e in empresas if key(e) == k), emp_item)
             grupos[k].append(item)
         else:
-            sin_empresa.append(item)
+            # Gemini a veces devuelve en el campo empresa una frase como
+            # "la económica S.R.L., la empresa Muebles del Perú S.A.C., misma...".
+            # Si esa partida contiene exactamente una de las empresas detectadas,
+            # la asignamos a esa empresa; nunca usamos una elección ambigua.
+            encontrados = []
+            for cand in _extraer_nombres_empresas(emp_item):
+                kc = key(cand)
+                if kc in grupos and kc not in encontrados:
+                    encontrados.append(kc)
+            if len(encontrados) == 1:
+                k2 = encontrados[0]
+                item["empresa"] = next(e for e in empresas if key(e) == k2)
+                grupos[k2].append(item)
+            else:
+                sin_empresa.append(item)
 
     resultado = []
     for empresa in empresas:
