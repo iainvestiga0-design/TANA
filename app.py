@@ -1062,6 +1062,45 @@ def _extraer_texto_estado_inicial(item):
     return str(item or "")
 
 
+_MARCADORES_TEXTO_NARRATIVO = (
+    "tienen la siguiente", "acuerdo de fusión", "acuerdo de fusion", "empresa participante",
+    "se pide", "según el proyecto", "segun el proyecto", "participación social", "participacion social",
+    "participación accionaria", "participacion accionaria", "en virtud de", "en cumplimiento de",
+    "se acuerda", "el mismo que se presenta",
+)
+
+
+def _item_estado_inicial_parece_narrativo(item):
+    """Detecta si una 'partida' extraída por la IA es en realidad un fragmento
+    de texto narrativo (párrafo de la monografía) colado por error entre las
+    partidas reales del balance, en vez de una línea de cuenta contable.
+
+    Señales usadas (deliberadamente conservadoras, para no descartar partidas
+    reales por error):
+      1. El campo de descripción/concepto empieza con minúscula: es típico de
+         un fragmento cortado a mitad de palabra u oración (p.ej. "ccionistas
+         que conforman Muebles", cortado de "...los accionistas que...").
+      2. El texto contiene frases propias de párrafos narrativos de la
+         monografía (acuerdos, participación social/accionaria, "se pide", etc.),
+         que nunca aparecen como nombre de una cuenta contable real.
+    """
+    if not isinstance(item, dict):
+        return False
+    campos = [str(item.get(k) or "").strip() for k in ("descripcion", "concepto", "denominacion", "nombre")]
+    campos = [c for c in campos if c]
+    if not campos:
+        return False
+    for c in campos:
+        primera_letra = c[0]
+        if primera_letra.isalpha() and primera_letra == primera_letra.lower() and primera_letra != primera_letra.upper():
+            return True
+    texto_norm = _normalizar_texto_contable(" ".join(campos))
+    for marcador in _MARCADORES_TEXTO_NARRATIVO:
+        if _normalizar_texto_contable(marcador) in texto_norm:
+            return True
+    return False
+
+
 def _extraer_importe_estado_inicial(item):
     if isinstance(item, dict):
         for k in ("importe", "saldo", "monto", "valor", "debe", "haber"):
@@ -1199,6 +1238,7 @@ def _construir_asiento_apertura_determinista(monografia_json, _diag=None):
     sum_debe = 0.0
     sum_haber = 0.0
     faltantes = []
+    descartados_narrativos = []
 
     for item in estado:
         texto = _extraer_texto_estado_inicial(item)
@@ -1206,6 +1246,13 @@ def _construir_asiento_apertura_determinista(monografia_json, _diag=None):
         # Los totales sirven para verificar la extracción, pero NO son cuentas
         # contables y nunca deben convertirse en una línea del asiento.
         if tipo_item.startswith("total") or "total activo" in _normalizar_texto_contable(texto) or "total pasivo" in _normalizar_texto_contable(texto) or "total patrimonio" in _normalizar_texto_contable(texto):
+            continue
+        if _item_estado_inicial_parece_narrativo(item):
+            # La IA coló un fragmento de texto narrativo (párrafo de la
+            # monografía) entre las partidas del balance. No es una cuenta
+            # contable real: se excluye del cálculo (no bloquea el asiento
+            # por sí solo) pero se reporta para que quede visible.
+            descartados_narrativos.append(texto.strip())
             continue
         importe = _extraer_importe_estado_inicial(item)
         if importe is None or abs(float(importe)) < 0.005:
@@ -1250,6 +1297,8 @@ def _construir_asiento_apertura_determinista(monografia_json, _diag=None):
                 "haber": round(sum_haber, 2),
                 "diferencia": round(sum_debe - sum_haber, 2),
             })
+            if descartados_narrativos:
+                _diag.append({"motivo": "texto_narrativo_descartado", "items": list(descartados_narrativos)})
         return None
 
     if not lineas_debe or not lineas_haber:
@@ -1271,13 +1320,15 @@ def _construir_asiento_apertura_determinista(monografia_json, _diag=None):
     obs = "Asiento de apertura generado directamente desde el estado inicial. Activos en Debe y pasivos/patrimonio en Haber."
     if faltantes:
         obs += " Revisar datos no mapeados: " + "; ".join(faltantes[:3])
+    if descartados_narrativos:
+        obs += " Se descartaron fragmentos de texto que no eran partidas de balance: " + "; ".join(descartados_narrativos[:3])
     return {
         "numero": 1,
         "fecha": fecha,
         "glosa": f"Apertura / reapertura para el proceso contable{(' de ' + empresa) if empresa else ''}",
         "documento": "Balance / Estado de Situación Financiera inicial",
         "operacion_numero": 0,
-        "requiere_revision": bool(faltantes),
+        "requiere_revision": bool(faltantes) or bool(descartados_narrativos),
         "observacion": obs,
         "lineas": lineas_debe + lineas_haber,
     }
@@ -4276,6 +4327,12 @@ def _formatear_diagnostico_apertura(diag_items):
             partes.append("faltan partidas de activo o de pasivo/patrimonio en el balance inicial")
         elif motivo == "sin_estado_inicial":
             partes.append("no se encontró un balance inicial para esta empresa")
+        elif motivo == "texto_narrativo_descartado":
+            items = d.get("items") or []
+            partes.append(
+                "se descartaron fragmentos de texto que no eran partidas de balance (probablemente texto narrativo de la monografía mezclado por error): "
+                + "; ".join(str(x) for x in items[:5])
+            )
         else:
             partes.append(str(motivo or "motivo no especificado"))
     return "; ".join(partes) if partes else "TANA no pudo identificar el motivo exacto; revisa el balance inicial de esta empresa"
