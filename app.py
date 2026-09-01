@@ -1050,7 +1050,7 @@ def _extraer_importe_estado_inicial(item):
     return None
 
 
-def _cuenta_apertura_para_texto(texto, codigo_explicito=None):
+def _cuenta_apertura_para_texto(texto, codigo_explicito=None, empresa_nombre=None):
     """Mapeo de saldos iniciales a cuentas operativas de 5 dígitos.
 
     Prioridad:
@@ -1101,7 +1101,7 @@ def _cuenta_apertura_para_texto(texto, codigo_explicito=None):
         if codigo_corto == 50:
             # En sociedades de capital, la forma societaria del nombre permite
             # distinguir acciones (S.A.C./S.A.) de participaciones (S.R.L.).
-            empresa_txt = str((monografia_json or {}).get("empresa") or "").lower()
+            empresa_txt = str(empresa_nombre or "").lower()
             if "s.r.l" in empresa_txt or "srl" in empresa_txt or "sociedad de responsabilidad limitada" in t:
                 return "50121", "Participaciones"
             return "50111", "Acciones"
@@ -1161,6 +1161,7 @@ def _construir_asiento_apertura_determinista(monografia_json):
         codigo, desc = _cuenta_apertura_para_texto(
             texto,
             item.get("codigo") if isinstance(item, dict) else None,
+            (item.get("empresa") if isinstance(item, dict) else None) or (monografia_json or {}).get("empresa"),
         )
         if not codigo:
             faltantes.append(texto)
@@ -1844,7 +1845,7 @@ def _detectar_claves_operaciones_fuente(texto):
     text = str(texto or '')
     claves = set()
     # Encabezados tipo "a. Empresa El Girasol S.R.L." / "b. Empresa ...".
-    headings = list(re.finditer(r'(?im)^\s*[a-z]\.\s*Empresa\s+([^\n\r]+?)\s*$', text))
+    headings = list(re.finditer(r'(?im)^\s*[a-z]\.\s*(?:Empresa\s+)?([^\n\r]+?\b(?:S\.?R\.?L\.?|S\.?A\.?C\.?|S\.?A\.?A\.?|S\.?A\.?|E\.?I\.?R\.?L\.?))\s*$', text))
     if headings:
         for i, m in enumerate(headings):
             empresa = _normalizar_nombre_empresa(m.group(1))
@@ -1858,7 +1859,7 @@ def _detectar_claves_operaciones_fuente(texto):
 
     # Respaldo para documentos sin encabezados alfabéticos: detecta bloques
     # "empresa X ..." y asocia las numeraciones del bloque más cercano.
-    empresas = list(re.finditer(r'(?im)^\s*empresa\s+([^\n\r]+?)\s*$', text))
+    empresas = list(re.finditer(r'(?im)^\s*(?:empresa\s+)?([^\n\r]+?\b(?:S\.?R\.?L\.?|S\.?A\.?C\.?|S\.?A\.?A\.?|S\.?A\.?|E\.?I\.?R\.?L\.?))\s*$', text))
     for i, m in enumerate(empresas):
         empresa = _normalizar_nombre_empresa(m.group(1))
         section_end = empresas[i+1].start() if i+1 < len(empresas) else len(text)
@@ -2242,7 +2243,10 @@ def _extraer_apertura_determinista_desde_texto(document_text, data=None):
         return []
     lines = [re.sub(r"[ \t]+", " ", x).strip() for x in text.splitlines() if x.strip()]
     full = "\n".join(lines)
-    headings = list(re.finditer(r"(?im)^\s*(?:[a-z]\.\s*)?empresa\s+(.+?\s+s\.r\.l\.)\s*$", full))
+    headings = list(re.finditer(
+        r"(?im)^\s*(?:[a-z]\.\s*)?(?:empresa\s+)?(.+?\b(?:s\.?r\.?l\.?|s\.?a\.?c\.?|s\.?a\.?a\.?|s\.?a\.?|e\.?i\.?r\.?l\.?))\s*$",
+        full,
+    ))
     if not headings:
         return []
 
