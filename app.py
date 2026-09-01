@@ -294,42 +294,10 @@ def _create_payment_code(email):
     return code if isinstance(rows, list) and rows else None
 
 
-def _claim_orphan_payment(email, codigo):
-    """Si MacroDroid ya confirmó este pago antes de que el estudiante
-    registrara el código (pago 'huérfano', email=NULL), se lo asigna ahora."""
-    if not email or not codigo or not _supabase_enabled():
-        return False
-    rows = _supabase_request(
-        "GET", "tana_payments",
-        params={
-            "select": "id,email,payment_code,status",
-            "payment_code": f"eq.{codigo}",
-            "status": "eq.confirmed",
-            "email": "is.null",
-            "limit": "1",
-        },
-    )
-    if not (isinstance(rows, list) and rows):
-        return False
-    payment_id = rows[0].get("id")
-    if not payment_id:
-        return False
-    patched = _supabase_request(
-        "PATCH", "tana_payments",
-        payload={"email": email},
-        params={"id": f"eq.{payment_id}", "email": "is.null"},
-    )
-    return isinstance(patched, list) and bool(patched)
-
-
 def _registrar_codigo_operacion(email, codigo):
     """El estudiante ingresa el número/código de operación que le dio Yape al pagar.
     Se registra como pendiente para que MacroDroid (o el panel de prueba) lo confirme
-    cuando detecte esa misma operación en la notificación de Yape.
-
-    También revisa si ese pago ya fue confirmado como 'huérfano' (llegó antes
-    de que el estudiante alcanzara a registrar el código) y, si es así, lo
-    reclama para esta cuenta de inmediato."""
+    cuando detecte esa misma operación en la notificación de Yape."""
     if not email or not codigo or not _supabase_enabled():
         return None, "Faltan datos o Supabase no está configurado."
     codigo = str(codigo).strip()
@@ -344,7 +312,6 @@ def _registrar_codigo_operacion(email, codigo):
         owner = str(existing[0].get("email", "")).strip().lower()
         if owner and owner != email.strip().lower():
             return None, "Ese código de operación ya fue registrado con otra cuenta."
-        _claim_orphan_payment(email, codigo)
         return codigo, None
 
     now = datetime.now(timezone.utc)
@@ -360,7 +327,6 @@ def _registrar_codigo_operacion(email, codigo):
         },
     )
     if isinstance(rows, list) and rows:
-        _claim_orphan_payment(email, codigo)
         return codigo, None
     return None, "No se pudo registrar el código. Intenta de nuevo."
 
@@ -1101,6 +1067,46 @@ def _cuenta_apertura_para_texto(texto, codigo_explicito=None):
     for candidato in candidatos:
         if candidato in pcge_map and not candidato.startswith(("6", "7", "8", "9")):
             return candidato, pcge_map.get(candidato, "")
+
+    # Muchas prácticas muestran el código solo a nivel de cuenta (10, 12, 20,
+    # 33, 39, 42, 46, 50, 58, 59). En esos casos NO debemos perder la partida
+    # por exigir que Gemini haya leído también los cinco dígitos. Primero
+    # usamos el código explícito de la fuente y luego la denominación para
+    # escoger la subdivisionaria operativa de TANA.
+    codigo_corto = None
+    for fuente in ([codigo_explicito] if codigo_explicito else []) + re.findall(r"(?<!\d)(\d{2,4})(?!\d)", str(texto or "")):
+        try:
+            n = int(str(fuente).strip())
+        except Exception:
+            continue
+        if n in (10,12,20,25,33,39,40,41,42,45,46,47,48,49,50,51,52,56,57,58,59):
+            codigo_corto = n
+            break
+    if codigo_corto is not None:
+        if codigo_corto == 10:
+            banco = _detectar_banco_en_texto(t)
+            if banco and any(k in t for k in ("cuenta corriente", "cta cte", "cta. cte", "cuenta de ahorros", "cuenta ahorro", "dinero en cuenta")):
+                return banco, TANA_BANCOS_NOMBRES.get(banco, pcge_map.get(banco, "Cuenta bancaria"))
+            return "10111", "Caja"
+        mapa_corto = {
+            12:("12121","Emitidas en cartera"), 20:("20111","Costo"),
+            25:("25241","Otros suministros"), 33:("33511","Costo"),
+            39:("39526","Muebles y enseres"), 40:("40111","IGV – Cuenta propia"),
+            41:("41511","Compensación por tiempo de servicios"),
+            42:("42121","Emitidas"), 45:("45111","Instituciones financieras"),
+            46:("46991","Otras cuentas por pagar"), 47:("47111","Cuentas por pagar diversas"),
+            48:("48111","Provisiones"), 49:("49111","Pasivo diferido"),
+            58:("58211","Legal"), 59:("59111","Utilidades acumuladas"),
+        }
+        if codigo_corto == 50:
+            # En sociedades de capital, la forma societaria del nombre permite
+            # distinguir acciones (S.A.C./S.A.) de participaciones (S.R.L.).
+            empresa_txt = str((monografia_json or {}).get("empresa") or "").lower()
+            if "s.r.l" in empresa_txt or "srl" in empresa_txt or "sociedad de responsabilidad limitada" in t:
+                return "50121", "Participaciones"
+            return "50111", "Acciones"
+        if codigo_corto in mapa_corto:
+            return mapa_corto[codigo_corto]
     banco = _detectar_banco_en_texto(t)
     es_obligacion_bancaria = any(k in t for k in ("prestamo por pagar", "préstamo por pagar", "prestamo al banco", "préstamo al banco", "deuda con el banco"))
     if banco and not es_obligacion_bancaria and any(k in t for k in ("cuenta corriente", "cta cte", "cta. cte", "cuenta de ahorros", "cuenta ahorro", "dinero en cuenta", "cheque", "transferencia bancaria")):
