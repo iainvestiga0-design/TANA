@@ -971,6 +971,11 @@ def _normalizar_texto_contable(valor):
     import unicodedata
     txt = str(valor or "").lower()
     txt = unicodedata.normalize("NFKD", txt).encode("ascii", "ignore").decode("ascii")
+    # En muchas prácticas contables peruanas la "x" es la abreviatura de "por"
+    # (ej. "Cuentas x Cobrar Comerciales", "Cuentas x Pagar Comerciales").
+    # Solo reemplazamos la "x" aislada (rodeada de espacios/puntuación, nunca
+    # pegada a un dígito) para no tocar cosas como "10x15" o códigos de producto.
+    txt = re.sub(r"(?<![a-z0-9])x(?![a-z0-9])", "por", txt)
     return re.sub(r"\s+", " ", txt).strip()
 
 
@@ -1136,19 +1141,31 @@ def _cuenta_apertura_para_texto(texto, codigo_explicito=None, empresa_nombre=Non
         if codigo_corto in mapa_corto:
             return mapa_corto[codigo_corto]
     banco = _detectar_banco_en_texto(t)
-    es_obligacion_bancaria = any(k in t for k in ("prestamo por pagar", "préstamo por pagar", "prestamo al banco", "préstamo al banco", "deuda con el banco"))
+    # "Préstamo DEL BBVA por pagar", "Préstamo al Banco X", etc.: el nombre del
+    # banco suele ir en medio de la frase, así que buscamos "prestamo" y
+    # "pagar" como palabras presentes en el texto, sin exigir que sean
+    # substring contiguo. Esto es más robusto que la lista fija de frases.
+    es_obligacion_bancaria = (
+        ("prestamo" in t and "pagar" in t)
+        or any(k in t for k in ("prestamo por pagar", "préstamo por pagar", "prestamo al banco", "préstamo al banco", "deuda con el banco"))
+    )
     if banco and not es_obligacion_bancaria and any(k in t for k in ("cuenta corriente", "cta cte", "cta. cte", "cuenta de ahorros", "cuenta ahorro", "dinero en cuenta", "cheque", "transferencia bancaria")):
         return banco, TANA_BANCOS_NOMBRES.get(banco, pcge_map.get(banco, "Cuenta bancaria"))
+    if es_obligacion_bancaria:
+        return "45111", "Instituciones financieras"
     reglas = [
         (("caja chica", "dinero en caja chica", "efectivo en caja"), "10111", "Caja"),
         (("facturas por cobrar", "cuentas por cobrar", "factura por cobrar", "emitidas en cartera"), "12121", "Emitidas en cartera"),
+        (("muebles de madera",), "20111", "Costo"),
         (("prendas de vestir", "mercaderias", "mercaderías", "muebles de melamine", "existencias", "mercaderia", "girasoles", "girasol", "claveles", "clavel", "productos terminados", "productos", "inventario"), "20111", "Costo"),
         (("suministros de oficina", "suministros", "materiales auxiliares"), "25241", "Otros suministros"),
+        (("equipo de computo", "equipos de computo", "equipo de procesamiento de datos", "equipo para procesamiento de informacion"), "33611", "Costo"),
         (("muebles", "muebles y enseres", "propiedad planta y equipo"), "33511", "Costo"),
         (("depreciacion acumulada", "depreciación acumulada"), "39526", "Muebles y enseres"),
         (("igv por pagar", "igv – cuenta propia", "igv cuenta propia", "igv por pagar"), "40111", "IGV – Cuenta propia"),
         (("essalud por pagar", "essalud", "es salud"), "40311", "ESSALUD"),
         (("afp por pagar", "administradoras de fondos de pensiones", "afp"), "41711", "Administradoras de fondos de pensiones"),
+        (("vacaciones por pagar", "vacaciones"), "41151", "Vacaciones por pagar"),
         (("cts por pagar", "cts", "compensacion por tiempo de servicios", "compensación por tiempo de servicios"), "41511", "Compensación por tiempo de servicios"),
         (("facturas por pagar", "cuentas por pagar comerciales", "emitidas por pagar", "proveedores"), "42121", "Emitidas"),
         (("otras cuentas por pagar", "otras cuentas por pagar diversas"), "46991", "Otras cuentas por pagar"),
@@ -1164,10 +1181,17 @@ def _cuenta_apertura_para_texto(texto, codigo_explicito=None, empresa_nombre=Non
     return None, None
 
 
-def _construir_asiento_apertura_determinista(monografia_json):
-    """Construye un único asiento de apertura desde el estado inicial, sin cerrar a 50."""
+def _construir_asiento_apertura_determinista(monografia_json, _diag=None):
+    """Construye un único asiento de apertura desde el estado inicial, sin cerrar a 50.
+
+    Si se pasa `_diag` (una lista), se le agrega un diagnóstico explicando por
+    qué no se pudo construir la apertura (cuentas no reconocidas o descuadre),
+    en vez de fallar en silencio.
+    """
     estado = (monografia_json or {}).get("estado_inicial", []) or []
     if not estado:
+        if _diag is not None:
+            _diag.append({"motivo": "sin_estado_inicial"})
         return None
 
     lineas_debe = []
@@ -1215,11 +1239,22 @@ def _construir_asiento_apertura_determinista(monografia_json):
     # la cuenta 20, 10 o 50). La apertura solo se acepta cuando todas las
     # partidas reales fueron mapeadas y el Debe/Haber coincide.
     if faltantes:
+        if _diag is not None:
+            _diag.append({"motivo": "cuentas_no_reconocidas", "items": list(faltantes)})
         return None
     if abs(sum_debe - sum_haber) > 0.009:
+        if _diag is not None:
+            _diag.append({
+                "motivo": "descuadre",
+                "debe": round(sum_debe, 2),
+                "haber": round(sum_haber, 2),
+                "diferencia": round(sum_debe - sum_haber, 2),
+            })
         return None
 
     if not lineas_debe or not lineas_haber:
+        if _diag is not None:
+            _diag.append({"motivo": "faltan_lineas_debe_o_haber"})
         return None
 
     empresa = str((monografia_json or {}).get("empresa") or "").strip()
@@ -4216,8 +4251,43 @@ def _detectar_empresas_monografia(monografia_json):
     return empresas
 
 
-def _construir_aperturas_por_empresa(monografia_json):
-    """Construye exactamente una apertura por empresa usando SOLO sus saldos iniciales."""
+def _formatear_diagnostico_apertura(diag_items):
+    """Convierte la lista de diagnósticos de _construir_asiento_apertura_determinista
+    en una frase legible para mostrar al usuario en el mensaje de error."""
+    if not diag_items:
+        return "TANA no pudo identificar el motivo exacto; revisa el balance inicial de esta empresa"
+    partes = []
+    for d in diag_items:
+        if not isinstance(d, dict):
+            continue
+        motivo = d.get("motivo")
+        if motivo == "cuentas_no_reconocidas":
+            items = d.get("items") or []
+            partes.append(
+                "no se reconoció la cuenta contable de: " + "; ".join(str(x) for x in items[:5])
+                + (" y otras" if len(items) > 5 else "")
+            )
+        elif motivo == "descuadre":
+            partes.append(
+                f"el balance inicial no cuadra (Debe S/ {d.get('debe')} vs Haber S/ {d.get('haber')}, "
+                f"diferencia S/ {d.get('diferencia')})"
+            )
+        elif motivo == "faltan_lineas_debe_o_haber":
+            partes.append("faltan partidas de activo o de pasivo/patrimonio en el balance inicial")
+        elif motivo == "sin_estado_inicial":
+            partes.append("no se encontró un balance inicial para esta empresa")
+        else:
+            partes.append(str(motivo or "motivo no especificado"))
+    return "; ".join(partes) if partes else "TANA no pudo identificar el motivo exacto; revisa el balance inicial de esta empresa"
+
+
+def _construir_aperturas_por_empresa(monografia_json, _diag_por_empresa=None):
+    """Construye exactamente una apertura por empresa usando SOLO sus saldos iniciales.
+
+    Si se pasa `_diag_por_empresa` (un dict), se le agrega, por cada empresa
+    cuya apertura no se pudo construir, el detalle de la causa (cuentas no
+    reconocidas, descuadre, etc.) para poder informarlo al usuario.
+    """
     data = monografia_json or {}
     estado = data.get("estado_inicial", []) or []
     empresas = _detectar_empresas_monografia(data)
@@ -4270,10 +4340,13 @@ def _construir_aperturas_por_empresa(monografia_json):
         sub = dict(data)
         sub["empresa"] = empresa
         sub["estado_inicial"] = partidas
-        apertura = _construir_asiento_apertura_determinista(sub)
+        _diag_local = []
+        apertura = _construir_asiento_apertura_determinista(sub, _diag=_diag_local)
         if apertura:
             apertura["empresa"] = empresa
             resultado.append(apertura)
+        elif _diag_por_empresa is not None:
+            _diag_por_empresa.setdefault(empresa, []).extend(_diag_local)
 
     # FALLBACK ROBUSTO PARA WORD/PDF: si Gemini puso en TODAS las partidas
     # un campo empresa contaminado (por ejemplo: "La Económica S.R.L.,
@@ -4308,11 +4381,18 @@ def _construir_aperturas_por_empresa(monografia_json):
                     sub = dict(data)
                     sub["empresa"] = empresa
                     sub["estado_inicial"] = partidas_fuente
-                    apertura = _construir_asiento_apertura_determinista(sub)
+                    _diag_local2 = []
+                    apertura = _construir_asiento_apertura_determinista(sub, _diag=_diag_local2)
                     if apertura:
                         apertura["empresa"] = empresa
                         aperturas_fuente.append(apertura)
+                    elif _diag_por_empresa is not None:
+                        _diag_por_empresa.setdefault(empresa, []).extend(_diag_local2)
                 if len(aperturas_fuente) == len(empresas):
+                    if _diag_por_empresa is not None:
+                        # El fallback por texto sí logró construir todas las
+                        # aperturas: el diagnóstico del primer intento ya no aplica.
+                        _diag_por_empresa.clear()
                     return aperturas_fuente
 
     return resultado
@@ -4934,7 +5014,8 @@ if "monografia_json" in st.session_state and "asientos_contables" not in st.sess
             # para cada una y nunca se mezclan sus saldos.
             mono_actual = st.session_state.get("monografia_json", {}) or {}
             empresas_detectadas = _detectar_empresas_monografia(mono_actual)
-            aperturas = _construir_aperturas_por_empresa(mono_actual)
+            _diag_aperturas = {}
+            aperturas = _construir_aperturas_por_empresa(mono_actual, _diag_por_empresa=_diag_aperturas)
 
             # El balance inicial es obligatorio cuando la monografía lo contiene.
             # La cantidad de aperturas es DINÁMICA: una por cada empresa realmente
@@ -4956,9 +5037,24 @@ if "monografia_json" in st.session_state and "asientos_contables" not in st.sess
                     }
                     faltan_aperturas = sorted(empresas_con_estado - empresas_con_apertura)
                     if faltan_aperturas:
+                        detalle_partes = []
+                        for nombre_faltante in faltan_aperturas:
+                            # _diag_aperturas está indexado con el nombre de empresa
+                            # tal como lo devolvió _detectar_empresas_monografia
+                            # (no siempre coincide en mayúsculas/tildes con la
+                            # clave normalizada usada arriba), así que buscamos
+                            # por comparación normalizada en vez de por igualdad directa.
+                            diag_items = []
+                            for emp_key, items in _diag_aperturas.items():
+                                if _normalizar_nombre_empresa(emp_key).lower() == nombre_faltante:
+                                    diag_items = items
+                                    break
+                            detalle_partes.append(
+                                f"{nombre_faltante} ({_formatear_diagnostico_apertura(diag_items)})"
+                            )
                         raise ValueError(
                             "No se pudo construir el asiento de apertura para: "
-                            + ", ".join(faltan_aperturas)
+                            + "; ".join(detalle_partes)
                             + ". TANA no generará un Excel incompleto."
                         )
                 elif len(aperturas) != 1:
