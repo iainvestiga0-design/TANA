@@ -5152,6 +5152,20 @@ if "monografia_json" in st.session_state and "asientos_contables" not in st.sess
             st.session_state["alertas_asientos"] = list(alertas_gemini) + list(warnings_pase2) + list(warnings_finales)
         except Exception as exc:
             st.error(f"No se pudieron desarrollar los asientos: {exc}")
+            try:
+                with st.expander("🔍 Ver los datos exactos que TANA extrajo del balance inicial (para diagnosticar el descuadre)"):
+                    estado_dbg = (st.session_state.get("monografia_json", {}) or {}).get("estado_inicial", []) or []
+                    if estado_dbg:
+                        st.caption(
+                            "Estas son las partidas que la IA identificó en el balance inicial, tal cual, "
+                            "con su empresa, importe y (si lo detectó) el código de cuenta. Revisa si algún "
+                            "importe no coincide con el documento original, o si falta alguna partida."
+                        )
+                        st.json(estado_dbg)
+                    else:
+                        st.caption("No se extrajo ningún balance inicial (lista vacía).")
+            except Exception:
+                pass
             st.stop()
 
 # ============================================================
