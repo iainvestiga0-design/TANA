@@ -1,6 +1,7 @@
 import json
 import ast
 import hashlib
+import time
 
 # --- TANA: filtro de diagnóstico preciso ---
 def tana_filtrar_diagnostico_preciso(diagnostico):
@@ -1483,6 +1484,21 @@ def _is_gemini_fallback_error(exc):
     return any(token in low for token in (
         "429", "resource_exhausted", "quota", "rate limit",
         "not found", "model not found", "unsupported model",
+        "503", "unavailable", "overloaded", "high demand",
+        "500", "internal", "502", "504", "deadline_exceeded",
+        "deadline exceeded", "timeout",
+    ))
+
+
+def _is_gemini_transient_error(exc):
+    """Errores de disponibilidad momentánea: vale la pena reintentar la MISMA
+    ruta (mismo modelo/API key) un par de veces antes de saltar a la
+    siguiente, porque suelen resolverse solos en segundos."""
+    low = str(exc).lower()
+    return any(token in low for token in (
+        "503", "unavailable", "overloaded", "high demand",
+        "500", "internal", "502", "504", "deadline_exceeded",
+        "deadline exceeded", "timeout",
     ))
 
 
@@ -1490,24 +1506,45 @@ def _fallback_error_message(errors):
     if not errors:
         return "No hay una configuración de Gemini disponible."
     details = []
+    any_transient = False
     for label, model, exc in errors:
         low = str(exc).lower()
         if "429" in low or "resource_exhausted" in low or "quota" in low:
             details.append(f"{label} ({model}): cuota agotada")
         elif "not found" in low or "unsupported model" in low:
             details.append(f"{label} ({model}): modelo no disponible")
+        elif _is_gemini_transient_error(exc):
+            any_transient = True
+            details.append(f"{label} ({model}): servidor de Gemini saturado (503)")
         else:
             details.append(f"{label} ({model}): {str(exc)[:180]}")
-    return (
+    mensaje = (
         "TANA intentó las rutas disponibles de Gemini y ninguna pudo procesar "
-        "la solicitud. Revisiones realizadas: " + "; ".join(details) + ". "
-        "Puedes configurar GEMINI_API_KEY_2/GEMINI_API_KEY_3 y sus modelos "
-        "alternativos en Streamlit Secrets."
+        "la solicitud. Revisiones realizadas: " + "; ".join(details) + "."
     )
+    if any_transient:
+        mensaje += (
+            " Esto suele deberse a una saturación momentánea de los servidores "
+            "de Gemini (alta demanda). Vuelve a intentarlo en uno o dos minutos; "
+            "normalmente se resuelve solo."
+        )
+    else:
+        mensaje += (
+            " Puedes configurar GEMINI_API_KEY_2/GEMINI_API_KEY_3 y sus modelos "
+            "alternativos en Streamlit Secrets."
+        )
+    return mensaje
 
 
-def _generate_with_fallback(contents_factory, config):
-    """Genera contenido probando automáticamente las rutas Gemini disponibles."""
+def _generate_with_fallback(contents_factory, config, max_retries_per_profile=3, base_backoff=2.0):
+    """Genera contenido probando automáticamente las rutas Gemini disponibles.
+
+    Para errores transitorios (503/UNAVAILABLE, sobrecarga, timeouts) reintenta
+    varias veces LA MISMA ruta con espera creciente antes de saltar a la
+    siguiente, porque normalmente se resuelven solos en pocos segundos. Para
+    errores de cuota agotada o modelo no disponible, salta de inmediato a la
+    siguiente ruta sin reintentar.
+    """
     profiles = get_gemini_profiles()
     if not profiles:
         raise RuntimeError(
@@ -1518,17 +1555,25 @@ def _generate_with_fallback(contents_factory, config):
     errors = []
     for profile in profiles:
         client = get_gemini_client(profile["api_key"])
-        try:
-            response = client.models.generate_content(
-                model=profile["model"],
-                contents=contents_factory(client),
-                config=config,
-            )
-            return response, profile
-        except Exception as exc:
-            errors.append((profile["label"], profile["model"], exc))
-            if not _is_gemini_fallback_error(exc):
-                raise RuntimeError(str(exc)) from exc
+        intentos = max_retries_per_profile if True else 1
+        for intento in range(1, intentos + 1):
+            try:
+                response = client.models.generate_content(
+                    model=profile["model"],
+                    contents=contents_factory(client),
+                    config=config,
+                )
+                return response, profile
+            except Exception as exc:
+                if _is_gemini_transient_error(exc) and intento < intentos:
+                    # Espera creciente (2s, 4s, ...) y reintenta la misma ruta:
+                    # una sobrecarga momentánea del modelo suele despejarse sola.
+                    time.sleep(base_backoff * intento)
+                    continue
+                errors.append((profile["label"], profile["model"], exc))
+                if not _is_gemini_fallback_error(exc):
+                    raise RuntimeError(str(exc)) from exc
+                break
 
     raise RuntimeError(_fallback_error_message(errors))
 
