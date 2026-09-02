@@ -1062,45 +1062,6 @@ def _extraer_texto_estado_inicial(item):
     return str(item or "")
 
 
-_MARCADORES_TEXTO_NARRATIVO = (
-    "tienen la siguiente", "acuerdo de fusión", "acuerdo de fusion", "empresa participante",
-    "se pide", "según el proyecto", "segun el proyecto", "participación social", "participacion social",
-    "participación accionaria", "participacion accionaria", "en virtud de", "en cumplimiento de",
-    "se acuerda", "el mismo que se presenta",
-)
-
-
-def _item_estado_inicial_parece_narrativo(item):
-    """Detecta si una 'partida' extraída por la IA es en realidad un fragmento
-    de texto narrativo (párrafo de la monografía) colado por error entre las
-    partidas reales del balance, en vez de una línea de cuenta contable.
-
-    Señales usadas (deliberadamente conservadoras, para no descartar partidas
-    reales por error):
-      1. El campo de descripción/concepto empieza con minúscula: es típico de
-         un fragmento cortado a mitad de palabra u oración (p.ej. "ccionistas
-         que conforman Muebles", cortado de "...los accionistas que...").
-      2. El texto contiene frases propias de párrafos narrativos de la
-         monografía (acuerdos, participación social/accionaria, "se pide", etc.),
-         que nunca aparecen como nombre de una cuenta contable real.
-    """
-    if not isinstance(item, dict):
-        return False
-    campos = [str(item.get(k) or "").strip() for k in ("descripcion", "concepto", "denominacion", "nombre")]
-    campos = [c for c in campos if c]
-    if not campos:
-        return False
-    for c in campos:
-        primera_letra = c[0]
-        if primera_letra.isalpha() and primera_letra == primera_letra.lower() and primera_letra != primera_letra.upper():
-            return True
-    texto_norm = _normalizar_texto_contable(" ".join(campos))
-    for marcador in _MARCADORES_TEXTO_NARRATIVO:
-        if _normalizar_texto_contable(marcador) in texto_norm:
-            return True
-    return False
-
-
 def _extraer_importe_estado_inicial(item):
     if isinstance(item, dict):
         for k in ("importe", "saldo", "monto", "valor", "debe", "haber"):
@@ -1238,7 +1199,6 @@ def _construir_asiento_apertura_determinista(monografia_json, _diag=None):
     sum_debe = 0.0
     sum_haber = 0.0
     faltantes = []
-    descartados_narrativos = []
 
     for item in estado:
         texto = _extraer_texto_estado_inicial(item)
@@ -1246,13 +1206,6 @@ def _construir_asiento_apertura_determinista(monografia_json, _diag=None):
         # Los totales sirven para verificar la extracción, pero NO son cuentas
         # contables y nunca deben convertirse en una línea del asiento.
         if tipo_item.startswith("total") or "total activo" in _normalizar_texto_contable(texto) or "total pasivo" in _normalizar_texto_contable(texto) or "total patrimonio" in _normalizar_texto_contable(texto):
-            continue
-        if _item_estado_inicial_parece_narrativo(item):
-            # La IA coló un fragmento de texto narrativo (párrafo de la
-            # monografía) entre las partidas del balance. No es una cuenta
-            # contable real: se excluye del cálculo (no bloquea el asiento
-            # por sí solo) pero se reporta para que quede visible.
-            descartados_narrativos.append(texto.strip())
             continue
         importe = _extraer_importe_estado_inicial(item)
         if importe is None or abs(float(importe)) < 0.005:
@@ -1297,8 +1250,6 @@ def _construir_asiento_apertura_determinista(monografia_json, _diag=None):
                 "haber": round(sum_haber, 2),
                 "diferencia": round(sum_debe - sum_haber, 2),
             })
-            if descartados_narrativos:
-                _diag.append({"motivo": "texto_narrativo_descartado", "items": list(descartados_narrativos)})
         return None
 
     if not lineas_debe or not lineas_haber:
@@ -1320,15 +1271,13 @@ def _construir_asiento_apertura_determinista(monografia_json, _diag=None):
     obs = "Asiento de apertura generado directamente desde el estado inicial. Activos en Debe y pasivos/patrimonio en Haber."
     if faltantes:
         obs += " Revisar datos no mapeados: " + "; ".join(faltantes[:3])
-    if descartados_narrativos:
-        obs += " Se descartaron fragmentos de texto que no eran partidas de balance: " + "; ".join(descartados_narrativos[:3])
     return {
         "numero": 1,
         "fecha": fecha,
         "glosa": f"Apertura / reapertura para el proceso contable{(' de ' + empresa) if empresa else ''}",
         "documento": "Balance / Estado de Situación Financiera inicial",
         "operacion_numero": 0,
-        "requiere_revision": bool(faltantes) or bool(descartados_narrativos),
+        "requiere_revision": bool(faltantes),
         "observacion": obs,
         "lineas": lineas_debe + lineas_haber,
     }
@@ -2394,6 +2343,16 @@ def _cached_opening_extraction_from_text(document_text, model, api_key):
     return estado
 
 
+def _plegar_acentos_minusculas(s):
+    """Pasa a minúsculas y quita tildes SIN cambiar la longitud del texto
+    (a diferencia de _normalizar_texto_contable, que también colapsa
+    espacios). Se usa para buscar coincidencias por posición sobre el texto
+    original y poder recortar ventanas de importes con los mismos índices."""
+    import unicodedata
+    s = str(s or "").lower()
+    return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode("ascii")
+
+
 def _extraer_apertura_determinista_desde_texto(document_text, data=None):
     """Extrae partidas del balance inicial desde texto legible, separadas por empresa."""
     text = str(document_text or "")
@@ -2401,6 +2360,10 @@ def _extraer_apertura_determinista_desde_texto(document_text, data=None):
         return []
     lines = [re.sub(r"[ \t]+", " ", x).strip() for x in text.splitlines() if x.strip()]
     full = "\n".join(lines)
+    # Copia plegada (minúsculas, sin tildes) que conserva la MISMA longitud y
+    # posiciones que `full`, para poder buscar en ella sin distinguir tildes
+    # ni mayúsculas y aun así recortar ventanas de importes sobre `full`.
+    full_fold = _plegar_acentos_minusculas(full)
     headings = list(re.finditer(
         r"(?im)^\s*(?:[a-z]\.\s*)?(?:empresa\s+)?(.+?\b(?:s\.?r\.?l\.?|s\.?a\.?c\.?|s\.?a\.?a\.?|s\.?a\.?|e\.?i\.?r\.?l\.?))\s*$",
         full,
@@ -2409,43 +2372,89 @@ def _extraer_apertura_determinista_desde_texto(document_text, data=None):
         return []
 
     # Ordenado de conceptos específicos a genéricos para evitar colisiones.
+    # Los patrones ya están pensados para texto plegado (sin tildes, en
+    # minúsculas): "x" y "por" se aceptan como equivalentes porque muchas
+    # prácticas peruanas abrevian "por" como "x" (ej. "Cuentas x Pagar").
     rules = [
-        ("cuenta corriente del bcp|cta\.?\s*cte\.?\s*banco bcp|banco de credito del peru|bcp", "10412"),
-        ("cta\.?\s*cte\.?\s*banco interbank|cuenta corriente interbank|interbank", "10413"),
-        ("cta\.?\s*cte\.?\s*banco bbva|cuenta corriente bbva|bbva", "10415"),
-        ("banco de la nacion|banco de la nación", "10411"),
+        ("cuenta corriente del bcp|cta\\.?\\s*cte\\.?\\s*banco bcp|banco de credito del peru|bcp", "10412"),
+        ("cta\\.?\\s*cte\\.?\\s*banco interbank|cuenta corriente interbank|interbank", "10413"),
+        ("cta\\.?\\s*cte\\.?\\s*banco bbva|cuenta corriente bbva|bbva", "10415"),
+        ("banco de la nacion", "10411"),
         ("scotiabank", "10414"), ("banbif", "10416"),
-        ("facturas x cobrar a clientes|facturas por cobrar a clientes|facturas x cobrar|facturas por cobrar|cuentas por cobrar", "12121"),
-        ("depreciacion acumulada|depreciación acumulada", "39526"),
-        ("facturas x pagar a proveedores|facturas por pagar a proveedores|facturas x pagar|facturas por pagar|proveedores", "42121"),
-        ("cts por pagar|compensacion por tiempo de servicios|compensación por tiempo de servicios", "41511"),
+        ("cuentas?\\s+(?:x|por)\\s+cobrar(?:\\s+comerciales)?|facturas?\\s+(?:x|por)\\s+cobrar(?:\\s+a\\s+clientes)?", "12121"),
+        ("depreciacion acumulada", "39526"),
+        ("muebles de madera", "20111"),
+        ("cuentas?\\s+(?:x|por)\\s+pagar(?:\\s+comerciales)?|facturas?\\s+(?:x|por)\\s+pagar(?:\\s+a\\s+proveedores)?|proveedores", "42121"),
+        ("vacaciones\\s+(?:x|por)\\s+pagar|vacaciones", "41151"),
+        ("cts\\s+(?:x|por)\\s+pagar|compensacion por tiempo de servicios", "41511"),
         ("otras cuentas por pagar", "46991"),
+        ("pr[e]stamo[\\w\\s]{0,25}?(?:x|por)\\s+pagar", "45111"),
         ("reserva legal", "58211"),
         ("utilidades acumuladas|utilidad acumulada|resultados acumulados", "59111"),
         ("participaciones", "50121"),
         ("acciones", "50111"),
+        ("equipos?\\s+de\\s+computo|equipo\\s+para\\s+procesamiento\\s+de\\s+informacion", "33611"),
         ("muebles y enseres|muebles", "33511"),
-        ("girasoles|claveles|mercaderias|mercaderías|existencias|inventarios|inventario", "20111"),
+        ("girasoles|claveles|mercaderias|existencias|inventarios|inventario", "20111"),
         ("caja chica|efectivo en caja|dinero en caja", "10111"),
         ("suministros de oficina|suministros", "25241"),
     ]
+    # Marcadores de fin de balance: si aparecen antes que el siguiente
+    # encabezado de empresa, cortamos ahí para no arrastrar texto narrativo
+    # (operaciones, revaluaciones, condiciones del acuerdo) hacia la misma
+    # ventana de partidas de la empresa actual.
+    marcadores_fin = (
+        r"(?im)^\s*total\s+pasivo\s+y\s+p(?:\.n\.?|atrimonio)",
+        r"(?im)^\s*desde el acuerdo\b",
+        r"(?im)^\s*se pide\s*:?\s*$",
+    )
     num_re = re.compile(r"(?<!\d)[(\-]?\s*\d[\d,]*(?:\.\d+)?\s*\)?")
     result = []
     for hidx, h in enumerate(headings):
         company = _normalizar_nombre_empresa(h.group(1))
         next_h = headings[hidx + 1].start() if hidx + 1 < len(headings) else len(full)
         tail = full[h.end():next_h]
+        tail_fold = full_fold[h.end():next_h]
         # El encabezado "EL GIRASOL S.R.L." / "EL CLAVEL S.R.L." se repite
         # inmediatamente después del título de empresa; no es una partida contable.
         if "\n" in tail:
-            tail = tail.split("\n", 1)[1]
-        m_end = re.search(r"(?im)^\s*desde el acuerdo\b", tail)
-        if m_end:
-            tail = tail[:m_end.start()]
+            corte = tail.index("\n") + 1
+            tail = tail[corte:]
+            tail_fold = tail_fold[corte:]
+        limite = None
+        for marcador in marcadores_fin:
+            mm = re.search(marcador, tail_fold)
+            if mm and (limite is None or mm.end() < limite):
+                limite = mm.end()
+        if limite is not None:
+            tail = tail[:limite]
+            tail_fold = tail_fold[:limite]
+        # No empezar a buscar partidas hasta el encabezado real de la tabla
+        # ("ACTIVO(S) ... PASIVO(S) Y PATRIMONIO NETO"). Todo lo anterior es
+        # narrativa (título, fecha, "se presenta a continuación", el nombre
+        # de la empresa repetido en negrita) y puede contener números (fechas,
+        # años) o la palabra "muebles"/"empresa" que no son partidas del
+        # balance; buscar ahí produce falsos positivos.
+        m_header = re.search(r"(?im)^\s*activos?\s+pasivos?\s+y\s+patrimonio\b", tail_fold)
+        if m_header:
+            nl = tail_fold.find("\n", m_header.end())
+            inicio = nl + 1 if nl != -1 else m_header.end()
+            tail = tail[inicio:]
+            tail_fold = tail_fold[inicio:]
         # No procesar la línea de título de la empresa ni encabezados de estados.
         seen_codes = set()
+        # Rangos [inicio, fin) del texto ya asignados a una partida, para que un
+        # patrón más genérico (ej. "muebles") no vuelva a contar el mismo texto
+        # que ya capturó un patrón más específico (ej. "muebles de madera").
+        claimed_spans = []
+
+        def _se_solapa(ini, fin):
+            return any(not (fin <= s or ini >= e) for s, e in claimed_spans)
+
         for pattern, codigo in rules:
-            for m in re.finditer(r"(?i)" + pattern, tail):
+            for m in re.finditer(r"(?i)" + pattern, tail_fold):
+                if _se_solapa(m.start(), m.end()):
+                    continue
                 # Buscar el primer importe asociado al concepto antes del siguiente salto
                 # excesivamente lejano. Esto funciona tanto con columnas en la misma línea
                 # como cuando Word antiguo coloca el importe debajo del concepto.
@@ -2465,8 +2474,10 @@ def _extraer_apertura_determinista_desde_texto(document_text, data=None):
                 if abs(importe) < 0.005 or codigo in seen_codes:
                     continue
                 # El concepto debe pertenecer al balance, no a una frase posterior.
-                concepto = tail[max(0, m.start()-25):m.end()].strip().replace("\n", " ")
+                inicio_linea = tail.rfind("\n", 0, m.start()) + 1
+                concepto = tail[max(inicio_linea, m.start()-25):m.end()].strip().replace("\n", " ")
                 seen_codes.add(codigo)
+                claimed_spans.append((m.start(), m.end()))
                 result.append({
                     "empresa": company,
                     "tipo": "partida",
@@ -4327,12 +4338,6 @@ def _formatear_diagnostico_apertura(diag_items):
             partes.append("faltan partidas de activo o de pasivo/patrimonio en el balance inicial")
         elif motivo == "sin_estado_inicial":
             partes.append("no se encontró un balance inicial para esta empresa")
-        elif motivo == "texto_narrativo_descartado":
-            items = d.get("items") or []
-            partes.append(
-                "se descartaron fragmentos de texto que no eran partidas de balance (probablemente texto narrativo de la monografía mezclado por error): "
-                + "; ".join(str(x) for x in items[:5])
-            )
         else:
             partes.append(str(motivo or "motivo no especificado"))
     return "; ".join(partes) if partes else "TANA no pudo identificar el motivo exacto; revisa el balance inicial de esta empresa"
@@ -5209,20 +5214,6 @@ if "monografia_json" in st.session_state and "asientos_contables" not in st.sess
             st.session_state["alertas_asientos"] = list(alertas_gemini) + list(warnings_pase2) + list(warnings_finales)
         except Exception as exc:
             st.error(f"No se pudieron desarrollar los asientos: {exc}")
-            try:
-                with st.expander("🔍 Ver los datos exactos que TANA extrajo del balance inicial (para diagnosticar el descuadre)"):
-                    estado_dbg = (st.session_state.get("monografia_json", {}) or {}).get("estado_inicial", []) or []
-                    if estado_dbg:
-                        st.caption(
-                            "Estas son las partidas que la IA identificó en el balance inicial, tal cual, "
-                            "con su empresa, importe y (si lo detectó) el código de cuenta. Revisa si algún "
-                            "importe no coincide con el documento original, o si falta alguna partida."
-                        )
-                        st.json(estado_dbg)
-                    else:
-                        st.caption("No se extrajo ningún balance inicial (lista vacía).")
-            except Exception:
-                pass
             st.stop()
 
 # ============================================================
