@@ -1362,9 +1362,25 @@ SUPPORTED_TYPES = ["pdf", "doc", "docx", "xls", "xlsx", "jpg", "jpeg", "png"]
 # cuando se agota la cuota de un modelo/proyecto. La primera opción conserva
 # el comportamiento actual; las siguientes se usan solo si hay 429/cuota o
 # si el modelo configurado no está disponible.
-GEMINI_MODEL = st.secrets.get("TANA_GEMINI_MODEL", os.getenv("TANA_GEMINI_MODEL", "gemini-3.5-flash"))
+GEMINI_MODEL = st.secrets.get("TANA_GEMINI_MODEL", os.getenv("TANA_GEMINI_MODEL", "gemini-3.6-flash"))
 GEMINI_MODEL_2 = st.secrets.get("TANA_GEMINI_MODEL_2", os.getenv("TANA_GEMINI_MODEL_2", "gemini-3.5-flash-lite"))
-GEMINI_MODEL_3 = st.secrets.get("TANA_GEMINI_MODEL_3", os.getenv("TANA_GEMINI_MODEL_3", "gemini-2.5-flash"))
+GEMINI_MODEL_3 = st.secrets.get("TANA_GEMINI_MODEL_3", os.getenv("TANA_GEMINI_MODEL_3", "gemini-3.7-flash"))
+
+# Modelos antiguos que ya no deben entrar en la cadena de respaldo.
+# Si quedaron guardados en Streamlit Secrets de una versión anterior,
+# TANA los reemplaza automáticamente por modelos estables vigentes.
+_DEPRECATED_GEMINI_MODELS = {
+    "gemini-2.5-flash-preview-09-25",
+    "gemini-2.5-flash-preview-05-20",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-001",
+}
+if GEMINI_MODEL in _DEPRECATED_GEMINI_MODELS:
+    GEMINI_MODEL = "gemini-3.6-flash"
+if GEMINI_MODEL_2 in _DEPRECATED_GEMINI_MODELS:
+    GEMINI_MODEL_2 = "gemini-3.5-flash-lite"
+if GEMINI_MODEL_3 in _DEPRECATED_GEMINI_MODELS or GEMINI_MODEL_3 == "gemini-2.5-flash":
+    GEMINI_MODEL_3 = "gemini-3.7-flash"
 
 # Cargar el PCGE antes del motor de resolución, incluso antes de generar el Excel.
 PCGE_PATHS = [
