@@ -2477,6 +2477,7 @@ def _extraer_apertura_determinista_desde_texto(document_text, data=None):
         ("reserva legal", "58211"),
         ("utilidades acumuladas|utilidad acumulada|resultados acumulados", "59111"),
         ("participaciones", "50121"),
+        ("capital social|capital aportado|capital pagado|capital", "50121"),
         ("acciones", "50111"),
         ("equipos?\\s+de\\s+computo|equipo\\s+para\\s+procesamiento\\s+de\\s+informacion", "33611"),
         ("muebles y enseres|muebles", "33511"),
@@ -2540,22 +2541,55 @@ def _extraer_apertura_determinista_desde_texto(document_text, data=None):
             for m in re.finditer(r"(?i)" + pattern, tail_fold):
                 if _se_solapa(m.start(), m.end()):
                     continue
-                # Buscar el primer importe asociado al concepto antes del siguiente salto
-                # excesivamente lejano. Esto funciona tanto con columnas en la misma línea
-                # como cuando Word antiguo coloca el importe debajo del concepto.
-                ventana = tail[m.end():m.end()+80]
-                nm = num_re.search(ventana)
-                if not nm:
+                # Una tabla de balance suele venir como: CONCEPTO | DEBE | HABER.
+                # La versión anterior tomaba SOLO el primer número después del concepto.
+                # Eso destruye partidas acreedoras cuando el Debe es 0, por ejemplo:
+                #   Capital social   0   10,500
+                # porque encontraba 0 y descartaba toda la partida.
+                # Ahora leemos todos los importes de la misma línea (y, si no hay
+                # suficientes, de una pequeña ventana) y elegimos el lado correcto
+                # según la naturaleza de la cuenta.
+                linea_fin = tail.find("\n", m.end())
+                if linea_fin == -1:
+                    linea_fin = min(len(tail), m.end() + 120)
+                ventana = tail[m.end():linea_fin]
+                numeros = list(num_re.finditer(ventana))
+                if not numeros:
+                    # Word/PDF antiguo puede colocar los importes en la línea siguiente.
+                    ventana = tail[m.end():m.end()+100]
+                    numeros = list(num_re.finditer(ventana))
+                if not numeros:
                     continue
-                token = nm.group(0).replace(" ", "")
-                negativo = token.startswith("(") or token.startswith("-")
-                token = token.strip("()")
-                try:
-                    importe = float(token.replace(",", ""))
-                    if negativo:
-                        importe = -importe
-                except Exception:
+
+                valores = []
+                for nm in numeros[:4]:
+                    token = nm.group(0).replace(" ", "")
+                    negativo = token.startswith("(") or token.startswith("-")
+                    token = token.strip("()")
+                    try:
+                        valor = float(token.replace(",", ""))
+                        if negativo:
+                            valor = -valor
+                        valores.append(valor)
+                    except Exception:
+                        pass
+                if not valores:
                     continue
+
+                # Si hay dos columnas numéricas, interpretarlas como Debe/Haber.
+                # Para activos: Debe = primera columna; contra-activos y pasivo/patrimonio:
+                # Haber = segunda columna. Si una columna es 0, conservar la otra.
+                es_contra = codigo.startswith("39")
+                es_pasivo_pat = codigo.startswith(("4", "5"))
+                if len(valores) >= 2:
+                    debe_col, haber_col = valores[0], valores[1]
+                    if es_contra or es_pasivo_pat:
+                        importe = haber_col if abs(haber_col) > 0.005 else debe_col
+                    else:
+                        importe = debe_col if abs(debe_col) > 0.005 else haber_col
+                else:
+                    importe = valores[0]
+
                 if abs(importe) < 0.005 or codigo in seen_codes:
                     continue
                 # El concepto debe pertenecer al balance, no a una frase posterior.
