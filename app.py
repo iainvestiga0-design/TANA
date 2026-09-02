@@ -1613,34 +1613,6 @@ def _deterministic_seed(value):
     return int.from_bytes(hashlib.sha256(raw).digest()[:4], "big") % 2147483647
 
 
-@st.cache_data(show_spinner=False, ttl=86400, max_entries=128)
-def _cached_json_extraction_from_text(document_text, model, api_key):
-    """Extracción compartida por práctica: misma fuente textual -> mismo JSON en todas las sesiones."""
-    client = get_gemini_client(api_key)
-    return _json_extraction_from_text(client, model, document_text)
-
-
-@st.cache_data(show_spinner=False, ttl=86400, max_entries=128)
-def _cached_opening_extraction_from_text(document_text, model, api_key):
-    """Extrae exclusivamente el balance inicial y lo comparte entre usuarios."""
-    client = get_gemini_client(api_key)
-    text = re.sub(r"\\s+", " ", str(document_text or "")).strip()
-    response = client.models.generate_content(
-        model=model,
-        contents=[OPENING_STATE_PROMPT + "\\n\\nTEXTO FUENTE COMPLETO:\\n" + text[:140000]],
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            temperature=0.0,
-            seed=_deterministic_seed("OPENING_STATE|" + text),
-        ),
-    )
-    extra = _parsear_respuesta_json_gemini(response.text or "{}")
-    estado = extra.get("estado_inicial", []) if isinstance(extra, dict) else []
-    if not _estado_inicial_es_verosimil(estado):
-        raise ValueError("La extracción determinista del balance inicial no pasó la validación estructural.")
-    return estado
-
-
 def extract_with_gemini(uploaded):
     profiles = get_gemini_profiles()
     if not profiles:
@@ -1679,16 +1651,9 @@ def extract_with_gemini(uploaded):
             for profile in profiles:
                 client = get_gemini_client(profile["api_key"])
                 try:
-                    data = _cached_json_extraction_from_text(local_text, profile["model"], profile["api_key"])
+                    data = _json_extraction_from_text(client, profile["model"], local_text)
                     if _extraction_has_content(data) and data.get("operaciones"):
-                        try:
-                            estado_verificado = _cached_opening_extraction_from_text(local_text, profile["model"], profile["api_key"])
-                            data = dict(data)
-                            data["estado_inicial"] = estado_verificado
-                            data["estado_inicial_fuente_verificada"] = True
-                        except Exception:
-                            # Si no existe balance inicial, se conserva la extracción general.
-                            pass
+                        data = _reforzar_estado_inicial_desde_texto(client, profile["model"], local_text, data)
                         return data
                     errors.append((profile["label"], profile["model"], ValueError("La extracción textual no identificó operaciones contables.")))
                 except Exception as exc:
@@ -3198,36 +3163,15 @@ def _detectar_empresas_monografia(monografia_json):
         if low not in {x.lower() for x in empresas}:
             empresas.append(v)
 
-    # IMPORTANTE: la cantidad de empresas es completamente dinámica.
-    # TANA NO asume 1, 2, 3, 16 ni ningún número fijo.
-    #
-    # Para evitar falsos positivos, no debemos convertir cualquier nombre que
-    # aparezca dentro de una operación en una "empresa". Primero usamos fuentes
-    # estructurales: lista explícita de empresas y balance(s) inicial(es).
-    explicit = [v for v in (data.get("empresas", []) or []) if v]
-    if explicit:
-        for value in explicit:
-            add(value)
-        return empresas
-
-    # El estado inicial es la segunda fuente de mayor confianza: si allí se
-    # identifican empresas, esas son las empresas cuyos libros deben separarse.
-    estado_empresas = []
-    for item in data.get("estado_inicial", []) or []:
-        if isinstance(item, dict) and item.get("empresa"):
-            estado_empresas.append(item.get("empresa"))
-    if estado_empresas:
-        for value in estado_empresas:
-            add(value)
-        return empresas
-
-    # Una empresa explícita a nivel superior.
+    # Fuente preferente: extracción explícita.
+    for value in data.get("empresas", []) or []:
+        add(value)
     add(data.get("empresa"))
-    if empresas:
-        return empresas
 
-    # Solo si no existe ninguna fuente estructural anterior, usamos operaciones
-    # y datos importantes como respaldo para detectar empresas participantes.
+    # Fuentes complementarias.
+    for item in data.get("estado_inicial", []) or []:
+        if isinstance(item, dict):
+            add(item.get("empresa"))
     for op in data.get("operaciones", []) or []:
         if isinstance(op, dict):
             add(op.get("empresa"))
@@ -3615,179 +3559,6 @@ def resolve_asientos_with_gemini():
     data.setdefault("_tana_gemini_model", profile["model"])
     return data, pcge_map
 
-
-def _reparar_y_completar_asientos(asientos, monografia_json, pcge_map):
-    """Segundo pase determinista del motor contable.
-
-    TANA primero obtiene los asientos con el motor principal. Este segundo pase
-    NO vuelve a desarrollar toda la práctica: solo busca dos problemas concretos:
-      1) operaciones extraídas que no tienen ningún asiento asociado;
-      2) asientos que no pasan la validación básica.
-
-    Para evitar que una respuesta diferente de Gemini cambie toda la práctica,
-    las solicitudes de reparación contienen únicamente la operación faltante o
-    el asiento inválido y se ejecutan con temperatura 0 + semilla determinista.
-    """
-    data = monografia_json or {}
-    ops = [op for op in (data.get("operaciones", []) or []) if isinstance(op, dict)]
-    current = [dict(a) for a in (asientos or []) if isinstance(a, dict)]
-    alerts = []
-
-    def opnum(v):
-        try:
-            return str(int(float(str(v).strip())))
-        except Exception:
-            return str(v or "").strip()
-
-    # ------------------------------------------------------------
-    # PASO 1: detectar operaciones que quedaron sin asiento.
-    # ------------------------------------------------------------
-    covered = set()
-    for a in current:
-        n = opnum(a.get("operacion_numero"))
-        if n and n != "0":
-            covered.add(n)
-
-    missing = [op for op in ops if opnum(op.get("numero")) and opnum(op.get("numero")) not in covered]
-
-    if missing:
-        pcge_5 = [[str(c).strip(), str(d)] for c, d in PCGE_DATA if re.fullmatch(r"\d{5}", str(c).strip())]
-        repair_prompt = f"""
-Eres el reparador determinista de asientos de TANA.
-
-La extracción de la práctica ya fue realizada. NO vuelvas a desarrollar toda la
-práctica y NO cambies los asientos existentes. Solo debes completar las operaciones
-que quedaron sin asiento.
-
-REGLAS:
-- Usa exclusivamente cuentas de 5 dígitos existentes en el PCGE adjunto.
-- Cada asiento debe cuadrar exactamente Debe = Haber.
-- Conserva la fecha, empresa y número de operación.
-- Si una operación realmente no genera asiento por una regla contable explícita,
-  inclúyela en "sin_asiento" con una explicación breve. No inventes un asiento.
-- Si la operación sí genera asiento, debes construirlo completo.
-- No cierres ni compenses cuentas contra 50 artificialmente.
-- Si hay destino por función, Elemento 9 en Debe y 79111 en Haber.
-- No modifiques ni dupliques los asientos existentes.
-
-OPERACIONES FALTANTES:
-{json.dumps(missing, ensure_ascii=False, indent=2)}
-
-ASIENTOS YA EXISTENTES (solo para contexto y evitar duplicados):
-{json.dumps(current, ensure_ascii=False, indent=2)[:30000]}
-
-PCGE:
-{json.dumps(pcge_5, ensure_ascii=False)}
-
-Devuelve SOLO JSON:
-{{
-  "asientos": [
-    {{
-      "numero": 0,
-      "empresa": "",
-      "fecha": "",
-      "glosa": "",
-      "documento": "",
-      "operacion_numero": 0,
-      "requiere_revision": false,
-      "observacion": "",
-      "lineas": [
-        {{"codigo":"12345","denominacion":"","debe":0.0,"haber":0.0,"concepto":""}}
-      ]
-    }}
-  ],
-  "sin_asiento": []
-}}
-"""
-        canonical = {"missing": missing, "practice": _canonicalize_for_hash(data)}
-        seed = _deterministic_seed(canonical)
-        response, _profile = _generate_with_fallback(
-            lambda _client: [repair_prompt],
-            types.GenerateContentConfig(response_mime_type="application/json", temperature=0.0, seed=seed),
-        )
-        rec = _parsear_respuesta_json_gemini(response.text or "{}")
-        nuevos = rec.get("asientos", []) if isinstance(rec, dict) else []
-        if isinstance(nuevos, list):
-            existing_keys = {(opnum(a.get("operacion_numero")), str(a.get("empresa") or "").strip().lower()) for a in current}
-            for a in nuevos:
-                if not isinstance(a, dict):
-                    continue
-                k = (opnum(a.get("operacion_numero")), str(a.get("empresa") or "").strip().lower())
-                if k[0] and k not in existing_keys and a.get("lineas"):
-                    current.append(a)
-                    existing_keys.add(k)
-        sin = rec.get("sin_asiento", []) if isinstance(rec, dict) else []
-        if sin:
-            alerts.extend([f"Operación sin asiento: {x}" for x in sin[:10]])
-
-    # ------------------------------------------------------------
-    # PASO 2: reparar únicamente los asientos que no validan.
-    # ------------------------------------------------------------
-    valid, errors, warnings = validate_asientos({"asientos": current}, pcge_map)
-    if errors:
-        invalid_nums = []
-        for err in errors:
-            m = re.search(r"Asiento\s+(\d+)", str(err), flags=re.IGNORECASE)
-            if m:
-                invalid_nums.append(m.group(1))
-        invalid_nums = list(dict.fromkeys(invalid_nums))
-        invalid = [a for a in current if str(a.get("numero", "")) in invalid_nums]
-        if invalid:
-            pcge_5 = [[str(c).strip(), str(d)] for c, d in PCGE_DATA if re.fullmatch(r"\d{5}", str(c).strip())]
-            repair_prompt = f"""
-Eres el reparador final de TANA. Corrige SOLO los asientos que fallaron la validación.
-No cambies asientos válidos y no agregues operaciones nuevas.
-
-ERRORES EXACTOS:
-{json.dumps(errors, ensure_ascii=False, indent=2)}
-
-ASIENTOS QUE FALLARON:
-{json.dumps(invalid, ensure_ascii=False, indent=2)}
-
-REGLAS:
-- Cuentas exclusivamente de 5 dígitos del PCGE.
-- Debe = Haber exactamente.
-- Conserva operación, fecha, empresa y glosa.
-- No cierres contra 50 artificialmente.
-- No inventes importes que no estén sustentados.
-- Devuelve un asiento corregido por cada asiento recibido.
-
-PCGE:
-{json.dumps(pcge_5, ensure_ascii=False)}
-
-Devuelve SOLO JSON:
-{{"asientos_corregidos": []}}
-"""
-            seed = _deterministic_seed({"errors": errors, "invalid": invalid, "practice": _canonicalize_for_hash(data)})
-            response, _profile = _generate_with_fallback(
-                lambda _client: [repair_prompt],
-                types.GenerateContentConfig(response_mime_type="application/json", temperature=0.0, seed=seed),
-            )
-            rec = _parsear_respuesta_json_gemini(response.text or "{}")
-            corrected = rec.get("asientos_corregidos", []) if isinstance(rec, dict) else []
-            by_num = {str(a.get("numero")): a for a in corrected if isinstance(a, dict) and a.get("numero") is not None}
-            if by_num:
-                for i, a in enumerate(current):
-                    n = str(a.get("numero", ""))
-                    if n in by_num:
-                        current[i] = by_num[n]
-
-    # ------------------------------------------------------------
-    # PASO 3: normalización final y validación final.
-    # ------------------------------------------------------------
-    for a in current:
-        if not isinstance(a, dict):
-            continue
-        for line in a.get("lineas", []) or []:
-            if not isinstance(line, dict):
-                continue
-            line["debe"] = round(max(_to_float(line.get("debe"), 0.0), 0.0), 2)
-            line["haber"] = round(max(_to_float(line.get("haber"), 0.0), 0.0), 2)
-
-    current = asegurar_cuenta_79_en_destinos(current, pcge_map)
-    valid, errors, warnings = validate_asientos({"asientos": current}, pcge_map)
-    return current, valid, errors, list(warnings) + alerts
-
 if "monografia_json" in st.session_state and "asientos_contables" not in st.session_state:
     with st.spinner("TANA está desarrollando y validando los asientos contables…"):
         try:
@@ -3815,37 +3586,6 @@ if "monografia_json" in st.session_state and "asientos_contables" not in st.sess
             empresas_detectadas = _detectar_empresas_monografia(mono_actual)
             aperturas = _construir_aperturas_por_empresa(mono_actual)
 
-            # El balance inicial es obligatorio cuando la monografía lo contiene.
-            # La cantidad de aperturas es DINÁMICA: una por cada empresa realmente
-            # identificada en el balance inicial. No se fija ningún número.
-            estado_inicial = mono_actual.get("estado_inicial", []) or []
-            if estado_inicial:
-                if empresas_detectadas:
-                    # Para varias empresas, cada empresa que tenga un balance inicial
-                    # debe recibir su propia apertura. No se exige una cantidad fija.
-                    empresas_con_estado = {
-                        _normalizar_nombre_empresa(x.get("empresa")).lower()
-                        for x in estado_inicial
-                        if isinstance(x, dict) and x.get("empresa")
-                    }
-                    empresas_con_apertura = {
-                        _normalizar_nombre_empresa(a.get("empresa")).lower()
-                        for a in aperturas
-                        if isinstance(a, dict) and a.get("empresa")
-                    }
-                    faltan_aperturas = sorted(empresas_con_estado - empresas_con_apertura)
-                    if faltan_aperturas:
-                        raise ValueError(
-                            "No se pudo construir el asiento de apertura para: "
-                            + ", ".join(faltan_aperturas)
-                            + ". TANA no generará un Excel incompleto."
-                        )
-                elif len(aperturas) != 1:
-                    raise ValueError(
-                        "Se detectó un balance inicial, pero TANA no pudo construir el asiento de apertura. "
-                        "No se generará el Excel hasta corregir la apertura."
-                    )
-
             asientos_sin_apertura = []
             for a in asientos_generados:
                 if not isinstance(a, dict):
@@ -3864,8 +3604,9 @@ if "monografia_json" in st.session_state and "asientos_contables" not in st.sess
                 asientos_sin_apertura.append(a)
 
             if len(empresas_detectadas) > 1:
-                # La cantidad de empresas es libre. Se agregan exactamente las
-                # aperturas que correspondan a las empresas detectadas en el estado inicial.
+                # Para una práctica con varias empresas, exigimos que cada empresa
+                # tenga su apertura determinista. Si una apertura no pudo construirse,
+                # dejamos una alerta explícita en lugar de inventar saldos.
                 if aperturas:
                     asientos_generados = aperturas + asientos_sin_apertura
                 else:
@@ -3905,26 +3646,11 @@ if "monografia_json" in st.session_state and "asientos_contables" not in st.sess
                     _linea["debe"] = round(max(_to_float(_linea.get("debe"), 0.0), 0.0), 2)
                     _linea["haber"] = round(max(_to_float(_linea.get("haber"), 0.0), 0.0), 2)
 
-            # Segundo pase: si Gemini omitió una operación o produjo un asiento
-            # inválido, TANA intenta reparar SOLO ese punto. Esto evita que una
-            # práctica de 16 operaciones termine con 14/15 asientos válidos.
-            asientos_generados, valid, errors, warnings_pase2 = _reparar_y_completar_asientos(
-                asientos_generados, mono_actual, pcge_map
-            )
-
-            # Si hubo una reparación, vuelve a aplicar bancos y destinos y valida
-            # por última vez antes de guardar el resultado.
-            operaciones_map = {str(op.get("numero")): op for op in (mono_actual.get("operaciones", []) or []) if isinstance(op, dict)}
-            for _a in asientos_generados:
-                if isinstance(_a, dict):
-                    _aplicar_banco_a_lineas_asiento(_a, operaciones_map.get(str(_a.get("operacion_numero")), {}))
-            asientos_generados = asegurar_cuenta_79_en_destinos(asientos_generados, pcge_map)
-            valid, errors, warnings_finales = validate_asientos({"asientos": asientos_generados}, pcge_map)
-
+            valid, errors, warnings = validate_asientos({"asientos": asientos_generados}, pcge_map)
             st.session_state["asientos_contables"] = asientos_generados
             st.session_state["asientos_validos"] = valid
             st.session_state["errores_asientos"] = errors
-            st.session_state["alertas_asientos"] = list(alertas_gemini) + list(warnings_pase2) + list(warnings_finales)
+            st.session_state["alertas_asientos"] = list(alertas_gemini) + list(warnings)
         except Exception as exc:
             st.error(f"No se pudieron desarrollar los asientos: {exc}")
             st.stop()
@@ -5189,31 +4915,21 @@ HT_DIF_ROW = r + 1
 ws6.cell(HT_DIF_ROW, 2, "DIFERENCIA / RESTA").font = BOLD
 ws6.cell(HT_DIF_ROW, 2).fill = PatternFill('solid', fgColor='FFF2CC')
 
-# DIFERENCIA DE CADA BLOQUE DE LA HT.
-# La fila de diferencia es INFORMATIVA: nunca se suma al TOTAL.
-# Se calcula directamente desde los TOTALES reales de la Hoja de Trabajo.
-for left_col, right_col in (
-    (3, 4),    # SUMA: Debe / Haber
-    (5, 6),    # SALDOS: Deudor / Acreedor
-    (7, 8),    # AJUSTES: Debe / Haber
-    (9, 10),   # SALDOS AJUSTADOS: Debe / Haber
-):
-    left = get_column_letter(left_col)
-    right = get_column_letter(right_col)
-    diff_formula = f'=ABS({left}{HT_TOTAL_ROW}-{right}{HT_TOTAL_ROW})'
-    ws6.cell(HT_DIF_ROW, left_col, diff_formula)
-    ws6.cell(HT_DIF_ROW, right_col, diff_formula)
+# Ajustes: deben cuadrar por sí mismos.
+ws6.cell(HT_DIF_ROW, 7, f'=ABS(G{HT_TOTAL_ROW}-H{HT_TOTAL_ROW})')
+ws6.cell(HT_DIF_ROW, 8, f'=ABS(G{HT_TOTAL_ROW}-H{HT_TOTAL_ROW})')
+# Saldos ajustados: misma lógica de diferencia visible.
+ws6.cell(HT_DIF_ROW, 9, f'=ABS(I{HT_TOTAL_ROW}-J{HT_TOTAL_ROW})')
+ws6.cell(HT_DIF_ROW, 10, f'=ABS(I{HT_TOTAL_ROW}-J{HT_TOTAL_ROW})')
 
-# Resultado por naturaleza: la diferencia se coloca EN EL LADO MENOR.
-# Haber > Debe = utilidad; Debe > Haber = pérdida.
+# Resultado por naturaleza: la diferencia se coloca en el lado menor.
 ws6.cell(HT_DIF_ROW, 11, f'=MAX(L{HT_TOTAL_ROW}-K{HT_TOTAL_ROW},0)')
 ws6.cell(HT_DIF_ROW, 12, f'=MAX(K{HT_TOTAL_ROW}-L{HT_TOTAL_ROW},0)')
-
-# Resultado por función: misma regla.
+# Resultado por función.
 ws6.cell(HT_DIF_ROW, 13, f'=MAX(N{HT_TOTAL_ROW}-M{HT_TOTAL_ROW},0)')
 ws6.cell(HT_DIF_ROW, 14, f'=MAX(M{HT_TOTAL_ROW}-N{HT_TOTAL_ROW},0)')
-
-# Estado de situación: la diferencia se coloca en el lado menor.
+# Estado de situación: si Activo > Pasivo+Patrimonio se muestra la diferencia
+# en el lado pasivo; si ocurre lo contrario, se muestra en activo.
 ws6.cell(HT_DIF_ROW, 15, f'=MAX(P{HT_TOTAL_ROW}-O{HT_TOTAL_ROW},0)')
 ws6.cell(HT_DIF_ROW, 16, f'=MAX(O{HT_TOTAL_ROW}-P{HT_TOTAL_ROW},0)')
 
@@ -5222,9 +4938,7 @@ for c in range(3, 19):
     ws6.cell(HT_DIF_ROW, c).fill = PatternFill('solid', fgColor='FFF2CC')
     ws6.cell(HT_DIF_ROW, c).font = BOLD
 
-# Distribución / ajustes: diferencia visible entre ambos lados.
-# También es informativa y no se suma al TOTAL.
-ws6.cell(HT_DIF_ROW, 17, f'=ABS(Q{HT_TOTAL_ROW}-R{HT_TOTAL_ROW})')
+# La línea de diferencia es informativa y no se vuelve a sumar al TOTAL.
 ws6.cell(HT_DIF_ROW, 18, f'=ABS(Q{HT_TOTAL_ROW}-R{HT_TOTAL_ROW})')
 
 ws6.freeze_panes = "A4"
