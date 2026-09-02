@@ -1062,17 +1062,72 @@ def _extraer_texto_estado_inicial(item):
     return str(item or "")
 
 
+def _extraer_lado_importe_estado_inicial(item):
+    """Extrae importe y lado (debe/haber) sin perder un Haber cuando Debe=0.
+
+    Gemini puede devolver una partida con ambas columnas, por ejemplo
+    {"debe": 0, "haber": 73002}. La versión anterior tomaba el primer valor
+    numérico (0) y descartaba toda la partida. Eso podía provocar falsos
+    descuadres en la apertura.
+    """
+    if not isinstance(item, dict):
+        return None, None
+
+    def num(v):
+        n = _to_float(v, None)
+        return None if n is None else abs(round(float(n), 2))
+
+    # 1) Si existen columnas Debe/Haber, respetarlas explícitamente.
+    debe = num(item.get("debe"))
+    haber = num(item.get("haber"))
+    if debe is not None and haber is not None:
+        if debe > 0.004 and haber > 0.004:
+            # Una partida no debería tener ambos lados; conservamos ambos como
+            # dato ambiguo para que el llamador pueda marcar revisión.
+            return None, "ambos"
+        if debe > 0.004:
+            return debe, "debe"
+        if haber > 0.004:
+            return haber, "haber"
+        return 0.0, None
+
+    # 2) Campo explícito de lado/naturaleza.
+    lado = str(
+        item.get("lado")
+        or item.get("naturaleza")
+        or item.get("tipo_saldo")
+        or item.get("tipo_saldo_contable")
+        or ""
+    ).strip().lower()
+    if lado:
+        if any(x in lado for x in ("haber", "acreedor", "acreedora")):
+            for k in ("importe", "saldo", "monto", "valor"):
+                n = num(item.get(k))
+                if n is not None:
+                    return n, "haber"
+        if any(x in lado for x in ("debe", "deudor", "deudora")):
+            for k in ("importe", "saldo", "monto", "valor"):
+                n = num(item.get(k))
+                if n is not None:
+                    return n, "debe"
+
+    # 3) Saldo negativo = Haber; positivo = Debe, salvo que la estructura
+    # indique otra cosa.
+    for k in ("importe", "saldo", "monto", "valor"):
+        if k in item:
+            raw = _to_float(item.get(k), None)
+            if raw is not None:
+                return abs(round(float(raw), 2)), ("haber" if raw < 0 else "debe")
+
+    return None, None
+
+
 def _extraer_importe_estado_inicial(item):
-    if isinstance(item, dict):
-        for k in ("importe", "saldo", "monto", "valor", "debe", "haber"):
-            n = _to_float(item.get(k), None)
-            if n is not None:
-                return n
-        # Buscar el primer número razonable en campos numéricos.
-        for v in item.values():
-            n = _to_float(v, None)
-            if n is not None and abs(n) > 0:
-                return n
+    """Compatibilidad: devuelve el importe sin perder valores de Haber."""
+    importe, _lado = _extraer_lado_importe_estado_inicial(item)
+    if importe is not None:
+        return importe
+
     # Caso texto: último número con formato monetario/simple.
     m = re.findall(r"[-+]?\d[\d,]*(?:\.\d+)?", str(item or ""))
     if m:
@@ -1207,7 +1262,10 @@ def _construir_asiento_apertura_determinista(monografia_json, _diag=None):
         # contables y nunca deben convertirse en una línea del asiento.
         if tipo_item.startswith("total") or "total activo" in _normalizar_texto_contable(texto) or "total pasivo" in _normalizar_texto_contable(texto) or "total patrimonio" in _normalizar_texto_contable(texto):
             continue
-        importe = _extraer_importe_estado_inicial(item)
+        importe, lado_explicito = _extraer_lado_importe_estado_inicial(item)
+        if lado_explicito == "ambos":
+            faltantes.append(texto + " (partida con Debe y Haber simultáneos; revisar)")
+            continue
         if importe is None or abs(float(importe)) < 0.005:
             continue
         codigo, desc = _cuenta_apertura_para_texto(
@@ -1226,7 +1284,18 @@ def _construir_asiento_apertura_determinista(monografia_json, _diag=None):
         # también deben ir al Haber cuando tengan saldo acreedor.
         es_pasivo_patrimonio = codigo.startswith(("4", "5"))
         line = {"codigo": codigo, "denominacion": desc, "debe": 0.0, "haber": 0.0, "concepto": texto.strip()}
-        if float(importe) < 0 or es_contra_activo or es_pasivo_patrimonio:
+        # Si la fuente entregó columnas Debe/Haber, ese dato prevalece sobre
+        # la clasificación por naturaleza de la cuenta. Esto es especialmente
+        # importante para cuentas con saldo acreedor y evita perder partidas
+        # como {"debe": 0, "haber": 73002}. Si no hay lado explícito, usamos
+        # la regla contable por naturaleza como respaldo.
+        if lado_explicito == "haber":
+            line["haber"] = monto
+            lineas_haber.append(line); sum_haber += monto
+        elif lado_explicito == "debe":
+            line["debe"] = monto
+            lineas_debe.append(line); sum_debe += monto
+        elif float(importe) < 0 or es_contra_activo or es_pasivo_patrimonio:
             line["haber"] = monto
             lineas_haber.append(line); sum_haber += monto
         else:
