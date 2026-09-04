@@ -1078,18 +1078,21 @@ def _extraer_lado_importe_estado_inicial(item):
         return None if n is None else abs(round(float(n), 2))
 
     # 1) Si existen columnas Debe/Haber, respetarlas explícitamente.
+    # IMPORTANTE: Gemini a veces devuelve debe=0 y haber=0 aunque sí haya
+    # colocado el saldo real en "importe". En ese caso NO debemos retornar
+    # 0.0 aquí porque eso hace perder la partida y después todo el saldo
+    # acreedor termina pareciendo un descuadre. Solo consideramos explícitas
+    # las columnas cuando al menos una contiene un importe distinto de cero.
     debe = num(item.get("debe"))
     haber = num(item.get("haber"))
     if debe is not None and haber is not None:
         if debe > 0.004 and haber > 0.004:
-            # Una partida no debería tener ambos lados; conservamos ambos como
-            # dato ambiguo para que el llamador pueda marcar revisión.
             return None, "ambos"
         if debe > 0.004:
             return debe, "debe"
         if haber > 0.004:
             return haber, "haber"
-        return 0.0, None
+        # Ambos son cero: continuar con importe/saldo y sección.
 
     # 2) Campo explícito de lado/naturaleza.
     lado = str(
@@ -1111,13 +1114,28 @@ def _extraer_lado_importe_estado_inicial(item):
                 if n is not None:
                     return n, "debe"
 
-    # 3) Saldo negativo = Haber; positivo = Debe, salvo que la estructura
-    # indique otra cosa.
+    # 3) Si la extracción trae una sección contable, esta es una señal válida
+    # para determinar el lado cuando "importe" viene sin signo. Esto evita que
+    # un pasivo/patrimonio (por ejemplo, 73,002) termine accidentalmente en Debe.
+    seccion = _normalizar_texto_contable(
+        " ".join(str(item.get(k) or "") for k in ("seccion", "tipo", "concepto", "descripcion"))
+    )
+    es_haber_por_seccion = any(x in seccion for x in (
+        "pasivo", "patrimonio", "capital", "utilidades acumuladas", "reserva legal",
+        "resultados acumulados", "cuentas por pagar", "prestamo por pagar",
+    )) and not any(x in seccion for x in ("activo corriente", "activo no corriente", "total activo"))
+
+    # 4) Saldo negativo = Haber; positivo = Debe, salvo que la sección indique
+    # claramente que se trata de pasivo/patrimonio.
     for k in ("importe", "saldo", "monto", "valor"):
         if k in item:
             raw = _to_float(item.get(k), None)
             if raw is not None:
-                return abs(round(float(raw), 2)), ("haber" if raw < 0 else "debe")
+                if raw < 0:
+                    return abs(round(float(raw), 2)), "haber"
+                if es_haber_por_seccion:
+                    return abs(round(float(raw), 2)), "haber"
+                return abs(round(float(raw), 2)), "debe"
 
     return None, None
 
@@ -1299,8 +1317,18 @@ def _construir_asiento_apertura_determinista(monografia_json, _diag=None):
             line["haber"] = monto
             lineas_haber.append(line); sum_haber += monto
         else:
-            line["debe"] = monto
-            lineas_debe.append(line); sum_debe += monto
+            # Respaldo final: una partida cuyo texto/sección dice PASIVO o
+            # PATRIMONIO nunca debe caer en Debe solo porque Gemini no llenó
+            # las columnas explícitas.
+            seccion_item = _normalizar_texto_contable(
+                " ".join(str(item.get(k) or "") for k in ("seccion", "tipo", "concepto", "descripcion"))
+            ) if isinstance(item, dict) else ""
+            if any(x in seccion_item for x in ("pasivo", "patrimonio", "capital", "utilidades acumuladas", "reserva legal")):
+                line["haber"] = monto
+                lineas_haber.append(line); sum_haber += monto
+            else:
+                line["debe"] = monto
+                lineas_debe.append(line); sum_debe += monto
 
     # NO hacemos "cuadres" creando 59111/59211 por diferencia. Si una partida
     # del balance inicial no fue reconocida, fabricar una cuenta de diferencia
