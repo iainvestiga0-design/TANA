@@ -2663,9 +2663,24 @@ def _extraer_apertura_determinista_desde_texto(document_text, data=None):
 
                 if abs(importe) < 0.005 or codigo in seen_codes:
                     continue
-                # El concepto debe pertenecer al balance, no a una frase posterior.
+                # El concepto debe pertenecer al balance, no a una frase posterior,
+                # y NO debe cruzar hacia la columna vecina (Activo | Pasivo y
+                # Patrimonio) cuando el extractor de texto aplanó una tabla de
+                # dos columnas en una sola línea. Antes se usaba una ventana fija
+                # de 25 caracteres hacia atrás, lo que cortaba palabras a la mitad
+                # ("Transferencia" -> "sferencia") y arrastraba el importe y la
+                # etiqueta de la columna anterior. Ahora usamos como límite real
+                # la última corrida de 2+ espacios (separador típico de columna
+                # en texto de PDF aplanado) antes del match, con 25 como tope
+                # máximo de todas formas para no acumular texto de más.
                 inicio_linea = tail.rfind("\n", 0, m.start()) + 1
-                concepto = tail[max(inicio_linea, m.start()-25):m.end()].strip().replace("\n", " ")
+                ventana_atras = tail[max(inicio_linea, m.start() - 60):m.start()]
+                m_col = re.search(r"  +(?=[^ ]*$)", ventana_atras)
+                if m_col:
+                    inicio_concepto = max(inicio_linea, m.start() - 60) + m_col.end()
+                else:
+                    inicio_concepto = max(inicio_linea, m.start() - 25)
+                concepto = tail[inicio_concepto:m.end()].strip().replace("\n", " ")
                 seen_codes.add(codigo)
                 claimed_spans.append((m.start(), m.end()))
                 result.append({
