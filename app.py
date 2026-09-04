@@ -2514,7 +2514,20 @@ def _extraer_apertura_determinista_desde_texto(document_text, data=None):
     text = str(document_text or "")
     if not text.strip():
         return []
-    lines = [re.sub(r"[ \t]+", " ", x).strip() for x in text.splitlines() if x.strip()]
+    # CRÍTICO: no colapsar tabuladores y espacios múltiples a uno solo.
+    # Muchos balances vienen en dos bloques por fila (Activo | Pasivo y
+    # Patrimonio) separados por tabuladores dentro de la misma línea de
+    # texto. Si se aplasta todo a un espacio, se pierde la frontera entre
+    # columnas y una partida termina "robando" el importe o el texto de
+    # su vecina en la misma fila. Aquí el tabulador (o cualquier corrida
+    # de 3+ espacios) se conserva como una frontera de columna detectable
+    # (exactamente 2 espacios); solo se colapsan espacios sueltos dentro
+    # de una misma etiqueta/celda.
+    def _preservar_columnas(x):
+        x = x.replace("\t", "  ")
+        x = re.sub(r" {3,}", "  ", x)
+        return x.strip()
+    lines = [_preservar_columnas(x) for x in text.splitlines() if x.strip()]
     full = "\n".join(lines)
     # Copia plegada (minúsculas, sin tildes) que conserva la MISMA longitud y
     # posiciones que `full`, para poder buscar en ella sin distinguir tildes
@@ -2612,19 +2625,27 @@ def _extraer_apertura_determinista_desde_texto(document_text, data=None):
             for m in re.finditer(r"(?i)" + pattern, tail_fold):
                 if _se_solapa(m.start(), m.end()):
                     continue
-                # Una tabla de balance suele venir como: CONCEPTO | DEBE | HABER.
-                # La versión anterior tomaba SOLO el primer número después del concepto.
-                # Eso destruye partidas acreedoras cuando el Debe es 0, por ejemplo:
-                #   Capital social   0   10,500
-                # porque encontraba 0 y descartaba toda la partida.
-                # Ahora leemos todos los importes de la misma línea (y, si no hay
-                # suficientes, de una pequeña ventana) y elegimos el lado correcto
-                # según la naturaleza de la cuenta.
+                # Una tabla de balance puede venir como CONCEPTO | DEBE | HABER
+                # (un solo bloque, dos columnas de importe para la misma
+                # partida) o como ACTIVO | PASIVO Y PATRIMONIO (dos bloques
+                # distintos e independientes en la misma fila). Para no
+                # cruzar hacia la partida vecina del segundo caso, primero
+                # intentamos leer SOLO la celda inmediata siguiente (hasta la
+                # próxima frontera de columna, 2+ espacios). Si esa celda no
+                # trae ningún número (p. ej. el patrón cortó antes de un
+                # calificador como "Sociales" en "Participaciones Sociales"),
+                # recién ahí ampliamos a toda la línea como respaldo.
                 linea_fin = tail.find("\n", m.end())
                 if linea_fin == -1:
                     linea_fin = min(len(tail), m.end() + 120)
-                ventana = tail[m.end():linea_fin]
-                numeros = list(num_re.finditer(ventana))
+                resto_linea = tail[m.end():linea_fin]
+                m_lead = re.match(r"  +", resto_linea)
+                resto_celda = resto_linea[m_lead.end():] if m_lead else resto_linea
+                m_bound = re.search(r"  +", resto_celda)
+                celda = resto_celda[:m_bound.start()] if m_bound else resto_celda
+                numeros = list(num_re.finditer(celda))
+                if not numeros:
+                    numeros = list(num_re.finditer(resto_linea))
                 if not numeros:
                     # Word/PDF antiguo puede colocar los importes en la línea siguiente.
                     ventana = tail[m.end():m.end()+100]
