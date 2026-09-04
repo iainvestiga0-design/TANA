@@ -1078,21 +1078,18 @@ def _extraer_lado_importe_estado_inicial(item):
         return None if n is None else abs(round(float(n), 2))
 
     # 1) Si existen columnas Debe/Haber, respetarlas explícitamente.
-    # IMPORTANTE: Gemini a veces devuelve debe=0 y haber=0 aunque sí haya
-    # colocado el saldo real en "importe". En ese caso NO debemos retornar
-    # 0.0 aquí porque eso hace perder la partida y después todo el saldo
-    # acreedor termina pareciendo un descuadre. Solo consideramos explícitas
-    # las columnas cuando al menos una contiene un importe distinto de cero.
     debe = num(item.get("debe"))
     haber = num(item.get("haber"))
     if debe is not None and haber is not None:
         if debe > 0.004 and haber > 0.004:
+            # Una partida no debería tener ambos lados; conservamos ambos como
+            # dato ambiguo para que el llamador pueda marcar revisión.
             return None, "ambos"
         if debe > 0.004:
             return debe, "debe"
         if haber > 0.004:
             return haber, "haber"
-        # Ambos son cero: continuar con importe/saldo y sección.
+        return 0.0, None
 
     # 2) Campo explícito de lado/naturaleza.
     lado = str(
@@ -1114,28 +1111,13 @@ def _extraer_lado_importe_estado_inicial(item):
                 if n is not None:
                     return n, "debe"
 
-    # 3) Si la extracción trae una sección contable, esta es una señal válida
-    # para determinar el lado cuando "importe" viene sin signo. Esto evita que
-    # un pasivo/patrimonio (por ejemplo, 73,002) termine accidentalmente en Debe.
-    seccion = _normalizar_texto_contable(
-        " ".join(str(item.get(k) or "") for k in ("seccion", "tipo", "concepto", "descripcion"))
-    )
-    es_haber_por_seccion = any(x in seccion for x in (
-        "pasivo", "patrimonio", "capital", "utilidades acumuladas", "reserva legal",
-        "resultados acumulados", "cuentas por pagar", "prestamo por pagar",
-    )) and not any(x in seccion for x in ("activo corriente", "activo no corriente", "total activo"))
-
-    # 4) Saldo negativo = Haber; positivo = Debe, salvo que la sección indique
-    # claramente que se trata de pasivo/patrimonio.
+    # 3) Saldo negativo = Haber; positivo = Debe, salvo que la estructura
+    # indique otra cosa.
     for k in ("importe", "saldo", "monto", "valor"):
         if k in item:
             raw = _to_float(item.get(k), None)
             if raw is not None:
-                if raw < 0:
-                    return abs(round(float(raw), 2)), "haber"
-                if es_haber_por_seccion:
-                    return abs(round(float(raw), 2)), "haber"
-                return abs(round(float(raw), 2)), "debe"
+                return abs(round(float(raw), 2)), ("haber" if raw < 0 else "debe")
 
     return None, None
 
@@ -1302,33 +1284,37 @@ def _construir_asiento_apertura_determinista(monografia_json, _diag=None):
         # también deben ir al Haber cuando tengan saldo acreedor.
         es_pasivo_patrimonio = codigo.startswith(("4", "5"))
         line = {"codigo": codigo, "denominacion": desc, "debe": 0.0, "haber": 0.0, "concepto": texto.strip()}
-        # Si la fuente entregó columnas Debe/Haber, ese dato prevalece sobre
-        # la clasificación por naturaleza de la cuenta. Esto es especialmente
-        # importante para cuentas con saldo acreedor y evita perder partidas
-        # como {"debe": 0, "haber": 73002}. Si no hay lado explícito, usamos
-        # la regla contable por naturaleza como respaldo.
-        if lado_explicito == "haber":
+        # CRÍTICO: para un balance inicial, la sección/naturaleza contable es
+        # más fiable que columnas Debe/Haber generadas por Gemini. Gemini puede
+        # confundir las dos columnas cuando el documento tiene una tabla de dos
+        # bloques (Activo a la izquierda y Pasivo/Patrimonio a la derecha).
+        # Por ello: Elemento 4/5 => Haber; contra-activo => Haber; Activo => Debe.
+        # Solo usamos el lado explícito de Gemini cuando no podemos determinar
+        # la naturaleza de la cuenta.
+        seccion = _normalizar_texto_contable(
+            item.get("seccion", "") if isinstance(item, dict) else ""
+        )
+        if es_contra_activo:
+            line["haber"] = monto
+            lineas_haber.append(line); sum_haber += monto
+        elif es_pasivo_patrimonio or any(x in seccion for x in ("pasivo", "patrimonio")):
+            line["haber"] = monto
+            lineas_haber.append(line); sum_haber += monto
+        elif any(x in seccion for x in ("activo",)):
+            line["debe"] = monto
+            lineas_debe.append(line); sum_debe += monto
+        elif lado_explicito == "haber":
             line["haber"] = monto
             lineas_haber.append(line); sum_haber += monto
         elif lado_explicito == "debe":
             line["debe"] = monto
             lineas_debe.append(line); sum_debe += monto
-        elif float(importe) < 0 or es_contra_activo or es_pasivo_patrimonio:
+        elif float(importe) < 0:
             line["haber"] = monto
             lineas_haber.append(line); sum_haber += monto
         else:
-            # Respaldo final: una partida cuyo texto/sección dice PASIVO o
-            # PATRIMONIO nunca debe caer en Debe solo porque Gemini no llenó
-            # las columnas explícitas.
-            seccion_item = _normalizar_texto_contable(
-                " ".join(str(item.get(k) or "") for k in ("seccion", "tipo", "concepto", "descripcion"))
-            ) if isinstance(item, dict) else ""
-            if any(x in seccion_item for x in ("pasivo", "patrimonio", "capital", "utilidades acumuladas", "reserva legal")):
-                line["haber"] = monto
-                lineas_haber.append(line); sum_haber += monto
-            else:
-                line["debe"] = monto
-                lineas_debe.append(line); sum_debe += monto
+            line["debe"] = monto
+            lineas_debe.append(line); sum_debe += monto
 
     # NO hacemos "cuadres" creando 59111/59211 por diferencia. Si una partida
     # del balance inicial no fue reconocida, fabricar una cuenta de diferencia
@@ -2221,11 +2207,6 @@ REGLAS CRÍTICAS:
 - Si junto a una partida aparece un código de cuenta de 5 dígitos, consérvalo en "codigo"
   exactamente como aparece. NO inventes un código si no aparece.
 - Conserva exactamente el importe que aparece junto a cada partida.
-- Si la tabla presenta columnas DEBE y HABER, copia ambas columnas en "debe" y "haber".
-  No interpretes un 0 como ausencia de la segunda columna: por ejemplo, "0 | 242000"
-  significa debe=0 y haber=242000.
-- Si la fuente no presenta columnas DEBE/HABER separadas, deja debe=0 y haber=0 y usa
-  "importe" con su signo original.
 - Si el texto dice Banco de la Nación, Banco de Crédito del Perú/BCP, Interbank,
   Scotiabank, BBVA u otro banco, conserva el nombre exacto.
 - Conserva también las cuentas de pasivo y patrimonio por separado.
@@ -2248,8 +2229,6 @@ Devuelve SOLO JSON válido:
       "concepto": "",
       "codigo": "",
       "importe": 0,
-      "debe": 0,
-      "haber": 0,
       "signo": "positivo|negativo",
       "tipo": "partida|contra_activo|total_activo|total_pasivo|total_patrimonio|total_pasivo_patrimonio",
       "banco": ""
@@ -2326,7 +2305,7 @@ def _reforzar_estado_inicial_desde_texto(client, model, document_text, data):
     Se usa como segunda barrera para evitar que una extracción general arrastre
     importes de otro ejercicio o consolide varias partidas del balance.
     """
-    text = re.sub(r"\s+", " ", str(document_text or "")).strip()
+    text = str(document_text or "").strip()
     if len(text) < 120:
         return data
     try:
@@ -2438,20 +2417,15 @@ def _normalizar_empresas_estado_inicial(estado, data=None):
 
 
 def _cached_opening_extraction_from_text(document_text, model, api_key):
-    """Extrae el balance inicial conservando la estructura de filas del documento.
+    """Extrae el balance inicial usando la ruta solicitada y conserva una copia estable.
 
-    IMPORTANTE: no se deben colapsar los saltos de línea de un balance tabular.
-    Al convertir toda la tabla en una sola línea, los importes de filas vecinas
-    pueden quedar asociados a la cuenta equivocada (especialmente capital,
-    pasivos y patrimonio). La apertura debe recibir el texto con sus filas intactas.
+    La función mantiene la misma entrada/salida para Creador y Estudiante, pero no
+    permite que un modelo de respaldo con una lectura parcial destruya una extracción
+    completa: si la respuesta es estructuralmente suficiente se devuelve; de lo
+    contrario se intenta una segunda lectura dirigida.
     """
     client = get_gemini_client(api_key)
-    raw_text = str(document_text or "")
-    text = "\n".join(
-        re.sub(r"[ \\t]+", " ", line).strip()
-        for line in raw_text.splitlines()
-        if line.strip()
-    ).strip()
+    text = str(document_text or "").strip()
     response = client.models.generate_content(
         model=model,
         contents=[OPENING_STATE_PROMPT + "\n\nTEXTO FUENTE COMPLETO:\n" + text[:140000]],
@@ -2651,119 +2625,66 @@ def _extraer_apertura_determinista_desde_texto(document_text, data=None):
     return result
 
 def _extraer_apertura_con_todas_las_rutas(document_text, data):
-    """Obtiene la lectura más fiable del balance inicial.
+    """Obtiene la mejor lectura del balance inicial disponible en TODOS los perfiles.
 
-    Se evalúan las rutas Gemini y una ruta determinista basada en el texto fuente.
-    La selección ya no se hace únicamente por cantidad de partidas: se prioriza
-    la extracción que realmente cuadra por empresa. Esto evita aceptar una lectura
-    que, aunque tenga muchas líneas, haya perdido capital/pasivos o haya mezclado
-    importes entre empresas.
+    Esto es importante en producción: Creador y Estudiante pueden llegar a una ruta
+    Gemini distinta por cuota/modelo. La práctica no debe cambiar por el rol.
     """
-    raw_text = str(document_text or "")
-    if len(raw_text.strip()) < 80:
+    text = str(document_text or "").strip()
+    if len(text) < 80:
         return data
-
-    def _key_empresa(v):
-        s = _normalizar_nombre_empresa(v).lower()
-        s = _plegar_acentos_minusculas(s)
-        return re.sub(r"[^a-z0-9]+", " ", s).strip()
-
-    def _score_estado(estado):
-        if not isinstance(estado, list) or not estado:
-            return (-999999, -999999, -999999)
-
-        # Normalizamos empresa sin modificar el contenido de la partida.
-        estado_norm = _normalizar_empresas_estado_inicial(estado, data or {})
-        por_empresa = {}
-        for item in estado_norm:
-            if not isinstance(item, dict):
-                continue
-            emp = _key_empresa(item.get("empresa"))
-            if not emp:
-                continue
-            tipo = str(item.get("tipo") or "").strip().lower()
-            if tipo.startswith("total") or "total" in _normalizar_texto_contable(str(item.get("seccion") or "")):
-                continue
-            importe, lado = _extraer_lado_importe_estado_inicial(item)
-            if importe is None or lado == "ambos":
-                continue
-            codigo, _desc = _cuenta_apertura_para_texto(
-                _extraer_texto_estado_inicial(item),
-                item.get("codigo"),
-                item.get("empresa") or (data or {}).get("empresa"),
-            )
-            if not codigo:
-                # No penalizamos una partida que Gemini no haya codificado aquí;
-                # sí contamos el importe para detectar si la lectura está incompleta.
-                continue
-            monto = abs(round(float(importe), 2))
-            es_contra = codigo.startswith("39")
-            es_pasivo_pat = codigo.startswith(("4", "5"))
-            if lado == "haber" or (lado is None and (es_contra or es_pasivo_pat)):
-                d, h = 0.0, monto
-            elif lado == "debe":
-                d, h = monto, 0.0
-            else:
-                d, h = 0.0, monto if (es_contra or es_pasivo_pat) else 0.0
-                if not (es_contra or es_pasivo_pat):
-                    d = monto
-            por_empresa.setdefault(emp, [0.0, 0.0, 0])
-            por_empresa[emp][0] += d
-            por_empresa[emp][1] += h
-            por_empresa[emp][2] += 1
-
-        if not por_empresa:
-            return (-999999, -999999, -999999)
-
-        # Penalización fuerte al descuadre; después preferimos más partidas.
-        diferencias = [abs(round(v[0] - v[1], 2)) for v in por_empresa.values()]
-        total_diff = round(sum(diferencias), 2)
-        empresas_cuadradas = sum(1 for d in diferencias if d <= 0.009)
-        partidas = sum(v[2] for v in por_empresa.values())
-
-        # Primer componente: cuántas empresas cuadran.
-        # Segundo: diferencia total (negativa para minimizarla).
-        # Tercero: cantidad de partidas reconocidas.
-        return (empresas_cuadradas, -total_diff, partidas)
 
     candidatos = []
     errores = []
-
-    # 1) Ruta determinista: no depende de otra llamada Gemini y conserva las filas.
-    try:
-        estado_det = _extraer_apertura_determinista_desde_texto(raw_text, data)
-        if estado_det:
-            candidatos.append(("texto_fuente", estado_det))
-    except Exception as exc:
-        errores.append("texto_fuente: " + str(exc))
-
-    # 2) Rutas Gemini especializadas.
     for profile in get_gemini_profiles():
         try:
-            estado = _cached_opening_extraction_from_text(raw_text, profile["model"], profile["api_key"])
-            if _estado_inicial_es_verosimil(estado):
-                candidatos.append((profile["label"], estado))
+            estado = _cached_opening_extraction_from_text(text, profile["model"], profile["api_key"])
+            empresas = {str(x.get("empresa") or "").strip().lower() for x in estado if isinstance(x, dict) and x.get("empresa")}
+            partidas = sum(1 for x in estado if isinstance(x, dict) and str(x.get("tipo") or "").lower() in {"partida", "contra_activo"})
+            # Medimos si las partidas realmente reproducen los totales que Gemini
+            # extrajo del mismo documento. Una lectura con muchas partidas pero
+            # importes cruzados no debe ganar a una lectura que conserva el balance.
+            error_totales = 0.0
+            por_emp = {}
+            for x in estado:
+                if not isinstance(x, dict):
+                    continue
+                emp = str(x.get("empresa") or "").strip().lower()
+                por_emp.setdefault(emp, {"a":0.0,"p":0.0,"ta":None,"tp":None})
+                tipo = str(x.get("tipo") or "").lower()
+                val = abs(_to_float(x.get("importe"), 0.0))
+                if tipo in {"partida", "contra_activo"}:
+                    if str(x.get("seccion") or "").upper().startswith("ACTIVO"):
+                        if tipo == "contra_activo" or _to_float(x.get("importe"),0.0) < 0:
+                            por_emp[emp]["a"] -= val
+                        else:
+                            por_emp[emp]["a"] += val
+                    elif str(x.get("seccion") or "").upper().startswith(("PASIVO","PATRIMONIO")):
+                        por_emp[emp]["p"] += val
+                elif tipo == "total_activo":
+                    por_emp[emp]["ta"] = val
+                elif tipo in {"total_pasivo_patrimonio","total_pasivo","total_patrimonio"}:
+                    por_emp[emp]["tp"] = (por_emp[emp]["tp"] or 0.0) + val
+            for q in por_emp.values():
+                if q["ta"] is not None:
+                    error_totales += abs(q["a"] - q["ta"])
+                if q["tp"] is not None:
+                    error_totales += abs(q["p"] - q["tp"])
+            candidatos.append((len(empresas), -round(error_totales,2), partidas, estado))
         except Exception as exc:
-            errores.append(f"{profile.get('label', profile.get('model', 'Gemini'))}: {exc}")
+            errores.append(str(exc))
 
     if not candidatos:
         return data
 
-    candidatos_scored = []
-    for etiqueta, estado in candidatos:
-        candidatos_scored.append((_score_estado(estado), etiqueta, estado))
+    # Primero exigimos empresas correctas, después la menor diferencia contra
+    # los totales del propio balance y recién después la cantidad de partidas.
+    candidatos.sort(key=lambda x: (x[0], x[1], x[2]), reverse=True)
+    mejor = candidatos[0][3]
 
-    candidatos_scored.sort(key=lambda x: x[0], reverse=True)
-    _score, _etiqueta, mejor = candidatos_scored[0]
-
-    # Si el texto fuente determinista cuadra y una ruta Gemini no, la fuente
-    # determinista gana por ser una lectura directa del documento.
-    for score, etiqueta, estado in candidatos_scored:
-        if etiqueta == "texto_fuente" and score[0] >= 1 and score[1] == 0:
-            mejor = estado
-            break
-
-    # Completa empresa únicamente cuando la coincidencia sea inequívoca.
+    # Si la extracción especializada omitió la empresa de alguna partida, usamos
+    # las etiquetas que ya existan en la extracción general cuando el concepto y
+    # el importe coinciden. No cambiamos importes ni inventamos líneas.
     general = (data or {}).get("estado_inicial", []) or []
     if general:
         por_clave = {}
@@ -2790,6 +2711,7 @@ def _extraer_apertura_con_todas_las_rutas(document_text, data):
     out["estado_inicial"] = _normalizar_empresas_estado_inicial(mejor, out)
     out["estado_inicial_fuente_verificada"] = True
     return out
+
 
 def extract_with_gemini(uploaded):
     profiles = get_gemini_profiles()
