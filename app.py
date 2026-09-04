@@ -1378,6 +1378,17 @@ def _construir_asiento_apertura_determinista(monografia_json, _diag=None):
                 "haber": round(sum_haber, 2),
                 "diferencia": round(sum_debe - sum_haber, 2),
                 "partidas_recibidas": len(_auditar_estado_inicial(estado)),
+                # NUEVO: detalle línea por línea (cuenta, concepto, lado, monto)
+                # para poder ver EXACTAMENTE qué partida quedó mal clasificada,
+                # en vez de solo el total descuadrado.
+                "lineas_debe": [
+                    {"codigo": l["codigo"], "concepto": l["concepto"], "monto": l["debe"]}
+                    for l in lineas_debe
+                ],
+                "lineas_haber": [
+                    {"codigo": l["codigo"], "concepto": l["concepto"], "monto": l["haber"]}
+                    for l in lineas_haber
+                ],
             })
         return None
 
@@ -4539,9 +4550,18 @@ def _formatear_diagnostico_apertura(diag_items):
                 + (" y otras" if len(items) > 5 else "")
             )
         elif motivo == "descuadre":
+            detalle_lineas = ""
+            deb = d.get("lineas_debe") or []
+            hab = d.get("lineas_haber") or []
+            if deb or hab:
+                fmt = lambda l: f"{l.get('codigo')} {l.get('concepto')} = S/ {l.get('monto')}"
+                detalle_lineas = (
+                    " [Debe: " + "; ".join(fmt(l) for l in deb) + "]"
+                    + " [Haber: " + "; ".join(fmt(l) for l in hab) + "]"
+                )
             partes.append(
                 f"el balance inicial no cuadra (Debe S/ {d.get('debe')} vs Haber S/ {d.get('haber')}, "
-                f"diferencia S/ {d.get('diferencia')})"
+                f"diferencia S/ {d.get('diferencia')}){detalle_lineas}"
             )
         elif motivo == "faltan_lineas_debe_o_haber":
             partes.append("faltan partidas de activo o de pasivo/patrimonio en el balance inicial")
@@ -4549,7 +4569,11 @@ def _formatear_diagnostico_apertura(diag_items):
             partes.append("no se encontró un balance inicial para esta empresa")
         else:
             partes.append(str(motivo or "motivo no especificado"))
-    return "; ".join(partes) if partes else "TANA no pudo identificar el motivo exacto; revisa el balance inicial de esta empresa"
+    # Deduplicar: los dos intentos de extracción (principal y de respaldo por
+    # texto) pueden fallar por la misma razón exacta; mostrarlo una sola vez
+    # evita el mensaje duplicado que confundía el diagnóstico.
+    partes_unicas = list(dict.fromkeys(partes))
+    return "; ".join(partes_unicas) if partes_unicas else "TANA no pudo identificar el motivo exacto; revisa el balance inicial de esta empresa"
 
 
 def _construir_aperturas_por_empresa(monografia_json, _diag_por_empresa=None):
