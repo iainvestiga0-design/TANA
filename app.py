@@ -1082,14 +1082,18 @@ def _extraer_lado_importe_estado_inicial(item):
     haber = num(item.get("haber"))
     if debe is not None and haber is not None:
         if debe > 0.004 and haber > 0.004:
-            # Una partida no debería tener ambos lados; conservamos ambos como
-            # dato ambiguo para que el llamador pueda marcar revisión.
+            # Si Gemini realmente puso un importe en ambas columnas, no podemos
+            # decidir el lado solo con esos dos campos. Lo marcamos como ambiguo.
             return None, "ambos"
         if debe > 0.004:
             return debe, "debe"
         if haber > 0.004:
             return haber, "haber"
-        return 0.0, None
+        # MUY IMPORTANTE: Gemini puede devolver SIEMPRE las claves debe/haber
+        # con valor 0 aunque el importe real esté en `importe` y el lado esté
+        # indicado por `seccion`/`signo`. NO devolver 0 aquí: debemos continuar
+        # con las reglas de naturaleza y luego leer `importe`. Esta era la causa
+        # de perder partidas completas del Haber y del Debe.
 
     # 2) Campo explícito de lado/naturaleza.
     lado = str(
@@ -1111,8 +1115,23 @@ def _extraer_lado_importe_estado_inicial(item):
                 if n is not None:
                     return n, "debe"
 
-    # 3) Saldo negativo = Haber; positivo = Debe, salvo que la estructura
-    # indique otra cosa.
+    # 3) Si no vino lado explícito, usar la sección del balance. Esto es más
+    # confiable que el signo cuando Gemini devuelve `importe` positivo para
+    # todas las partidas.
+    seccion = _normalizar_texto_contable(item.get("seccion") or "")
+    tipo = _normalizar_texto_contable(item.get("tipo") or "")
+    if "pasivo" in seccion or "patrimonio" in seccion or "contraactivo" in tipo or "contra activo" in tipo:
+        for k in ("importe", "saldo", "monto", "valor"):
+            n = num(item.get(k))
+            if n is not None:
+                return n, "haber"
+    if "activo" in seccion:
+        for k in ("importe", "saldo", "monto", "valor"):
+            n = num(item.get(k))
+            if n is not None:
+                return n, "debe"
+
+    # 4) Último respaldo: saldo negativo = Haber; positivo = Debe.
     for k in ("importe", "saldo", "monto", "valor"):
         if k in item:
             raw = _to_float(item.get(k), None)
@@ -1236,6 +1255,32 @@ def _cuenta_apertura_para_texto(texto, codigo_explicito=None, empresa_nombre=Non
     return None, None
 
 
+def _auditar_estado_inicial(estado):
+    """Devuelve un resumen de lo que TANA realmente recibió para la apertura.
+
+    Se usa solo para diagnóstico: no modifica importes ni crea cuentas. Ayuda a
+    distinguir entre un balance correcto y una extracción incompleta de Gemini.
+    """
+    resumen = []
+    for item in estado or []:
+        if not isinstance(item, dict):
+            continue
+        texto = _extraer_texto_estado_inicial(item).strip()
+        if not texto:
+            continue
+        resumen.append({
+            "empresa": str(item.get("empresa") or ""),
+            "seccion": str(item.get("seccion") or ""),
+            "tipo": str(item.get("tipo") or ""),
+            "concepto": texto[:100],
+            "importe": item.get("importe"),
+            "debe": item.get("debe"),
+            "haber": item.get("haber"),
+            "signo": item.get("signo"),
+        })
+    return resumen
+
+
 def _construir_asiento_apertura_determinista(monografia_json, _diag=None):
     """Construye un único asiento de apertura desde el estado inicial, sin cerrar a 50.
 
@@ -1332,6 +1377,7 @@ def _construir_asiento_apertura_determinista(monografia_json, _diag=None):
                 "debe": round(sum_debe, 2),
                 "haber": round(sum_haber, 2),
                 "diferencia": round(sum_debe - sum_haber, 2),
+                "partidas_recibidas": len(_auditar_estado_inicial(estado)),
             })
         return None
 
