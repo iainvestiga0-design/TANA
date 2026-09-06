@@ -600,79 +600,11 @@ with st.sidebar:
 
 
 # ============================================================
-# CONTROL DE ACCESO DEL ESTUDIANTE — PASE DE 24 HORAS
+# ACCESO DEL ESTUDIANTE — GRATUITO
 # ============================================================
-# El creador entra siempre. Los estudiantes necesitan un pase vigente.
-if user_role != "Creador":
-    access_expires = _get_student_access_expires(user_email)
-    access_active = bool(access_expires and access_expires > datetime.now(timezone.utc))
-
-    if not access_active:
-        st.markdown("## 🔒 Pase TANA de 24 horas")
-        st.info("Tu acceso de estudiante requiere un pase de S/1.00 por 24 horas.")
-
-        if "tana_codigo_operacion_registrado" not in st.session_state:
-            st.session_state.tana_codigo_operacion_registrado = None
-
-        if not st.session_state.tana_codigo_operacion_registrado:
-            st.write("1. Abre Yape.")
-            st.write("2. Envía exactamente **S/1.00** al número indicado por tu profesor/administrador.")
-            st.write("3. Copia el **Código de operación** que te muestra el comprobante de Yape.")
-            st.write("4. Pégalo abajo para registrar tu pago.")
-
-            codigo_ingresado = st.text_input(
-                "Código de operación de tu Yape",
-                placeholder="Ej: 000482913",
-                key="tana_codigo_operacion_input",
-            )
-
-            if st.button("📥 Registrar código y verificar pago", use_container_width=True, type="primary"):
-                if not user_email:
-                    st.error("No se pudo registrar el código.")
-                    st.caption("Detalle técnico: tu sesión no tiene un correo asociado (user_email vacío).")
-                elif not SUPABASE_URL:
-                    st.error("No se pudo registrar el código.")
-                    st.caption("Detalle técnico: el secret SUPABASE_URL está vacío o no existe en esta app.")
-                elif not SUPABASE_KEY:
-                    st.error("No se pudo registrar el código.")
-                    st.caption("Detalle técnico: el secret SUPABASE_SERVICE_ROLE_KEY está vacío o no existe en esta app.")
-                elif not codigo_ingresado.strip():
-                    st.error("Escribe el código de operación que te dio Yape.")
-                else:
-                    codigo_ok, error_msg = _registrar_codigo_operacion(user_email, codigo_ingresado)
-                    if codigo_ok:
-                        st.session_state.tana_codigo_operacion_registrado = codigo_ok
-                        st.rerun()
-                    else:
-                        st.error(error_msg or "No se pudo registrar el código.")
-                        _detail = st.session_state.get("_tana_last_supabase_error")
-                        if _detail:
-                            st.caption(f"Detalle técnico: {_detail}")
-        else:
-            codigo_actual = st.session_state.tana_codigo_operacion_registrado
-            st.markdown(f"### Código de operación registrado: `{codigo_actual}`")
-            st.caption("Esperando la confirmación de la recepción del pago.")
-
-            if st.button("🔄 Verificar pago", use_container_width=True, type="primary"):
-                payment = _payment_confirmed_for_code(user_email, codigo_actual)
-                if payment:
-                    _mark_payment_code_paid(codigo_actual, payment.get("id"))
-                    expires = _activate_access_24h(user_email)
-                    if expires:
-                        st.success(f"✅ Pago confirmado. Tu acceso está activo hasta {expires.astimezone().strftime('%d/%m/%Y %H:%M') }.")
-                        st.session_state.tana_codigo_operacion_registrado = None
-                        st.rerun()
-                    else:
-                        st.error("El pago fue encontrado, pero no se pudo activar el acceso. Revisa la configuración de Supabase.")
-                else:
-                    st.warning("⏳ Todavía no encontramos la confirmación de este pago. Espera unos segundos y vuelve a intentar.")
-
-            if st.button("♻️ Usar otro código de operación", use_container_width=True):
-                st.session_state.tana_codigo_operacion_registrado = None
-                st.rerun()
-
-        st.stop()
-
+# Los estudiantes pueden entrar directamente después de autenticarse.
+# Se elimina únicamente el requisito de pago/Yape para estudiantes.
+# El registro de usuarios y el panel del creador se mantienen intactos.
 
 # ============================================================
 # PANEL EXCLUSIVO DEL CREADOR — LISTADO DE USUARIOS
