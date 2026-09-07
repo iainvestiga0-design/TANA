@@ -1945,11 +1945,22 @@ def _extract_pdf_text_local(path):
 
 
 def _extract_legacy_doc_text_local(path):
-    """Extrae texto de Word antiguo .doc usando antiword cuando está disponible.
+    """Extrae texto de Word antiguo .doc de forma local, probando primero
+    LibreOffice (si está disponible en el servidor) y usando antiword como
+    respaldo.
 
-    Gemini puede aceptar application/msword en algunas rutas, pero para .doc
-    antiguo es mucho más estable convertirlo primero a texto plano localmente.
+    Se prueba LibreOffice primero porque, a diferencia de `antiword -t`,
+    conserva mucho mejor las columnas de las tablas de un balance (Activos |
+    Pasivo y Patrimonio Neto): antiword las aplana usando espacios variables
+    según el ancho visual original del documento, lo que en la práctica
+    desalinea las columnas y hace que el extractor determinista del balance
+    lea un importe o un concepto de la celda vecina. LibreOffice conserva
+    tabuladores reales entre columnas, que es justamente lo que el extractor
+    de balances usa como frontera de columna.
     """
+    text = _extract_legacy_doc_text_libreoffice(path)
+    if text.strip():
+        return text
     try:
         proc = subprocess.run(
             ["antiword", "-t", path],
@@ -1966,6 +1977,39 @@ def _extract_legacy_doc_text_local(path):
     if proc.returncode != 0 and not text:
         return ""
     return text
+
+
+def _extract_legacy_doc_text_libreoffice(path):
+    """Convierte un .doc a texto plano usando LibreOffice (`soffice --headless
+    --convert-to txt`), si el binario está disponible en el servidor. Devuelve
+    "" (sin lanzar excepción) si LibreOffice no está instalado o falla, para
+    que el llamador pueda recurrir a antiword sin interrumpir la extracción.
+    """
+    soffice_bin = shutil.which("soffice") or shutil.which("libreoffice")
+    if not soffice_bin:
+        return ""
+    tmp_dir = tempfile.mkdtemp(prefix="tana_doc_")
+    try:
+        proc = subprocess.run(
+            [
+                soffice_bin, "--headless", "--norestore",
+                "--convert-to", "txt:Text",
+                "--outdir", tmp_dir, path,
+            ],
+            capture_output=True, text=True, timeout=60, check=False,
+        )
+        if proc.returncode != 0:
+            return ""
+        base = os.path.splitext(os.path.basename(path))[0]
+        out_path = os.path.join(tmp_dir, base + ".txt")
+        if not os.path.exists(out_path):
+            return ""
+        with open(out_path, "r", encoding="utf-8", errors="replace") as f:
+            return f.read().strip()
+    except (subprocess.SubprocessError, OSError, Exception):
+        return ""
+    finally:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 LEGACY_OPERATION_RESCUE_PROMPT = """
