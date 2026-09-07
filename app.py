@@ -89,6 +89,19 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
+# Definido aquí arriba (antes de dibujar nada más) para poder usar el logo
+# tanto en la insignia fija superior derecha como en la pantalla de
+# bienvenida y la barra lateral, sin recalcular la ruta varias veces.
+LOGO_PATH = os.path.join(os.path.dirname(__file__), "LOGO TANA.png")
+if not os.path.exists(LOGO_PATH):
+    LOGO_PATH = os.path.join(os.path.dirname(__file__), "LOGO TANA.jpg")
+_LOGO_B64 = None
+if os.path.exists(LOGO_PATH):
+    try:
+        _LOGO_B64 = __import__("base64").b64encode(open(LOGO_PATH, "rb").read()).decode()
+    except Exception:
+        _LOGO_B64 = None
+
 # ============================================================
 # AUTENTICACIÓN PÚBLICA DE TANA — GOOGLE OIDC
 # ============================================================
@@ -585,12 +598,23 @@ else:
     initial = (email_local[:1] or "E").upper()
     role_label = f"👤 Estudiante · {initial}"
 
-# Se muestra discretamente en la zona principal, sin llenar la interfaz.
+# Insignia FIJA en la esquina superior derecha: logo de TANA + rol del
+# usuario. Usa position:fixed con estilo inline (no depende del bloque de
+# CSS que se inyecta más abajo), por lo que queda anclada ahí de verdad
+# durante toda la sesión -- al escribir, al cargar un archivo y mientras
+# TANA responde -- en vez de perderse al hacer scroll con el chat.
+_logo_img_tag = (
+    f'<img src="data:image/png;base64,{_LOGO_B64}" width="22" style="border-radius:6px;">'
+    if _LOGO_B64 else ""
+)
 st.markdown(
-    f'<div style="display:flex;justify-content:flex-end;margin:-6px 2px 2px 0;">'
-    f'<span style="display:inline-block;padding:4px 10px;border:1px solid #DDE8EF;'
-    f'border-radius:999px;background:#F7FAFC;color:#5F7180;font-size:12px;'
-    f'font-weight:600;">{role_label}</span></div>',
+    f'<div style="position:fixed; top:14px; right:18px; z-index:10000; '
+    f'display:flex; align-items:center; gap:8px; padding:5px 12px 5px 8px; '
+    f'border:1px solid #DDE8EF; border-radius:999px; background:#FFFFFFF2; '
+    f'box-shadow:0 2px 10px rgba(18,48,74,.08); backdrop-filter:blur(4px);">'
+    f'{_logo_img_tag}'
+    f'<span style="color:#5F7180;font-size:12px;font-weight:600;white-space:nowrap;">{role_label}</span>'
+    f'</div>',
     unsafe_allow_html=True,
 )
 
@@ -2888,7 +2912,7 @@ st.markdown("""
 div[data-testid="stDecoration"] {display: none !important;}
 div[data-testid="stToolbar"] {display: none !important;}
 div[data-testid="stAppViewContainer"] {padding-top: 0 !important;}
-.block-container {padding-top: 0rem; padding-bottom: 21rem; max-width: 980px;}
+.block-container {padding-top: 2.6rem; padding-bottom: 21rem; max-width: 980px;}
 
 /* ---- Sidebar tipo ChatGPT/Claude ---- */
 section[data-testid="stSidebar"] {background: #F7F9FB; border-right: 1px solid #E3E9EE;}
@@ -3021,10 +3045,6 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .t
 }
 </style>
 """, unsafe_allow_html=True)
-
-LOGO_PATH = os.path.join(os.path.dirname(__file__), "LOGO TANA.png")
-if not os.path.exists(LOGO_PATH):
-    LOGO_PATH = os.path.join(os.path.dirname(__file__), "LOGO TANA.jpg")
 
 with st.sidebar:
     logo_col, title_col = st.columns([0.35, 1])
@@ -4617,7 +4637,16 @@ def _construir_aperturas_por_empresa(monografia_json, _diag_por_empresa=None):
     # Volvemos al texto fuente original y extraemos los bloques por encabezado.
     # Esta ruta no inventa importes: solo usa partidas que estén literalmente
     # en el documento y conserva una apertura independiente por empresa.
-    if len(resultado) < len(empresas):
+    #
+    # IMPORTANTE: la fusión con el intento por JSON (Gemini) es POR EMPRESA,
+    # no todo-o-nada. Antes, si UNA sola empresa fallaba en ambos intentos,
+    # se descartaba el resultado completo del fallback (incluso el de las
+    # empresas que sí habían cuadrado por texto) y además se mostraban al
+    # usuario los dos diagnósticos (el del JSON y el del texto) pegados uno
+    # tras otro para la misma empresa, lo cual confundía más de lo que ayudaba.
+    resueltas = {key(a.get("empresa")) for a in resultado if isinstance(a, dict)}
+    empresas_pendientes = [e for e in empresas if key(e) not in resueltas]
+    if empresas_pendientes:
         try:
             source_text = str(st.session_state.get("_tana_source_text", "") or "")
         except Exception:
@@ -4636,8 +4665,7 @@ def _construir_aperturas_por_empresa(monografia_json, _diag_por_empresa=None):
                     k_emp = key(emp)
                     if k_emp in grupos_fuente:
                         grupos_fuente[k_emp].append(item)
-                aperturas_fuente = []
-                for empresa in empresas:
+                for empresa in empresas_pendientes:
                     partidas_fuente = grupos_fuente.get(key(empresa), [])
                     if not partidas_fuente:
                         continue
@@ -4648,15 +4676,13 @@ def _construir_aperturas_por_empresa(monografia_json, _diag_por_empresa=None):
                     apertura = _construir_asiento_apertura_determinista(sub, _diag=_diag_local2)
                     if apertura:
                         apertura["empresa"] = empresa
-                        aperturas_fuente.append(apertura)
+                        resultado.append(apertura)
                     elif _diag_por_empresa is not None:
-                        _diag_por_empresa.setdefault(empresa, []).extend(_diag_local2)
-                if len(aperturas_fuente) == len(empresas):
-                    if _diag_por_empresa is not None:
-                        # El fallback por texto sí logró construir todas las
-                        # aperturas: el diagnóstico del primer intento ya no aplica.
-                        _diag_por_empresa.clear()
-                    return aperturas_fuente
+                        # El fallback por texto es determinista y más confiable que
+                        # la lectura libre de Gemini; para esta empresa REEMPLAZA
+                        # el diagnóstico del primer intento en vez de sumarse a él,
+                        # así el usuario ve un solo motivo de descuadre, no dos.
+                        _diag_por_empresa[empresa] = _diag_local2
 
     return resultado
 
