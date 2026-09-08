@@ -1957,10 +1957,20 @@ def _extract_legacy_doc_text_local(path):
     lea un importe o un concepto de la celda vecina. LibreOffice conserva
     tabuladores reales entre columnas, que es justamente lo que el extractor
     de balances usa como frontera de columna.
+
+    Guarda en session_state un pequeño diagnóstico de qué método se usó
+    (útil para depurar en producción sin acceso a los logs del servidor:
+    aparece agregado al mensaje de error si luego falla la apertura).
     """
-    text = _extract_legacy_doc_text_libreoffice(path)
-    if text.strip():
-        return text
+    debug = {"metodo": None, "soffice_bin": None, "detalle": "", "chars": 0}
+    lo_text, lo_detalle = _extract_legacy_doc_text_libreoffice(path)
+    debug["soffice_bin"] = bool(shutil.which("soffice") or shutil.which("libreoffice"))
+    if lo_text.strip():
+        debug["metodo"] = "libreoffice"
+        debug["chars"] = len(lo_text)
+        _set_doc_extract_debug(debug)
+        return lo_text
+    debug["detalle"] = lo_detalle
     try:
         proc = subprocess.run(
             ["antiword", "-t", path],
@@ -1971,45 +1981,86 @@ def _extract_legacy_doc_text_local(path):
             timeout=45,
             check=False,
         )
-    except (FileNotFoundError, subprocess.SubprocessError, OSError):
+    except (FileNotFoundError, subprocess.SubprocessError, OSError) as exc:
+        debug["metodo"] = "ninguno"
+        debug["detalle"] = (debug["detalle"] + f" | antiword: {exc}").strip(" |")
+        _set_doc_extract_debug(debug)
         return ""
     text = (proc.stdout or "").replace("\\x00", " ").strip()
     if proc.returncode != 0 and not text:
+        debug["metodo"] = "ninguno"
+        debug["detalle"] = (debug["detalle"] + f" | antiword rc={proc.returncode}: {(proc.stderr or '')[:200]}").strip(" |")
+        _set_doc_extract_debug(debug)
         return ""
+    debug["metodo"] = "antiword"
+    debug["chars"] = len(text)
+    _set_doc_extract_debug(debug)
     return text
 
 
-def _extract_legacy_doc_text_libreoffice(path):
+def _set_doc_extract_debug(debug):
+    try:
+        st.session_state["_tana_doc_extract_debug"] = debug
+    except Exception:
+        pass
+
+
+def _extract_legacy_doc_text_libreoffice(path, intentos=2):
     """Convierte un .doc a texto plano usando LibreOffice (`soffice --headless
-    --convert-to txt`), si el binario está disponible en el servidor. Devuelve
-    "" (sin lanzar excepción) si LibreOffice no está instalado o falla, para
-    que el llamador pueda recurrir a antiword sin interrumpir la extracción.
+    --convert-to txt`), si el binario está disponible en el servidor.
+
+    Devuelve (texto, detalle_error). texto="" si LibreOffice no está
+    instalado o falla (nunca lanza excepción), para que el llamador pueda
+    recurrir a antiword sin interrumpir la extracción.
+
+    Cada intento usa su PROPIO perfil de usuario aislado
+    (`-env:UserInstallation=file://...`) en una carpeta temporal nueva, en
+    vez del perfil por defecto de LibreOffice. Esto evita el problema más
+    común de correr soffice en hosting compartido/en contenedores: si dos
+    conversiones caen al mismo tiempo (o queda un candado de una ejecución
+    previa), comparten el perfil por defecto y el proceso se cuelga o
+    devuelve vacío sin avisar. El timeout también se sube a 150s porque el
+    primer arranque de LibreOffice en un servidor con poca CPU (como
+    Streamlit Community Cloud) puede tardar bastante más que unos segundos.
     """
     soffice_bin = shutil.which("soffice") or shutil.which("libreoffice")
     if not soffice_bin:
-        return ""
-    tmp_dir = tempfile.mkdtemp(prefix="tana_doc_")
-    try:
-        proc = subprocess.run(
-            [
-                soffice_bin, "--headless", "--norestore",
-                "--convert-to", "txt:Text",
-                "--outdir", tmp_dir, path,
-            ],
-            capture_output=True, text=True, timeout=60, check=False,
-        )
-        if proc.returncode != 0:
-            return ""
-        base = os.path.splitext(os.path.basename(path))[0]
-        out_path = os.path.join(tmp_dir, base + ".txt")
-        if not os.path.exists(out_path):
-            return ""
-        with open(out_path, "r", encoding="utf-8", errors="replace") as f:
-            return f.read().strip()
-    except (subprocess.SubprocessError, OSError, Exception):
-        return ""
-    finally:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
+        return "", "soffice no encontrado en PATH"
+    ultimo_error = ""
+    for _ in range(max(1, intentos)):
+        tmp_dir = tempfile.mkdtemp(prefix="tana_doc_")
+        profile_dir = tempfile.mkdtemp(prefix="tana_lo_profile_")
+        try:
+            proc = subprocess.run(
+                [
+                    soffice_bin, "--headless", "--norestore", "--nolockcheck",
+                    f"-env:UserInstallation=file://{profile_dir}",
+                    "--convert-to", "txt:Text",
+                    "--outdir", tmp_dir, path,
+                ],
+                capture_output=True, text=True, timeout=150, check=False,
+            )
+            if proc.returncode != 0:
+                ultimo_error = f"soffice rc={proc.returncode}: {(proc.stderr or '')[:300]}"
+                continue
+            base = os.path.splitext(os.path.basename(path))[0]
+            out_path = os.path.join(tmp_dir, base + ".txt")
+            if not os.path.exists(out_path):
+                ultimo_error = "soffice no generó el .txt de salida"
+                continue
+            with open(out_path, "r", encoding="utf-8", errors="replace") as f:
+                texto = f.read().strip()
+            if texto:
+                return texto, ""
+            ultimo_error = "soffice generó un .txt vacío"
+        except subprocess.TimeoutExpired:
+            ultimo_error = "soffice tardó más de 150s (timeout)"
+        except (subprocess.SubprocessError, OSError) as exc:
+            ultimo_error = f"soffice excepción: {exc}"
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+            shutil.rmtree(profile_dir, ignore_errors=True)
+    return "", ultimo_error
 
 
 LEGACY_OPERATION_RESCUE_PROMPT = """
@@ -5385,10 +5436,25 @@ if "monografia_json" in st.session_state and "asientos_contables" not in st.sess
                             detalle_partes.append(
                                 f"{nombre_faltante} ({_formatear_diagnostico_apertura(diag_items)})"
                             )
+                        _doc_debug = None
+                        try:
+                            _doc_debug = st.session_state.get("_tana_doc_extract_debug")
+                        except Exception:
+                            _doc_debug = None
+                        _doc_debug_txt = ""
+                        if _doc_debug:
+                            _doc_debug_txt = (
+                                f" [lectura del .doc → método: {_doc_debug.get('metodo')}, "
+                                f"soffice disponible: {_doc_debug.get('soffice_bin')}, "
+                                f"caracteres leídos: {_doc_debug.get('chars')}"
+                                + (f", detalle: {_doc_debug.get('detalle')}" if _doc_debug.get("detalle") else "")
+                                + "]"
+                            )
                         raise ValueError(
                             "No se pudo construir el asiento de apertura para: "
                             + "; ".join(detalle_partes)
                             + ". TANA no generará un Excel incompleto."
+                            + _doc_debug_txt
                         )
                 elif len(aperturas) != 1:
                     raise ValueError(
