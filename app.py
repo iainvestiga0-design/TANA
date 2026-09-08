@@ -6957,8 +6957,8 @@ def _report_header(ws, row, right_label='AÑO 2026'):
         ws.cell(row=row, column=c).alignment = Alignment(horizontal='center')
 
 
-def _write_label(ws, row, text, bold=False):
-    ws.cell(row=row, column=2, value=text).font = BOLD if bold else BLACK
+def _write_label(ws, row, text, bold=False, col=2):
+    ws.cell(row=row, column=col, value=text).font = BOLD if bold else BLACK
 
 
 def _write_amount(ws, row, formula, bold=False):
@@ -7382,7 +7382,7 @@ for code in pasivos:
     # Las obligaciones financieras que comienzan en 45 se mantienen en
     # corriente en esta plantilla, tal como el modelo del usuario.
     desc = pcge_map.get(code, '') or f'Cuenta {code}'
-    _write_label(ws9, r2, desc)
+    _write_label(ws9, r2, desc, col=7)
     _set_report_value(ws9, r2, 10, _saldo_acreedor_esf(code))
     pc_rows.append(r2)
     r2 += 1
@@ -7417,7 +7417,7 @@ r2 += 1
 pat_rows=[]
 for code in patrimonio:
     desc=pcge_map.get(code,'') or f'Cuenta {code}'
-    _write_label(ws9,r2,desc)
+    _write_label(ws9,r2,desc,col=7)
     # Patrimonio: saldo acreedor aumenta; saldo deudor disminuye.
     _set_report_value(ws9,r2,10,f'={_saldo_acreedor_esf(code)[1:]}-{_saldo_deudor_esf(code)[1:]}')
     pat_rows.append(r2)
