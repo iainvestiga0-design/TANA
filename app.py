@@ -2672,100 +2672,143 @@ def _extraer_apertura_determinista_desde_texto(document_text, data=None):
         def _se_solapa(ini, fin):
             return any(not (fin <= s or ini >= e) for s, e in claimed_spans)
 
+        # PASE 1: decidir qué coincidencias de patrón se aceptan (mismo
+        # criterio de siempre: orden de específico a genérico, sin pisar un
+        # tramo de texto ya reclamado, y como mucho una coincidencia por
+        # patrón). Aquí solo se registran posiciones; los importes y el
+        # concepto se resuelven en el PASE 2, una vez que conocemos TODAS
+        # las coincidencias aceptadas y podemos usarlas como frontera real
+        # entre columnas.
+        aceptados = []
         for pattern, codigo in rules:
             for m in re.finditer(r"(?i)" + pattern, tail_fold):
                 if _se_solapa(m.start(), m.end()):
                     continue
-                # Una tabla de balance puede venir como CONCEPTO | DEBE | HABER
-                # (un solo bloque, dos columnas de importe para la misma
-                # partida) o como ACTIVO | PASIVO Y PATRIMONIO (dos bloques
-                # distintos e independientes en la misma fila). Para no
-                # cruzar hacia la partida vecina del segundo caso, primero
-                # intentamos leer SOLO la celda inmediata siguiente (hasta la
-                # próxima frontera de columna, 2+ espacios). Si esa celda no
-                # trae ningún número (p. ej. el patrón cortó antes de un
-                # calificador como "Sociales" en "Participaciones Sociales"),
-                # recién ahí ampliamos a toda la línea como respaldo.
-                linea_fin = tail.find("\n", m.end())
-                if linea_fin == -1:
-                    linea_fin = min(len(tail), m.end() + 120)
-                resto_linea = tail[m.end():linea_fin]
-                m_lead = re.match(r"  +", resto_linea)
-                resto_celda = resto_linea[m_lead.end():] if m_lead else resto_linea
-                m_bound = re.search(r"  +", resto_celda)
-                celda = resto_celda[:m_bound.start()] if m_bound else resto_celda
-                numeros = list(num_re.finditer(celda))
-                if not numeros:
-                    numeros = list(num_re.finditer(resto_linea))
-                if not numeros:
-                    # Word/PDF antiguo puede colocar los importes en la línea siguiente.
-                    ventana = tail[m.end():m.end()+100]
-                    numeros = list(num_re.finditer(ventana))
-                if not numeros:
-                    continue
-
-                valores = []
-                for nm in numeros[:4]:
-                    token = nm.group(0).replace(" ", "")
-                    negativo = token.startswith("(") or token.startswith("-")
-                    token = token.strip("()")
-                    try:
-                        valor = float(token.replace(",", ""))
-                        if negativo:
-                            valor = -valor
-                        valores.append(valor)
-                    except Exception:
-                        pass
-                if not valores:
-                    continue
-
-                # Si hay dos columnas numéricas, interpretarlas como Debe/Haber.
-                # Para activos: Debe = primera columna; contra-activos y pasivo/patrimonio:
-                # Haber = segunda columna. Si una columna es 0, conservar la otra.
-                es_contra = codigo.startswith("39")
-                es_pasivo_pat = codigo.startswith(("4", "5"))
-                if len(valores) >= 2:
-                    debe_col, haber_col = valores[0], valores[1]
-                    if es_contra or es_pasivo_pat:
-                        importe = haber_col if abs(haber_col) > 0.005 else debe_col
-                    else:
-                        importe = debe_col if abs(debe_col) > 0.005 else haber_col
-                else:
-                    importe = valores[0]
-
-                if abs(importe) < 0.005 or codigo in seen_codes:
-                    continue
-                # El concepto debe pertenecer al balance, no a una frase posterior,
-                # y NO debe cruzar hacia la columna vecina (Activo | Pasivo y
-                # Patrimonio) cuando el extractor de texto aplanó una tabla de
-                # dos columnas en una sola línea. Antes se usaba una ventana fija
-                # de 25 caracteres hacia atrás, lo que cortaba palabras a la mitad
-                # ("Transferencia" -> "sferencia") y arrastraba el importe y la
-                # etiqueta de la columna anterior. Ahora usamos como límite real
-                # la última corrida de 2+ espacios (separador típico de columna
-                # en texto de PDF aplanado) antes del match, con 25 como tope
-                # máximo de todas formas para no acumular texto de más.
-                inicio_linea = tail.rfind("\n", 0, m.start()) + 1
-                ventana_atras = tail[max(inicio_linea, m.start() - 60):m.start()]
-                m_col = re.search(r"  +(?=[^ ]*$)", ventana_atras)
-                if m_col:
-                    inicio_concepto = max(inicio_linea, m.start() - 60) + m_col.end()
-                else:
-                    inicio_concepto = max(inicio_linea, m.start() - 25)
-                concepto = tail[inicio_concepto:m.end()].strip().replace("\n", " ")
-                seen_codes.add(codigo)
                 claimed_spans.append((m.start(), m.end()))
-                result.append({
-                    "empresa": company,
-                    "tipo": "partida",
-                    "codigo": codigo,
-                    "cuenta": codigo,
-                    "descripcion": concepto,
-                    "concepto": concepto,
-                    "importe": round(importe, 2),
-                    "fuente_determinista": True,
-                })
+                aceptados.append({"start": m.start(), "end": m.end(), "codigo": codigo, "match": m})
                 break
+
+        # PASE 2: ordenar por posición y usar el inicio de la SIGUIENTE
+        # coincidencia (si está en la misma línea) y el final de la ANTERIOR
+        # como límites duros de columna. Antes solo se usaba una corrida de
+        # 2+ espacios como frontera; si el .doc/.pdf de origen no conserva
+        # exactamente ese patrón de espaciado (por ejemplo, columnas
+        # separadas con un solo espacio, u otra versión de LibreOffice que
+        # renderiza la tabla distinto), el importe o el texto de la columna
+        # vecina se "colaba" en la partida actual. Con este límite adicional,
+        # la frontera es correcta incluso si el espaciado exacto varía entre
+        # distintas conversiones del mismo documento.
+        aceptados.sort(key=lambda a: a["start"])
+        for idx, item in enumerate(aceptados):
+            m = item["match"]
+            codigo = item["codigo"]
+
+            siguiente_inicio = None
+            if idx + 1 < len(aceptados):
+                cand = aceptados[idx + 1]
+                if "\n" not in tail[m.end():cand["start"]]:
+                    siguiente_inicio = cand["start"]
+
+            anterior_fin = None
+            if idx > 0:
+                prev = aceptados[idx - 1]
+                if "\n" not in tail[prev["end"]:m.start()]:
+                    anterior_fin = prev["end"]
+
+            linea_fin = tail.find("\n", m.end())
+            if linea_fin == -1:
+                linea_fin = min(len(tail), m.end() + 120)
+            if siguiente_inicio is not None:
+                linea_fin = min(linea_fin, siguiente_inicio)
+            resto_linea = tail[m.end():linea_fin]
+            m_lead = re.match(r"  +", resto_linea)
+            resto_celda = resto_linea[m_lead.end():] if m_lead else resto_linea
+            m_bound = re.search(r"  +", resto_celda)
+            celda = resto_celda[:m_bound.start()] if m_bound else resto_celda
+            numeros = list(num_re.finditer(celda))
+            if not numeros:
+                numeros = list(num_re.finditer(resto_linea))
+            if not numeros:
+                # Word/PDF antiguo puede colocar los importes en la línea siguiente.
+                ventana = tail[m.end():m.end()+100]
+                if siguiente_inicio is not None:
+                    ventana = ventana[:max(0, siguiente_inicio - m.end())]
+                numeros = list(num_re.finditer(ventana))
+            if not numeros:
+                continue
+
+            valores = []
+            for nm in numeros[:4]:
+                token = nm.group(0).replace(" ", "")
+                negativo = token.startswith("(") or token.startswith("-")
+                token = token.strip("()")
+                try:
+                    valor = float(token.replace(",", ""))
+                    if negativo:
+                        valor = -valor
+                    valores.append(valor)
+                except Exception:
+                    pass
+            if not valores:
+                continue
+
+            # Si hay dos columnas numéricas, interpretarlas como Debe/Haber.
+            # Para activos: Debe = primera columna; contra-activos y pasivo/patrimonio:
+            # Haber = segunda columna. Si una columna es 0, conservar la otra.
+            es_contra = codigo.startswith("39")
+            es_pasivo_pat = codigo.startswith(("4", "5"))
+            if len(valores) >= 2:
+                debe_col, haber_col = valores[0], valores[1]
+                if es_contra or es_pasivo_pat:
+                    importe = haber_col if abs(haber_col) > 0.005 else debe_col
+                else:
+                    importe = debe_col if abs(debe_col) > 0.005 else haber_col
+            else:
+                importe = valores[0]
+
+            if abs(importe) < 0.005 or codigo in seen_codes:
+                continue
+            # El concepto debe pertenecer al balance, no a una frase posterior,
+            # y NO debe cruzar hacia la columna vecina (Activo | Pasivo y
+            # Patrimonio) cuando el extractor de texto aplanó una tabla de
+            # dos columnas en una sola línea. Antes se usaba una ventana fija
+            # de 25 caracteres hacia atrás, lo que cortaba palabras a la mitad
+            # ("Transferencia" -> "sferencia") y arrastraba el importe y la
+            # etiqueta de la columna anterior. Ahora usamos como límite real
+            # la última corrida de 2+ espacios (separador típico de columna
+            # en texto de PDF aplanado) antes del match, con 25 como tope
+            # máximo de todas formas para no acumular texto de más -- y,
+            # como límite adicional, nunca cruzamos hacia el final de la
+            # coincidencia ANTERIOR en la misma línea (ver PASE 2 arriba).
+            inicio_linea = tail.rfind("\n", 0, m.start()) + 1
+            ventana_atras = tail[max(inicio_linea, m.start() - 60):m.start()]
+            m_col = re.search(r"  +(?=[^ ]*$)", ventana_atras)
+            if m_col:
+                inicio_concepto = max(inicio_linea, m.start() - 60) + m_col.end()
+            else:
+                inicio_concepto = max(inicio_linea, m.start() - 25)
+            if anterior_fin is not None:
+                inicio_concepto = max(inicio_concepto, anterior_fin)
+            concepto = tail[inicio_concepto:m.end()].strip().replace("\n", " ")
+            # Limpieza cosmética: si el límite de columna no cayó justo en el
+            # espacio en blanco (por ejemplo, cuando la conversión del
+            # documento no usa exactamente 2 espacios entre celdas), puede
+            # quedar un número suelto de la celda anterior pegado al inicio
+            # del concepto (ej. "32,500.00 Cuentas x Pagar Comerciales").
+            # Esto no afecta el importe (ya se resolvió arriba con límites
+            # duros por posición), solo la descripción que se muestra.
+            concepto = re.sub(r"^[\s\-–]*[\(]?[\d.,]+[\)]?\s+(?=[A-Za-zÁÉÍÓÚáéíóúÑñ])", "", concepto).strip()
+            seen_codes.add(codigo)
+            result.append({
+                "empresa": company,
+                "tipo": "partida",
+                "codigo": codigo,
+                "cuenta": codigo,
+                "descripcion": concepto,
+                "concepto": concepto,
+                "importe": round(importe, 2),
+                "fuente_determinista": True,
+            })
     return result
 
 def _extraer_apertura_con_todas_las_rutas(document_text, data):
