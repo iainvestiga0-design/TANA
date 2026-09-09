@@ -598,20 +598,28 @@ else:
     initial = (email_local[:1] or "E").upper()
     role_label = f"👤 Estudiante · {initial}"
 
-# Insignia FIJA en la esquina superior derecha: logo de TANA + rol del
-# usuario. Usa position:fixed con estilo inline (no depende del bloque de
-# CSS que se inyecta más abajo), por lo que queda anclada ahí de verdad
-# durante toda la sesión -- al escribir, al cargar un archivo y mientras
-# TANA responde -- en vez de perderse al hacer scroll con el chat.
+# Insignia superior derecha: logo de TANA + rol del usuario.
+#
+# IMPORTANTE: aquí usábamos position:fixed con HTML crudo inyectado por
+# st.markdown en CADA rerun de la app (que en Streamlit ocurre en cada
+# interacción: escribir, subir archivo, recibir la respuesta de TANA...).
+# Eso hacía que el navegador tuviera que reconciliar ese nodo "flotante"
+# contra el árbol de Streamlit una y otra vez, y en algunos navegadores /
+# bajo ciertas condiciones de carrera eso rompía la página entera con
+# "NotFoundError: Failed to execute 'removeChild' on 'Node'". Con
+# position:sticky en vez de fixed, el elemento se resuelve como parte
+# normal del flujo del documento (queda "pegado" arriba al hacer scroll,
+# en vez de flotar por fuera de él), así que Streamlit puede reconciliarlo
+# de forma segura sin ese conflicto de DOM.
 _logo_img_tag = (
     f'<img src="data:image/png;base64,{_LOGO_B64}" width="22" style="border-radius:6px;">'
     if _LOGO_B64 else ""
 )
 st.markdown(
-    f'<div style="position:fixed; top:14px; right:18px; z-index:10000; '
+    f'<div style="position:sticky; top:14px; float:right; z-index:999; '
     f'display:flex; align-items:center; gap:8px; padding:5px 12px 5px 8px; '
-    f'border:1px solid #DDE8EF; border-radius:999px; background:#FFFFFFF2; '
-    f'box-shadow:0 2px 10px rgba(18,48,74,.08); backdrop-filter:blur(4px);">'
+    f'border:1px solid #DDE8EF; border-radius:999px; background:#F7FAFC; '
+    f'box-shadow:0 2px 10px rgba(18,48,74,.08); width:fit-content;">'
     f'{_logo_img_tag}'
     f'<span style="color:#5F7180;font-size:12px;font-weight:600;white-space:nowrap;">{role_label}</span>'
     f'</div>',
