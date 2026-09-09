@@ -1150,7 +1150,7 @@ def _cuenta_apertura_para_texto(texto, codigo_explicito=None, empresa_nombre=Non
             n = int(str(fuente).strip())
         except Exception:
             continue
-        if n in (10,12,20,25,33,39,40,41,42,45,46,47,48,49,50,51,52,56,57,58,59):
+        if n in (10,12,16,18,20,25,33,39,40,41,42,45,46,47,48,49,50,51,52,56,57,58,59):
             codigo_corto = n
             break
     if codigo_corto is not None:
@@ -1160,7 +1160,9 @@ def _cuenta_apertura_para_texto(texto, codigo_explicito=None, empresa_nombre=Non
                 return banco, TANA_BANCOS_NOMBRES.get(banco, pcge_map.get(banco, "Cuenta bancaria"))
             return "10111", "Caja"
         mapa_corto = {
-            12:("12121","Emitidas en cartera"), 20:("20111","Costo"),
+            12:("12121","Emitidas en cartera"), 16:("16711","Cuentas por Cobrar Diversas – IGV"),
+            18:("18111","Alquileres pagados por anticipado"),
+            20:("20111","Costo"),
             25:("25241","Otros suministros"), 33:("33511","Costo"),
             39:("39526","Muebles y enseres"), 40:("40111","IGV – Cuenta propia"),
             41:("41511","Compensación por tiempo de servicios"),
@@ -1200,7 +1202,9 @@ def _cuenta_apertura_para_texto(texto, codigo_explicito=None, empresa_nombre=Non
         (("equipo de computo", "equipos de computo", "equipo de procesamiento de datos", "equipo para procesamiento de informacion"), "33611", "Costo"),
         (("muebles", "muebles y enseres", "propiedad planta y equipo"), "33511", "Costo"),
         (("depreciacion acumulada", "depreciación acumulada"), "39526", "Muebles y enseres"),
-        (("igv por pagar", "igv – cuenta propia", "igv cuenta propia", "igv por pagar"), "40111", "IGV – Cuenta propia"),
+        (("igv por pagar", "igv – cuenta propia", "igv cuenta propia"), "40111", "IGV – Cuenta propia"),
+        (("igv por acreditar", "igv acreditar", "credito fiscal igv", "crédito fiscal igv"), "16711", "Cuentas por Cobrar Diversas – IGV"),
+        (("alquiler pagado por anticipado", "alquileres pagados por anticipado", "servicios pagados por anticipado", "gastos pagados por anticipado", "pagado por anticipado", "pagados por anticipado"), "18111", "Alquileres pagados por anticipado"),
         (("essalud por pagar", "essalud", "es salud"), "40311", "ESSALUD"),
         (("afp por pagar", "administradoras de fondos de pensiones", "afp"), "41711", "Administradoras de fondos de pensiones"),
         (("vacaciones por pagar", "vacaciones"), "41151", "Vacaciones por pagar"),
@@ -2627,6 +2631,8 @@ def _extraer_apertura_determinista_desde_texto(document_text, data=None):
         ("girasoles|claveles|mercaderias|existencias|inventarios|inventario", "20111"),
         ("caja chica|efectivo en caja|dinero en caja", "10111"),
         ("suministros de oficina|suministros", "25241"),
+        ("alquiler(?:es)?\\s+pagados?\\s+por\\s+anticipado|servicios\\s+pagados?\\s+por\\s+anticipado|gastos\\s+pagados?\\s+por\\s+anticipado", "18111"),
+        ("igv\\s+(?:x|por)\\s+acreditar|credito\\s+fiscal\\s+igv", "16711"),
     ]
     # Marcadores de fin de balance: si aparecen antes que el siguiente
     # encabezado de empresa, cortamos ahí para no arrastrar texto narrativo
