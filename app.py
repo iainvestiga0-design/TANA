@@ -2633,6 +2633,20 @@ def _extraer_apertura_determinista_desde_texto(document_text, data=None):
     result = []
     for hidx, h in enumerate(headings):
         company = _normalizar_nombre_empresa(h.group(1))
+        # Un encabezado real de empresa es una línea corta ("LA ECONÓMICA
+        # S.R.L."). Un párrafo narrativo que simplemente MENCIONA una o más
+        # razones sociales de paso (p. ej. "Las empresas La Económica S.R.L.
+        # y Muebles del Perú S.A.C., dedicadas a la comercialización de
+        # muebles..., acuerdan fusionarse...") también termina en un sufijo
+        # societario y por eso el patrón de encabezado lo detecta como si
+        # fuera el título de una tercera empresa. Esa "empresa" fantasma
+        # nunca tiene un balance real detrás (como mucho una cifra suelta
+        # capturada por casualidad de un porcentaje accionario cercano), así
+        # que nunca puede cuadrar y bloquea la generación del Excel para
+        # TODAS las empresas. Se descarta aquí por longitud: un encabezado
+        # real jamás llega a 100 caracteres.
+        if len(company) > 100:
+            continue
         next_h = headings[hidx + 1].start() if hidx + 1 < len(headings) else len(full)
         tail = full[h.end():next_h]
         tail_fold = full_fold[h.end():next_h]
