@@ -483,15 +483,11 @@ def extract_with_gemini(uploaded):
 # asientos, HT, ERN, ERF, ESF ni la generación del Excel.
 st.markdown("""
 <style>
-/* Oculta SOLO el menú de tres puntos y la barra "Share / ⭐ / GitHub"
-   (stToolbar) que Streamlit Cloud agrega arriba a la derecha — esa
-   barra es un elemento aparte del que controla el sidebar
-   (collapsedControl), así que se puede ocultar sin dejar el sidebar
-   inalcanzable como pasó la vez anterior. */
+/* Oculta SOLO el menú de tres puntos de Streamlit. La barra superior
+   (header) se deja visible porque ahí vive la flecha para abrir/cerrar
+   el sidebar — ocultarla entera (como antes) dejaba el sidebar
+   inalcanzable. */
 #MainMenu {visibility: hidden;}
-[data-testid="stToolbar"] {visibility: hidden; height: 0;}
-[data-testid="stDecoration"] {display: none;}
-[data-testid="stAppDeployButton"] {display: none;}
 header[data-testid="stHeader"] {background: transparent;}
 .block-container {padding-top: 1.2rem; padding-bottom: 8rem; max-width: 980px;}
 
@@ -1406,11 +1402,7 @@ if (enviar_top or audio_top is not None) and (pregunta_top.strip() or audio_top 
                     if temp_audio and os.path.exists(temp_audio):
                         os.remove(temp_audio)
     st.rerun()
-
-# Nota: el aviso "TANA terminó el desarrollo contable..." se muestra más
-# abajo, como burbuja de chat, SOLO cuando el workbook ya se generó de
-# verdad (ver bloque con tana_resuelto_signature). La línea que estaba
-# aquí antes se ejecutaba siempre, incluso sin haber subido nada.
+st.success("TANA terminó el desarrollo contable. Tu Excel está listo para descargar.")
 
 FONT = "Arial"
 wb = Workbook()
