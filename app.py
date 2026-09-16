@@ -27,7 +27,7 @@ st.set_page_config(
     page_title="TANA | Inteligencia Artificial Contable",
     page_icon="📊",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 
 # ============================================================
@@ -483,8 +483,12 @@ def extract_with_gemini(uploaded):
 # asientos, HT, ERN, ERF, ESF ni la generación del Excel.
 st.markdown("""
 <style>
-/* Oculta el header/menú default de Streamlit para look de app */
-#MainMenu, header[data-testid="stHeader"] {visibility: hidden; height: 0;}
+/* Oculta SOLO el menú de tres puntos de Streamlit. La barra superior
+   (header) se deja visible porque ahí vive la flecha para abrir/cerrar
+   el sidebar — ocultarla entera (como antes) dejaba el sidebar
+   inalcanzable. */
+#MainMenu {visibility: hidden;}
+header[data-testid="stHeader"] {background: transparent;}
 .block-container {padding-top: 1.2rem; padding-bottom: 8rem; max-width: 980px;}
 
 /* ---- Sidebar tipo ChatGPT/Claude ---- */
