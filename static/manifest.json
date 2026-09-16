@@ -1,0 +1,15 @@
+{
+  "name": "Tana Inteligencia Artificial Contable",
+  "short_name": "TANA",
+  "description": "TANA desarrolla asientos contables, hoja de trabajo y estados financieros a partir de tu monografía, usando el PCGE.",
+  "start_url": ".",
+  "scope": ".",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#F7F9FB",
+  "theme_color": "#087EA4",
+  "icons": [
+    { "src": "app/static/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "app/static/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
