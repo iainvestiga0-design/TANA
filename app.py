@@ -717,6 +717,7 @@ OBJETIVO:
 Desarrollar los asientos contables de TODAS las operaciones detectadas.
 
 REGLAS OBLIGATORIAS:
+- EL ASIENTO DE APERTURA ES OBLIGATORIO: Genera siempre el Asiento N° 1 (Asiento de Apertura o Inicial) utilizando los datos extraídos en "estado_inicial". Asegúrate de registrar todos los activos en el Debe y los pasivos/patrimonio en el Haber.
 - Usa EXCLUSIVAMENTE códigos de cuenta que existan en el PCGE proporcionado.
 - Cada código debe tener exactamente 5 dígitos.
 - No inventes códigos.
@@ -2145,6 +2146,162 @@ _write_amount(ws8, r, '=' + ''.join(parts), True)
 r += 2
 
 _write_label(ws8, r, 'OTROS INGRESOS Y GASTOS', True); r += 1
+sum_str = '+'.join([f'E{x}' for x in gasto_operativo_rows])
+_write_amount(ws8, r, f'=E{utilidad_bruta_row}{"+" + sum_str if sum_str else ""}', True)
+r += 2
+
+_write_label(ws8, r, 'INGRESOS Y GASTOS FINANCIEROS Y OTROS', True); r += 1
+
+otros_rows = []
+# 78 - Otros ingresos
+if _prefix_exists('78'):
+    _write_label(ws8, r, 'Otros ingresos (78)')
+    _write_amount(ws8, r, _sum_ht('78', 'N'))
+    otros_rows.append(r)
+    r += 1
+
+# 67 - Gastos financieros
+for code in sorted(c for c in cuentas_reporte if len(c) == 5 and c.startswith('67') and c not in CUENTAS_6_CON_DESTINO):
+    _write_label(ws8, r, f'{code} - {pcge_map.get(code, code)}')
+    _write_amount(ws8, r, f'=-{_sum_ht_codes([code], "M")[1:]}')
+    otros_rows.append(r)
+    r += 1
+
+_write_label(ws8, r, 'RESULTADO ANTES DE IMPUESTOS', True)
+resultado_ejercicio_erf_row = r
+otros_str = ''.join([f'+E{x}' for x in otros_rows])
+_write_amount(ws8, r, f'=E{utilidad_operativa_row}{otros_str}', True)
+
+autofit(ws8, [5, 45, 5, 12, 18])
+
+
+# ============================================================
+# ERN — ESTADO DE RESULTADOS POR NATURALEZA
+# ============================================================
+ws9 = wb.create_sheet('ERN')
+_report_title(ws9, 'ESTADO DE RESULTADOS POR NATURALEZA')
+_report_header(ws9, 4)
+
+r = 5
+_write_label(ws9, r, 'Ventas netas (70)')
+_write_amount(ws9, r, _sum_ht('70', 'L'))
+v_row = r; r += 1
+
+_write_label(ws9, r, 'Compras (60)')
+_write_amount(ws9, r, f'=-{_sum_ht("60", "K")[1:]}')
+c_row = r; r += 1
+
+_write_label(ws9, r, 'Variación de inventarios (61)')
+_write_amount(ws9, r, f'={_sum_ht("61", "L")[1:]}-{_sum_ht("61", "K")[1:]}')
+var_row = r; r += 1
+
+_write_label(ws9, r, 'MARGEN COMERCIAL', True)
+margen_row = r
+_write_amount(ws9, r, f'=E{v_row}+E{c_row}+E{var_row}', True)
+r += 2
+
+gastos_nat_rows = []
+for pref in ['62', '63', '64', '65', '68']:
+    if _prefix_exists(pref):
+        _write_label(ws9, r, f'Gastos por naturaleza ({pref})')
+        _write_amount(ws9, r, f'=-{_sum_ht(pref, "K")[1:]}')
+        gastos_nat_rows.append(r)
+        r += 1
+
+_write_label(ws9, r, 'RESULTADO DE OPERACIÓN', True)
+res_op_row = r
+gn_str = ''.join([f'+E{x}' for x in gastos_nat_rows])
+_write_amount(ws9, r, f'=E{margen_row}{gn_str}', True)
+r += 2
+
+_write_label(ws9, r, 'RESULTADO DEL EJERCICIO', True)
+_write_amount(ws9, r, f'=E{res_op_row}', True)
+
+autofit(ws9, [5, 45, 5, 12, 18])
+
+
+# ============================================================
+# ESF — ESTADO DE SITUACIÓN FINANCIERA
+# ============================================================
+ws10 = wb.create_sheet('ESF')
+_report_title(ws10, 'ESTADO DE SITUACIÓN FINANCIERA')
+
+ws10.cell(row=4, column=2, value='ACTIVO').font = BOLD
+ws10.cell(row=4, column=3, value='S/').font = BOLD
+ws10.cell(row=4, column=5, value='PASIVO Y PATRIMONIO').font = BOLD
+ws10.cell(row=4, column=6, value='S/').font = BOLD
+
+# --- Llenar Activo (Elementos 1, 2, 3 desde columna O de HT) ---
+r_act = 5
+_write_label(ws10, r_act, 'Activo Corriente y No Corriente', True); r_act += 1
+for code in cuentas_reporte:
+    if code.startswith(('1', '2', '3')):
+        ws10.cell(row=r_act, column=2, value=f'{code} - {pcge_map.get(code, code)}')
+        ws10.cell(row=r_act, column=3, value=f'={ht_sum(code, "O")}')
+        ws10.cell(row=r_act, column=3).number_format = '#,##0.00;(#,##0.00);"-"'
+        r_act += 1
+        
+total_activo_row = r_act
+ws10.cell(row=total_activo_row, column=2, value='TOTAL ACTIVO').font = BOLD
+ws10.cell(row=total_activo_row, column=3, value=f'=SUM(C6:C{r_act-1})').font = BOLD
+ws10.cell(row=total_activo_row, column=3).number_format = '#,##0.00;(#,##0.00);"-"'
+
+# --- Llenar Pasivo (Elemento 4 desde columna P de HT) ---
+r_pas = 5
+_write_label(ws10, r_pas, 'Pasivo', True); r_pas += 1
+for code in cuentas_reporte:
+    if code.startswith('4'):
+        ws10.cell(row=r_pas, column=5, value=f'{code} - {pcge_map.get(code, code)}')
+        ws10.cell(row=r_pas, column=6, value=f'={ht_sum(code, "P")}')
+        ws10.cell(row=r_pas, column=6).number_format = '#,##0.00;(#,##0.00);"-"'
+        r_pas += 1
+        
+# --- Llenar Patrimonio (Elemento 5 desde columna P de HT) ---
+_write_label(ws10, r_pas, 'Patrimonio', True); r_pas += 1
+for code in cuentas_reporte:
+    if code.startswith('5'):
+        ws10.cell(row=r_pas, column=5, value=f'{code} - {pcge_map.get(code, code)}')
+        ws10.cell(row=r_pas, column=6, value=f'={ht_sum(code, "P")}')
+        ws10.cell(row=r_pas, column=6).number_format = '#,##0.00;(#,##0.00);"-"'
+        r_pas += 1
+
+# --- Utilidad / Resultado del Ejercicio (Cuadre Final) ---
+ws10.cell(row=r_pas, column=5, value='Resultado del Ejercicio').font = BOLD
+ws10.cell(row=r_pas, column=6, value=f'=C{total_activo_row}-SUM(F6:F{r_pas-1})')
+ws10.cell(row=r_pas, column=6).number_format = '#,##0.00;(#,##0.00);"-"'
+r_pas += 1
+
+total_pasivo_row = r_pas
+ws10.cell(row=total_pasivo_row, column=5, value='TOTAL PASIVO Y PATRIMONIO').font = BOLD
+ws10.cell(row=total_pasivo_row, column=6, value=f'=SUM(F6:F{r_pas-1})').font = BOLD
+ws10.cell(row=total_pasivo_row, column=6).number_format = '#,##0.00;(#,##0.00);"-"'
+
+autofit(ws10, [5, 45, 15, 5, 45, 15])
+
+
+# ============================================================
+# GUARDAR EXCEL Y MOSTRAR DESCARGA EN INTERFAZ
+# ============================================================
+output = io.BytesIO()
+wb.save(output)
+output.seek(0)
+
+# Renderizar el archivo en Streamlit solo si se cargó el json
+if "monografia_json" in st.session_state:
+    st.markdown('<div class="tana-result-card" style="border-color:#087EA4; background:#F0F8FA; margin-top: 20px;">'
+                '<span style="font-size:24px;">✅</span>'
+                '<div>'
+                '<div class="name" style="color:#087EA4;">¡TANA ha terminado la monografía!</div>'
+                '<div style="font-size:13px; color:#4D6172;">Los asientos de apertura, libro diario, libro mayor, HT y estados financieros están listos.</div>'
+                '</div></div>', unsafe_allow_html=True)
+    
+    st.download_button(
+        label="📥 Descargar Excel Completo",
+        data=output,
+        file_name=f"TANA_{st.session_state.get('monografia_nombre', 'Monografia_Resuelta')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True
+    )
 
 # 78: se incorpora si existe.
 otros_78_row = None
