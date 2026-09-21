@@ -318,10 +318,10 @@ def get_gemini_client(api_key=None):
 def _is_gemini_fallback_error(exc):
     low = str(exc).lower()
     return any(token in low for token in (
-        "429", "resource_exhausted", "quota", "rate limit",
+        "429", "503", "resource_exhausted", "quota", "rate limit",
+        "unavailable", "high demand", "overloaded",
         "not found", "model not found", "unsupported model",
     ))
-
 
 def _fallback_error_message(errors):
     if not errors:
