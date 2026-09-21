@@ -559,6 +559,7 @@ with st.sidebar:
             "monografia_json", "monografia_texto", "monografia_nombre", "tana_file_signature",
             "asientos_contables", "asientos_validos", "errores_asientos", "alertas_asientos",
             "respuesta_tana", "respuesta_tana_ruta", "audio_tana_processed",
+            "registro_compras", "registro_ventas", "kardex",
         ):
             st.session_state.pop(_key, None)
         st.rerun()
@@ -672,6 +673,7 @@ if uploaded_file:
             "monografia_json", "monografia_texto", "monografia_nombre",
             "asientos_contables", "asientos_validos", "errores_asientos",
             "alertas_asientos", "respuesta_tana", "respuesta_tana_ruta", "audio_tana_processed",
+            "registro_compras", "registro_ventas", "kardex",
         ):
             st.session_state.pop(_key, None)
         with st.spinner("TANA está leyendo y procesando la monografía…"):
@@ -738,6 +740,45 @@ REGLA CRÍTICA SOBRE CUENTAS DE DESTINO (79):
 - El asiento de destino normalmente es: cuenta del Elemento 9 en el DEBE y 79111 en el HABER.
 - No confundas la cuenta 79 con la cuenta 70 ni con la cuenta 69. La 79 es una cuenta puente de destino y debe quedar fuera de los estados de resultados.
 
+ANEXOS ADICIONALES (Registro de Compras, Registro de Ventas, Kardex):
+TANA solo genera estos tres anexos cuando la monografía los pide explícitamente.
+Estos indicadores ya fueron calculados a partir de "solicitudes" y "datos_importantes":
+- INCLUIR_REGISTRO_COMPRAS = {incluir_rc}
+- INCLUIR_REGISTRO_VENTAS = {incluir_rv}
+- INCLUIR_KARDEX = {incluir_kx} (método a usar: {metodo_kardex})
+
+Si INCLUIR_REGISTRO_COMPRAS es true, agrega la clave "registro_compras": un
+arreglo con una fila por cada compra de la monografía (fecha, comprobante,
+proveedor/RUC si aparecen, base imponible, IGV, total, y el número de
+operación de origen). Si es false, no incluyas esa clave (o devuélvela vacía).
+
+Si INCLUIR_REGISTRO_VENTAS es true, agrega la clave "registro_ventas" con la
+misma lógica para cada venta (cliente/documento si aparecen, base imponible,
+IGV, total, número de operación de origen). Si es false, no la incluyas.
+
+Si INCLUIR_KARDEX es true, agrega la clave "kardex": un arreglo de tarjetas,
+una por cada artículo/mercadería distinto que se compre y venda en la
+monografía, cada una con sus movimientos cronológicos usando el método
+{metodo_kardex}. Reglas del Kardex:
+- Cada movimiento es una entrada (compra) o una salida (venta), nunca ambas.
+- En una entrada, "saldo_costo_unitario" se recalcula como el promedio
+  ponderado de TODO lo que queda en existencia (o el costo PEPS vigente
+  según el método indicado).
+- En una salida, "salida_costo_unitario" es el costo unitario vigente en
+  ese momento (el último calculado), y "salida_costo_total" =
+  salida_cantidad × salida_costo_unitario.
+- "saldo_cantidad" y "saldo_costo_total" son SIEMPRE el saldo acumulado
+  después de ese movimiento (no el movimiento aislado).
+- Incluye "operacion_numero" en cada movimiento, igual al número de la
+  operación de la monografía que lo originó: es indispensable para que
+  TANA pueda cruzar el Kardex con los asientos.
+- CRÍTICO PARA LA SINCRONIZACIÓN: en cada asiento de venta que reconozca
+  el costo de venta (cuenta 69xxx contra la cuenta de existencias 20xxx),
+  el importe DEBE ser EXACTAMENTE igual a "salida_costo_total" del
+  movimiento del Kardex de esa misma operación. No calcules el costo de
+  venta dos veces con criterios distintos.
+Si INCLUIR_KARDEX es false, no incluyas la clave "kardex".
+
 Devuelve SOLO JSON válido con esta estructura:
 {
   "asientos": [
@@ -760,8 +801,64 @@ Devuelve SOLO JSON válido con esta estructura:
       ]
     }
   ],
-  "alertas": []
+  "alertas": [],
+  "registro_compras": [
+    {
+      "numero": 1,
+      "fecha": "",
+      "tipo_comprobante": "",
+      "serie_numero": "",
+      "proveedor": "",
+      "ruc_proveedor": "",
+      "base_imponible": 0.0,
+      "igv": 0.0,
+      "total": 0.0,
+      "operacion_numero": 1
+    }
+  ],
+  "registro_ventas": [
+    {
+      "numero": 1,
+      "fecha": "",
+      "tipo_comprobante": "",
+      "serie_numero": "",
+      "cliente": "",
+      "documento_cliente": "",
+      "base_imponible": 0.0,
+      "igv": 0.0,
+      "total": 0.0,
+      "operacion_numero": 1
+    }
+  ],
+  "kardex": [
+    {
+      "articulo": "",
+      "metodo": "PROMEDIO PONDERADO",
+      "movimientos": [
+        {
+          "fila": 1,
+          "fecha": "",
+          "documento": "",
+          "detalle": "",
+          "operacion_numero": 1,
+          "tipo": "entrada",
+          "entrada_cantidad": 0.0,
+          "entrada_costo_unitario": 0.0,
+          "entrada_costo_total": 0.0,
+          "salida_cantidad": 0.0,
+          "salida_costo_unitario": 0.0,
+          "salida_costo_total": 0.0,
+          "saldo_cantidad": 0.0,
+          "saldo_costo_unitario": 0.0,
+          "saldo_costo_total": 0.0
+        }
+      ]
+    }
+  ]
 }
+
+Nota: "registro_compras", "registro_ventas" y "kardex" son OPCIONALES.
+Inclúyelos únicamente según los indicadores INCLUIR_* de arriba.
 
 PCGE DE TANA:
 {pcge}
@@ -875,6 +972,53 @@ def _find_operation(operations, number):
         except Exception:
             continue
     return {}
+
+
+# ============================================================
+# DETECCIÓN: ¿la monografía pide Registro de Compras, Registro de
+# Ventas y/o Kardex? TANA nunca los genera "porque sí": solo cuando
+# el enunciado ("solicitudes" / "datos_importantes") los pide de forma
+# explícita. Esto evita anexos inventados o sobrantes.
+# ============================================================
+def _texto_solicitudes_monografia(monografia_json):
+    partes = []
+    if isinstance(monografia_json, dict):
+        for campo in ("solicitudes", "datos_importantes"):
+            for item in monografia_json.get(campo, []) or []:
+                partes.append(str(item))
+        partes.append(str(monografia_json.get("tipo_documento", "")))
+    return " ".join(partes).lower()
+
+
+def requiere_registro_compras(monografia_json):
+    t = _texto_solicitudes_monografia(monografia_json)
+    return any(k in t for k in ("registro de compras", "registro de compra"))
+
+
+def requiere_registro_ventas(monografia_json):
+    t = _texto_solicitudes_monografia(monografia_json)
+    return any(k in t for k in ("registro de ventas", "registro de venta"))
+
+
+def requiere_kardex(monografia_json):
+    t = _texto_solicitudes_monografia(monografia_json)
+    palabras = (
+        "kardex", "inventario permanente", "tarjeta de existencias",
+        "tarjetas de existencias", "control de existencias",
+        "método promedio ponderado", "metodo promedio ponderado",
+        "método peps", "metodo peps", "costeo de inventarios",
+        "valuación de inventarios", "valuacion de inventarios",
+    )
+    return any(k in t for k in palabras)
+
+
+def metodo_kardex_sugerido(monografia_json):
+    """PEPS solo si el enunciado lo pide explícitamente. Por defecto,
+    TANA usa PROMEDIO PONDERADO (método que ya usa en sus prácticas)."""
+    t = _texto_solicitudes_monografia(monografia_json)
+    if "peps" in t or "fifo" in t:
+        return "PEPS"
+    return "PROMEDIO PONDERADO"
 
 
 def asegurar_cuenta_79_en_destinos(asientos, pcge_map):
@@ -1270,6 +1414,140 @@ def corregir_retiro_socio(asientos, monografia_json):
     resultado.extend([dist, pago])
     return resultado
 
+# ============================================================
+# KARDEX: validación aritmética y sincronización con los asientos
+# ============================================================
+def _iter_kardex_movimientos(kardex):
+    """Itera todos los movimientos de todas las tarjetas del Kardex,
+    devolviendo (articulo_dict, movimiento_dict)."""
+    if not isinstance(kardex, list):
+        return
+    for articulo in kardex:
+        if not isinstance(articulo, dict):
+            continue
+        for mov in articulo.get("movimientos", []) or []:
+            if isinstance(mov, dict):
+                yield articulo, mov
+
+
+def validar_kardex(kardex):
+    """Revalida de forma puramente aritmética (sin juicio contable) que
+    cada tarjeta del Kardex cuadre: saldo = saldo anterior + entrada -
+    salida. No corrige nada: solo devuelve alertas, igual que el resto
+    de validaciones de TANA.
+    """
+    alertas = []
+    if not isinstance(kardex, list):
+        return alertas
+    for articulo in kardex:
+        if not isinstance(articulo, dict):
+            continue
+        nombre = articulo.get("articulo", "Artículo sin nombre")
+        saldo_cant_previo = 0.0
+        saldo_costo_previo = 0.0
+        for idx, mov in enumerate(articulo.get("movimientos", []) or [], start=1):
+            if not isinstance(mov, dict):
+                continue
+            entrada_cant = _to_float(mov.get("entrada_cantidad"), 0.0) or 0.0
+            entrada_total = _to_float(mov.get("entrada_costo_total"), 0.0) or 0.0
+            salida_cant = _to_float(mov.get("salida_cantidad"), 0.0) or 0.0
+            salida_total = _to_float(mov.get("salida_costo_total"), 0.0) or 0.0
+            saldo_cant = _to_float(mov.get("saldo_cantidad"), None)
+            saldo_costo = _to_float(mov.get("saldo_costo_total"), None)
+
+            cant_esperada = saldo_cant_previo + entrada_cant - salida_cant
+            costo_esperado = saldo_costo_previo + entrada_total - salida_total
+
+            if saldo_cant is not None and abs(saldo_cant - cant_esperada) > 0.01:
+                alertas.append(
+                    f"Kardex '{nombre}', movimiento {idx}: el saldo en unidades no "
+                    f"cuadra (esperado {cant_esperada:.2f}, indicado {saldo_cant:.2f})."
+                )
+            if saldo_costo is not None and abs(saldo_costo - costo_esperado) > 0.5:
+                alertas.append(
+                    f"Kardex '{nombre}', movimiento {idx}: el saldo valorizado no "
+                    f"cuadra (esperado S/ {costo_esperado:.2f}, indicado S/ {saldo_costo:.2f})."
+                )
+
+            saldo_cant_previo = saldo_cant if saldo_cant is not None else cant_esperada
+            saldo_costo_previo = saldo_costo if saldo_costo is not None else costo_esperado
+    return alertas
+
+
+def sincronizar_costo_ventas_con_kardex(asientos, kardex):
+    """
+    Garantiza que el costo de venta (cuenta 69) reconocido en los asientos
+    sea EXACTAMENTE el que arroja el Kardex para esa misma salida, en vez
+    de confiar en que Gemini haya calculado lo mismo dos veces por
+    separado. Sin esto, HT/ERN/ERF podrían quedar desincronizados del
+    Kardex aunque cada hoja, vista sola, cuadre internamente.
+
+    Empareja por 'operacion_numero': si un movimiento de salida del Kardex
+    trae ese dato y el asiento de esa operación tiene una línea de costo
+    de venta (69xxx) contra una línea de existencias (20xxx), se ajustan
+    sus importes al costo_total de esa salida. Si no hay coincidencia
+    clara, no se toca nada (TANA no adivina).
+    """
+    if not kardex or not asientos:
+        return asientos, []
+
+    salidas_por_operacion = {}
+    for _articulo, mov in _iter_kardex_movimientos(kardex):
+        op_num = mov.get("operacion_numero")
+        salida_total = _to_float(mov.get("salida_costo_total"), 0.0) or 0.0
+        if op_num is None or salida_total <= 0:
+            continue
+        try:
+            op_key = str(int(op_num))
+        except Exception:
+            op_key = str(op_num).strip()
+        salidas_por_operacion[op_key] = salida_total
+
+    if not salidas_por_operacion:
+        return asientos, []
+
+    alertas = []
+    resultado = []
+    for asiento in asientos:
+        a = dict(asiento) if isinstance(asiento, dict) else asiento
+        op_key = None
+        if isinstance(a, dict) and a.get("operacion_numero") is not None:
+            try:
+                op_key = str(int(a.get("operacion_numero")))
+            except Exception:
+                op_key = str(a.get("operacion_numero")).strip()
+
+        costo_kardex = salidas_por_operacion.get(op_key) if op_key is not None else None
+        if costo_kardex is not None and isinstance(a, dict):
+            lineas = list(a.get("lineas", []) or [])
+            linea_69 = next(
+                (l for l in lineas if isinstance(l, dict) and str(l.get("codigo", "")).startswith("69")),
+                None,
+            )
+            linea_20 = next(
+                (l for l in lineas if isinstance(l, dict) and str(l.get("codigo", "")).startswith("20")),
+                None,
+            )
+            if linea_69 is not None and linea_20 is not None:
+                actual = _to_float(linea_69.get("debe"), 0.0) or 0.0
+                costo_kardex = round(costo_kardex, 2)
+                if abs(actual - costo_kardex) > 0.01:
+                    linea_69["debe"] = costo_kardex
+                    linea_69["haber"] = 0.0
+                    linea_20["haber"] = costo_kardex
+                    linea_20["debe"] = 0.0
+                    a["lineas"] = lineas
+                    nota = (
+                        f"Costo de venta ajustado a S/ {costo_kardex:.2f} para que "
+                        "coincida exactamente con el Kardex."
+                    )
+                    anterior = str(a.get("observacion", "") or "").strip()
+                    a["observacion"] = (anterior + " " + nota).strip()
+                    alertas.append(f"Asiento {a.get('numero', '')}: {nota}")
+        resultado.append(a)
+    return resultado, alertas
+
+
 def resolve_asientos_with_gemini():
     if not get_gemini_profiles():
         raise RuntimeError("No está configurada ninguna GEMINI_API_KEY en Streamlit Secrets.")
@@ -1278,16 +1556,23 @@ def resolve_asientos_with_gemini():
     # Solo cuentas de 5 dígitos: el usuario indicó que este es el nivel operativo de TANA.
     pcge_5 = [[code, desc] for code, desc in pcge_map.items() if re.fullmatch(r"\d{5}", code)]
 
+    monografia_json = st.session_state.get("monografia_json", {})
+    incluir_rc = requiere_registro_compras(monografia_json)
+    incluir_rv = requiere_registro_ventas(monografia_json)
+    incluir_kx = requiere_kardex(monografia_json)
+    metodo_kx = metodo_kardex_sugerido(monografia_json)
+
     # No usamos str.format() aquí porque ASIENTOS_PROMPT contiene un ejemplo
     # JSON con llaves. format() interpretaría esas llaves como placeholders
     # y produciría errores del tipo: "\n  \"asientos\"".
     prompt = (
         ASIENTOS_PROMPT
         .replace("{pcge}", json.dumps(pcge_5, ensure_ascii=False))
-        .replace(
-            "{operaciones}",
-            json.dumps(st.session_state.get("monografia_json", {}), ensure_ascii=False),
-        )
+        .replace("{operaciones}", json.dumps(monografia_json, ensure_ascii=False))
+        .replace("{incluir_rc}", "true" if incluir_rc else "false")
+        .replace("{incluir_rv}", "true" if incluir_rv else "false")
+        .replace("{incluir_kx}", "true" if incluir_kx else "false")
+        .replace("{metodo_kardex}", metodo_kx)
     )
 
     def make_contents(_client):
@@ -1316,13 +1601,37 @@ if "monografia_json" in st.session_state and "asientos_contables" not in st.sess
                 raise ValueError("La respuesta de Gemini no tiene una estructura de asientos válida.")
             if not isinstance(asientos_generados, list):
                 raise ValueError("La clave 'asientos' de Gemini no contiene una lista.")
+
+            registro_compras = resolved.get("registro_compras", []) if isinstance(resolved, dict) else []
+            registro_ventas = resolved.get("registro_ventas", []) if isinstance(resolved, dict) else []
+            kardex = resolved.get("kardex", []) if isinstance(resolved, dict) else []
+            if not isinstance(registro_compras, list):
+                registro_compras = []
+            if not isinstance(registro_ventas, list):
+                registro_ventas = []
+            if not isinstance(kardex, list):
+                kardex = []
+
             asientos_generados = asegurar_cuenta_79_en_destinos(asientos_generados, pcge_map)
             asientos_generados = corregir_retiro_socio(asientos_generados, st.session_state.get("monografia_json", {}))
+
+            # Sincroniza el costo de venta de los asientos con el Kardex
+            # ANTES de validar, para que HT/ERN/ERF hereden el importe
+            # correcto (ambos se calculan a partir de "asientos_contables").
+            alertas_kardex = []
+            if kardex:
+                asientos_generados, alertas_sync = sincronizar_costo_ventas_con_kardex(asientos_generados, kardex)
+                alertas_kardex.extend(alertas_sync)
+                alertas_kardex.extend(validar_kardex(kardex))
+
             valid, errors, warnings = validate_asientos({"asientos": asientos_generados}, pcge_map)
             st.session_state["asientos_contables"] = asientos_generados
             st.session_state["asientos_validos"] = valid
             st.session_state["errores_asientos"] = errors
-            st.session_state["alertas_asientos"] = list(alertas_gemini) + list(warnings)
+            st.session_state["alertas_asientos"] = list(alertas_gemini) + list(warnings) + alertas_kardex
+            st.session_state["registro_compras"] = registro_compras
+            st.session_state["registro_ventas"] = registro_ventas
+            st.session_state["kardex"] = kardex
         except Exception as exc:
             st.error(f"No se pudieron desarrollar los asientos: {exc}")
             st.stop()
@@ -1996,6 +2305,148 @@ def ht_sum(code, col):
     return f'=SUMIF(HT!$A$4:$A${HT_LAST_ROW},"{code}",HT!${col}$4:${col}${HT_LAST_ROW})'
 
 # ============================================================
+# HOJAS: REGISTRO DE COMPRAS, REGISTRO DE VENTAS Y KARDEX
+# Solo se crean cuando la monografía los pide explícitamente
+# (ver requiere_registro_compras / requiere_registro_ventas /
+# requiere_kardex). Se alimentan directamente de lo que TANA
+# resolvió junto con los asientos, para que el costo de venta que
+# aquí se ve sea el MISMO que ya quedó registrado en Asientos_
+# Contables, HT, ERF y ERN (ver sincronizar_costo_ventas_con_kardex).
+# ============================================================
+registro_compras_data = st.session_state.get("registro_compras", []) or []
+registro_ventas_data = st.session_state.get("registro_ventas", []) or []
+kardex_data = st.session_state.get("kardex", []) or []
+
+ws_rc = None
+if registro_compras_data:
+    ws_rc = wb.create_sheet("Registro_Compras")
+    ws_rc.merge_cells("A1:H1")
+    ws_rc["A1"] = "REGISTRO DE COMPRAS"
+    ws_rc["A1"].font = TITLE_FONT
+    headers_rc = ["N°", "Fecha", "Comprobante", "Proveedor", "RUC Proveedor",
+                  "Base Imponible S/", "IGV S/", "Total S/"]
+    for i, h in enumerate(headers_rc, start=1):
+        ws_rc.cell(row=3, column=i, value=h)
+    style_header(ws_rc, 3, 1, len(headers_rc))
+    rr = 4
+    tot_base = tot_igv = tot_total = 0.0
+    for item in registro_compras_data:
+        if not isinstance(item, dict):
+            continue
+        comprobante = " ".join(
+            str(item.get(k, "")).strip() for k in ("tipo_comprobante", "serie_numero") if item.get(k)
+        )
+        base = _to_float(item.get("base_imponible"), 0.0) or 0.0
+        igv = _to_float(item.get("igv"), 0.0) or 0.0
+        total = _to_float(item.get("total"), 0.0) or (base + igv)
+        tot_base += base; tot_igv += igv; tot_total += total
+        valores = [
+            item.get("numero", ""), item.get("fecha", ""), comprobante,
+            item.get("proveedor", ""), item.get("ruc_proveedor", ""),
+            base, igv, total,
+        ]
+        for c, v in enumerate(valores, start=1):
+            cell = ws_rc.cell(row=rr, column=c, value=v)
+            cell.font = BLACK
+            if c in (6, 7, 8):
+                cell.number_format = '#,##0.00'
+        rr += 1
+    ws_rc.cell(rr, 4, "TOTAL").font = BOLD
+    for c, v in ((6, tot_base), (7, tot_igv), (8, tot_total)):
+        cell = ws_rc.cell(rr, c, v)
+        cell.font = BOLD
+        cell.number_format = '#,##0.00'
+    ws_rc.freeze_panes = "A4"
+    autofit(ws_rc, [6, 12, 22, 30, 14, 16, 14, 14])
+
+ws_rv = None
+if registro_ventas_data:
+    ws_rv = wb.create_sheet("Registro_Ventas")
+    ws_rv.merge_cells("A1:H1")
+    ws_rv["A1"] = "REGISTRO DE VENTAS"
+    ws_rv["A1"].font = TITLE_FONT
+    headers_rv = ["N°", "Fecha", "Comprobante", "Cliente", "Doc. Cliente",
+                  "Base Imponible S/", "IGV S/", "Total S/"]
+    for i, h in enumerate(headers_rv, start=1):
+        ws_rv.cell(row=3, column=i, value=h)
+    style_header(ws_rv, 3, 1, len(headers_rv))
+    rr = 4
+    tot_base = tot_igv = tot_total = 0.0
+    for item in registro_ventas_data:
+        if not isinstance(item, dict):
+            continue
+        comprobante = " ".join(
+            str(item.get(k, "")).strip() for k in ("tipo_comprobante", "serie_numero") if item.get(k)
+        )
+        base = _to_float(item.get("base_imponible"), 0.0) or 0.0
+        igv = _to_float(item.get("igv"), 0.0) or 0.0
+        total = _to_float(item.get("total"), 0.0) or (base + igv)
+        tot_base += base; tot_igv += igv; tot_total += total
+        valores = [
+            item.get("numero", ""), item.get("fecha", ""), comprobante,
+            item.get("cliente", ""), item.get("documento_cliente", ""),
+            base, igv, total,
+        ]
+        for c, v in enumerate(valores, start=1):
+            cell = ws_rv.cell(row=rr, column=c, value=v)
+            cell.font = BLACK
+            if c in (6, 7, 8):
+                cell.number_format = '#,##0.00'
+        rr += 1
+    ws_rv.cell(rr, 4, "TOTAL").font = BOLD
+    for c, v in ((6, tot_base), (7, tot_igv), (8, tot_total)):
+        cell = ws_rv.cell(rr, c, v)
+        cell.font = BOLD
+        cell.number_format = '#,##0.00'
+    ws_rv.freeze_panes = "A4"
+    autofit(ws_rv, [6, 12, 22, 30, 14, 16, 14, 14])
+
+ws_kx = None
+if kardex_data:
+    ws_kx = wb.create_sheet("Kardex")
+    headers_kx = ["Fila", "Fecha", "Documento", "Detalle",
+                  "Entrada Cant.", "Entrada C.Unit.", "Entrada C.Total",
+                  "Salida Cant.", "Salida C.Unit.", "Salida C.Total",
+                  "Saldo Cant.", "Saldo C.Unit.", "Saldo C.Total"]
+    rr = 1
+    for articulo in kardex_data:
+        if not isinstance(articulo, dict):
+            continue
+        nombre = articulo.get("articulo", "Artículo")
+        metodo = articulo.get("metodo", "PROMEDIO PONDERADO")
+        ws_kx.merge_cells(start_row=rr, start_column=1, end_row=rr, end_column=len(headers_kx))
+        ws_kx.cell(rr, 1, f"KARDEX — {nombre}  (Método: {metodo})").font = TITLE_FONT
+        rr += 1
+        for i, h in enumerate(headers_kx, start=1):
+            ws_kx.cell(row=rr, column=i, value=h)
+        style_header(ws_kx, rr, 1, len(headers_kx))
+        rr += 1
+        for mov in articulo.get("movimientos", []) or []:
+            if not isinstance(mov, dict):
+                continue
+            valores = [
+                mov.get("fila", ""), mov.get("fecha", ""), mov.get("documento", ""), mov.get("detalle", ""),
+                _to_float(mov.get("entrada_cantidad"), 0.0) or 0.0,
+                _to_float(mov.get("entrada_costo_unitario"), 0.0) or 0.0,
+                _to_float(mov.get("entrada_costo_total"), 0.0) or 0.0,
+                _to_float(mov.get("salida_cantidad"), 0.0) or 0.0,
+                _to_float(mov.get("salida_costo_unitario"), 0.0) or 0.0,
+                _to_float(mov.get("salida_costo_total"), 0.0) or 0.0,
+                _to_float(mov.get("saldo_cantidad"), 0.0) or 0.0,
+                _to_float(mov.get("saldo_costo_unitario"), 0.0) or 0.0,
+                _to_float(mov.get("saldo_costo_total"), 0.0) or 0.0,
+            ]
+            for c, v in enumerate(valores, start=1):
+                cell = ws_kx.cell(row=rr, column=c, value=v)
+                cell.font = BLACK
+                if c >= 5:
+                    cell.number_format = '#,##0.00'
+            rr += 1
+        rr += 2  # fila en blanco entre tarjetas de distintos artículos
+    ws_kx.freeze_panes = "A1"
+    autofit(ws_kx, [7, 12, 16, 28, 11, 12, 13, 11, 12, 13, 11, 12, 13])
+
+# ============================================================
 # HOJAS: ESTADOS FINANCIEROS
 # ============================================================
 # Los tres estados se alimentan de la misma HT:
@@ -2173,136 +2624,6 @@ otros_str = ''.join([f'+E{x}' for x in otros_rows])
 _write_amount(ws8, r, f'=E{utilidad_operativa_row}{otros_str}', True)
 
 autofit(ws8, [5, 45, 5, 12, 18])
-
-
-# ============================================================
-# ERN — ESTADO DE RESULTADOS POR NATURALEZA
-# ============================================================
-ws9 = wb.create_sheet('ERN')
-_report_title(ws9, 'ESTADO DE RESULTADOS POR NATURALEZA')
-_report_header(ws9, 4)
-
-r = 5
-_write_label(ws9, r, 'Ventas netas (70)')
-_write_amount(ws9, r, _sum_ht('70', 'L'))
-v_row = r; r += 1
-
-_write_label(ws9, r, 'Compras (60)')
-_write_amount(ws9, r, f'=-{_sum_ht("60", "K")[1:]}')
-c_row = r; r += 1
-
-_write_label(ws9, r, 'Variación de inventarios (61)')
-_write_amount(ws9, r, f'={_sum_ht("61", "L")[1:]}-{_sum_ht("61", "K")[1:]}')
-var_row = r; r += 1
-
-_write_label(ws9, r, 'MARGEN COMERCIAL', True)
-margen_row = r
-_write_amount(ws9, r, f'=E{v_row}+E{c_row}+E{var_row}', True)
-r += 2
-
-gastos_nat_rows = []
-for pref in ['62', '63', '64', '65', '68']:
-    if _prefix_exists(pref):
-        _write_label(ws9, r, f'Gastos por naturaleza ({pref})')
-        _write_amount(ws9, r, f'=-{_sum_ht(pref, "K")[1:]}')
-        gastos_nat_rows.append(r)
-        r += 1
-
-_write_label(ws9, r, 'RESULTADO DE OPERACIÓN', True)
-res_op_row = r
-gn_str = ''.join([f'+E{x}' for x in gastos_nat_rows])
-_write_amount(ws9, r, f'=E{margen_row}{gn_str}', True)
-r += 2
-
-_write_label(ws9, r, 'RESULTADO DEL EJERCICIO', True)
-_write_amount(ws9, r, f'=E{res_op_row}', True)
-
-autofit(ws9, [5, 45, 5, 12, 18])
-
-
-# ============================================================
-# ESF — ESTADO DE SITUACIÓN FINANCIERA
-# ============================================================
-ws10 = wb.create_sheet('ESF')
-_report_title(ws10, 'ESTADO DE SITUACIÓN FINANCIERA')
-
-ws10.cell(row=4, column=2, value='ACTIVO').font = BOLD
-ws10.cell(row=4, column=3, value='S/').font = BOLD
-ws10.cell(row=4, column=5, value='PASIVO Y PATRIMONIO').font = BOLD
-ws10.cell(row=4, column=6, value='S/').font = BOLD
-
-# --- Llenar Activo (Elementos 1, 2, 3 desde columna O de HT) ---
-r_act = 5
-_write_label(ws10, r_act, 'Activo Corriente y No Corriente', True); r_act += 1
-for code in cuentas_reporte:
-    if code.startswith(('1', '2', '3')):
-        ws10.cell(row=r_act, column=2, value=f'{code} - {pcge_map.get(code, code)}')
-        ws10.cell(row=r_act, column=3, value=f'={ht_sum(code, "O")}')
-        ws10.cell(row=r_act, column=3).number_format = '#,##0.00;(#,##0.00);"-"'
-        r_act += 1
-        
-total_activo_row = r_act
-ws10.cell(row=total_activo_row, column=2, value='TOTAL ACTIVO').font = BOLD
-ws10.cell(row=total_activo_row, column=3, value=f'=SUM(C6:C{r_act-1})').font = BOLD
-ws10.cell(row=total_activo_row, column=3).number_format = '#,##0.00;(#,##0.00);"-"'
-
-# --- Llenar Pasivo (Elemento 4 desde columna P de HT) ---
-r_pas = 5
-_write_label(ws10, r_pas, 'Pasivo', True); r_pas += 1
-for code in cuentas_reporte:
-    if code.startswith('4'):
-        ws10.cell(row=r_pas, column=5, value=f'{code} - {pcge_map.get(code, code)}')
-        ws10.cell(row=r_pas, column=6, value=f'={ht_sum(code, "P")}')
-        ws10.cell(row=r_pas, column=6).number_format = '#,##0.00;(#,##0.00);"-"'
-        r_pas += 1
-        
-# --- Llenar Patrimonio (Elemento 5 desde columna P de HT) ---
-_write_label(ws10, r_pas, 'Patrimonio', True); r_pas += 1
-for code in cuentas_reporte:
-    if code.startswith('5'):
-        ws10.cell(row=r_pas, column=5, value=f'{code} - {pcge_map.get(code, code)}')
-        ws10.cell(row=r_pas, column=6, value=f'={ht_sum(code, "P")}')
-        ws10.cell(row=r_pas, column=6).number_format = '#,##0.00;(#,##0.00);"-"'
-        r_pas += 1
-
-# --- Utilidad / Resultado del Ejercicio (Cuadre Final) ---
-ws10.cell(row=r_pas, column=5, value='Resultado del Ejercicio').font = BOLD
-ws10.cell(row=r_pas, column=6, value=f'=C{total_activo_row}-SUM(F6:F{r_pas-1})')
-ws10.cell(row=r_pas, column=6).number_format = '#,##0.00;(#,##0.00);"-"'
-r_pas += 1
-
-total_pasivo_row = r_pas
-ws10.cell(row=total_pasivo_row, column=5, value='TOTAL PASIVO Y PATRIMONIO').font = BOLD
-ws10.cell(row=total_pasivo_row, column=6, value=f'=SUM(F6:F{r_pas-1})').font = BOLD
-ws10.cell(row=total_pasivo_row, column=6).number_format = '#,##0.00;(#,##0.00);"-"'
-
-autofit(ws10, [5, 45, 15, 5, 45, 15])
-
-
-# ============================================================
-# GUARDAR EXCEL Y MOSTRAR DESCARGA EN INTERFAZ
-# ============================================================
-output = io.BytesIO()
-wb.save(output)
-output.seek(0)
-
-# Renderizar el archivo en Streamlit solo si se cargó el json
-if "monografia_json" in st.session_state:
-    st.markdown('<div class="tana-result-card" style="border-color:#087EA4; background:#F0F8FA; margin-top: 20px;">'
-                '<span style="font-size:24px;">✅</span>'
-                '<div>'
-                '<div class="name" style="color:#087EA4;">¡TANA ha terminado la monografía!</div>'
-                '<div style="font-size:13px; color:#4D6172;">Los asientos de apertura, libro diario, libro mayor, HT y estados financieros están listos.</div>'
-                '</div></div>', unsafe_allow_html=True)
-    
-    st.download_button(
-        label="📥 Descargar Excel Completo",
-        data=output,
-        file_name=f"TANA_{st.session_state.get('monografia_nombre', 'Monografia_Resuelta')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=True
-    )
-
 # 78: se incorpora si existe.
 otros_78_row = None
 if _prefix_exists('78'):
@@ -2748,6 +3069,9 @@ if "monografia_texto" in st.session_state:
 # al usuario. El archivo final muestra únicamente los reportes solicitados.
 HOJAS_PUBLICAS = [
     "Asientos_Contables",
+    "Registro_Compras",
+    "Registro_Ventas",
+    "Kardex",
     "LM",
     "HT",
     "ESF",
@@ -2784,10 +3108,17 @@ buffer.seek(0)
 
 _sig = st.session_state.get("tana_file_signature")
 if _sig and st.session_state.get("tana_resuelto_signature") != _sig:
+    _items_resueltos = ["Asientos", "HT", "ERN", "ERF", "ESF"]
+    if registro_compras_data:
+        _items_resueltos.append("Registro de Compras")
+    if registro_ventas_data:
+        _items_resueltos.append("Registro de Ventas")
+    if kardex_data:
+        _items_resueltos.append("Kardex")
+    _lista_html = "<br>".join(f"&nbsp;&nbsp;• {x}" for x in _items_resueltos)
     _tana_chat_add(
         "assistant",
-        "TANA ha resuelto tu monografía:<br>"
-        "&nbsp;&nbsp;• Asientos<br>&nbsp;&nbsp;• HT<br>&nbsp;&nbsp;• ERN<br>&nbsp;&nbsp;• ERF<br>&nbsp;&nbsp;• ESF",
+        "TANA ha resuelto tu monografía:<br>" + _lista_html,
     )
     st.session_state["tana_resuelto_signature"] = _sig
     st.session_state["tana_excel_buffer"] = buffer.getvalue()
