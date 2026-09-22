@@ -5,6 +5,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from decimal import Decimal, InvalidOperation
 
 import streamlit as st
@@ -355,17 +356,25 @@ def _generate_with_fallback(contents_factory, config):
     errors = []
     for profile in profiles:
         client = get_gemini_client(profile["api_key"])
-        try:
-            response = client.models.generate_content(
-                model=profile["model"],
-                contents=contents_factory(client),
-                config=config,
-            )
-            return response, profile
-        except Exception as exc:
-            errors.append((profile["label"], profile["model"], exc))
-            if not _is_gemini_fallback_error(exc):
-                raise RuntimeError(str(exc)) from exc
+
+        # Reintentos automáticos cuando Gemini responde 503 (High Demand)
+        for intento in range(3):
+            try:
+                response = client.models.generate_content(
+                    model=profile["model"],
+                    contents=contents_factory(client),
+                    config=config,
+                )
+                return response, profile
+            except Exception as exc:
+                if "503" in str(exc).lower() or "high demand" in str(exc).lower():
+                    if intento < 2:
+                        time.sleep(2 * (intento + 1))
+                        continue
+                errors.append((profile["label"], profile["model"], exc))
+                if not _is_gemini_fallback_error(exc):
+                    raise RuntimeError(str(exc)) from exc
+                break
 
     raise RuntimeError(_fallback_error_message(errors))
 
@@ -451,23 +460,30 @@ def extract_with_gemini(uploaded):
         for profile in profiles:
             client = get_gemini_client(profile["api_key"])
             gemini_file = None
-            try:
-                # Cada perfil tiene su propio cliente/proyecto. El archivo se sube
-                # a ese proyecto y solo entonces se consume la generación.
-                gemini_file = client.files.upload(file=temp_path)
-                response = client.models.generate_content(
-                    model=profile["model"],
-                    contents=[gemini_file, EXTRACTION_PROMPT],
-                    config=types.GenerateContentConfig(response_mime_type="application/json"),
-                )
-                raw = response.text or ""
-                data = json.loads(raw)
-                return data
-            except Exception as exc:
-                errors.append((profile["label"], profile["model"], exc))
-                if not _is_gemini_fallback_error(exc):
-                    raise RuntimeError(_gemini_error_message(exc)) from exc
-                continue
+
+            for intento in range(3):
+                try:
+                    # Cada perfil tiene su propio cliente/proyecto.
+                    gemini_file = client.files.upload(file=temp_path)
+                    response = client.models.generate_content(
+                        model=profile["model"],
+                        contents=[gemini_file, EXTRACTION_PROMPT],
+                        config=types.GenerateContentConfig(response_mime_type="application/json"),
+                    )
+                    raw = response.text or ""
+                    data = json.loads(raw)
+                    return data
+
+                except Exception as exc:
+                    if "503" in str(exc).lower() or "high demand" in str(exc).lower():
+                        if intento < 2:
+                            time.sleep(2 * (intento + 1))
+                            continue
+
+                    errors.append((profile["label"], profile["model"], exc))
+                    if not _is_gemini_fallback_error(exc):
+                        raise RuntimeError(_gemini_error_message(exc)) from exc
+                    break
 
         raise RuntimeError(_fallback_error_message(errors))
     finally:
