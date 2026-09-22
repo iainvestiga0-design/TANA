@@ -1720,25 +1720,8 @@ if (pregunta_top or audio_top is not None) and st.session_state.get("asientos_co
                 finally:
                     if temp_audio and os.path.exists(temp_audio):
                         os.remove(temp_audio)
-    st.rerun()                try:
-                    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
-                        tmp.write(audio_top.getvalue())
-                        temp_audio = tmp.name
-                    def audio_contents(client):
-                        audio_file = client.files.upload(file=temp_audio)
-                        return [audio_file, "Escucha el audio del estudiante, transcribe su pregunta y luego respóndela. No inventes datos. Usa el siguiente contexto:\n" + _tana_contexto_tutor()]
-                    response, profile = _generate_with_fallback(audio_contents, types.GenerateContentConfig())
-                    respuesta_audio = response.text or "No pude interpretar el audio."
-                    st.session_state["respuesta_tana"] = respuesta_audio
-                    st.session_state["respuesta_tana_ruta"] = profile["label"]
-                    _tana_chat_add("assistant", respuesta_audio)
-                except Exception as exc:
-                    st.error(f"No se pudo procesar el audio: {_gemini_error_message(exc)}")
-                finally:
-                    if temp_audio and os.path.exists(temp_audio):
-                        os.remove(temp_audio)
     st.rerun()
-
+    
 # Nota: el aviso "TANA terminó el desarrollo contable..." se muestra más
 # abajo, como burbuja de chat, SOLO cuando el workbook ya se generó de
 # verdad (ver bloque con tana_resuelto_signature). La línea que estaba
