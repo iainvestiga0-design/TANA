@@ -535,89 +535,10 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .t
     z-index: 999;
     background: #fff;
     border: 1px solid #DDE8EF;
-    border-radius: 26px;
-    padding: 8px 10px;
+    border-radius: 22px;
+    padding: 10px 16px 14px 16px;
     box-shadow: 0 6px 22px rgba(18,48,74,.09);
     margin-bottom: 16px;
-}
-
-/* ---- Fila única de la barra (adjuntar + micrófono + texto) ----
-   Los tres controles viven en las mismas columnas de Streamlit, dentro
-   del contenedor fijo de arriba, para que se vean como UNA sola barra
-   (como ChatGPT) y no como cajas separadas apiladas. */
-div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stHorizontalBlock"] {
-    gap: 4px !important;
-    align-items: center !important;
-}
-div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="column"] {
-    display: flex !important;
-    align-items: center !important;
-}
-
-/* Botón "Adjuntar archivo" reducido a un círculo con "+" */
-div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stFileUploader"] {
-    width: 40px !important;
-}
-div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stFileUploaderDropzone"] {
-    position: relative !important;
-    background: #F1F5F8 !important;
-    border: 1px solid #DDE8EF !important;
-    border-radius: 50% !important;
-    width: 40px !important;
-    height: 40px !important;
-    min-height: 40px !important;
-    padding: 0 !important;
-    display: flex !important;
-    align-items: center !important;
-    justify-content: center !important;
-    overflow: hidden !important;
-}
-div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stFileUploaderDropzoneInstructions"] {
-    display: none !important;
-}
-div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stFileUploaderDropzone"]::before {
-    content: "+";
-    font-size: 22px;
-    font-weight: 700;
-    color: #087EA4;
-    pointer-events: none;
-}
-div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stFileUploaderDropzone"] button {
-    position: absolute !important;
-    inset: 0 !important;
-    width: 100% !important;
-    height: 100% !important;
-    opacity: 0 !important;
-    cursor: pointer !important;
-}
-
-/* Botón de voz reducido a un círculo con el ícono de micrófono */
-div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stAudioInput"] {
-    background: #F1F5F8 !important;
-    border: 1px solid #DDE8EF !important;
-    border-radius: 50% !important;
-    width: 40px !important;
-    height: 40px !important;
-    min-height: 40px !important;
-    padding: 0 !important;
-    display: flex !important;
-    align-items: center !important;
-    justify-content: center !important;
-    overflow: hidden !important;
-}
-div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stAudioInput"] > div {
-    transform: scale(.68);
-}
-
-/* Campo de texto: sin su propio marco, para que se vea unido a la
-   barra exterior en vez de como una caja aparte. */
-div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stChatInput"] {
-    border: none !important;
-    box-shadow: none !important;
-    background: transparent !important;
-}
-div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stChatInput"] textarea {
-    background: transparent !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -689,39 +610,24 @@ for msg in st.session_state["tana_chat"]:
 # marcador invisible que el CSS de arriba usa para anclarla. El resto
 # del contenido (burbujas de chat) sigue con scroll normal.
 # ============================================================
-# Contadores usados como sufijo de "key" de los widgets de archivo y
-# audio: al incrementarlos forzamos que Streamlit los vuelva a crear
-# vacíos en el siguiente rerun, así la barra "se limpia" sola apenas
-# TANA termina de leer el archivo o de responder la consulta.
-st.session_state.setdefault("tana_uploader_nonce", 0)
-st.session_state.setdefault("tana_audio_nonce", 0)
-
-# ============================================================
-# BARRA UNIFICADA DE ENTRADA (Archivo + Voz + Chat, una sola fila)
-# ============================================================
 inputbar_container = st.container()
 with inputbar_container:
     st.markdown('<span class="tana-inputbar-anchor"></span>', unsafe_allow_html=True)
-
-    col_upload, col_mic, col_text = st.columns([0.09, 0.09, 0.82])
-    with col_upload:
+    bar = st.columns([0.9, 5.4, 1.3, 0.7], gap="small")
+    with bar[0]:
         uploaded_file = st.file_uploader(
             "Archivo", type=SUPPORTED_TYPES, label_visibility="collapsed",
-            help="PDF, DOC, DOCX, XLS, XLSX, JPG, JPEG y PNG.",
-            key=f"tana_uploader_{st.session_state['tana_uploader_nonce']}",
+            help="PDF, DOC, DOCX, XLS, XLSX, JPG, JPEG y PNG."
         )
-    with col_mic:
-        audio_top = (
-            st.audio_input(
-                "Hablar", label_visibility="collapsed",
-                key=f"audio_tana_top_{st.session_state['tana_audio_nonce']}",
-            )
-            if hasattr(st, "audio_input") else None
+    with bar[1]:
+        pregunta_top = st.text_input(
+            "Consulta", placeholder="Pregunta a TANA…",
+            key="pregunta_tana_top", label_visibility="collapsed"
         )
-    with col_text:
-        # Campo unificado que responde a ENTER y elimina el botón de enviar.
-        # st.chat_input se vacía solo en cada rerun tras enviar.
-        pregunta_top = st.chat_input("Escribe tu consulta para TANA...")
+    with bar[2]:
+        audio_top = st.audio_input("Hablar", key="audio_tana_top", label_visibility="collapsed") if hasattr(st, "audio_input") else None
+    with bar[3]:
+        enviar_top = st.button("➤", type="primary", key="btn_enviar_tana_top", use_container_width=True)
 
 if uploaded_file:
     st.caption(f"📄 {uploaded_file.name}")
@@ -777,9 +683,6 @@ if uploaded_file:
                 st.session_state["monografia_texto"] = extraction_to_text(extracted)
                 st.session_state["monografia_nombre"] = uploaded_file.name
                 st.session_state["tana_file_signature"] = file_signature
-                # Limpia el botón de adjuntar (vuelve a su círculo "+" vacío)
-                # ahora que TANA ya leyó el archivo.
-                st.session_state["tana_uploader_nonce"] += 1
                 # Fuerza una nueva ejecución para continuar con el desarrollo.
                 st.rerun()
             except json.JSONDecodeError:
@@ -1771,12 +1674,10 @@ PREGUNTA:
     )
     return response.text or "No pude generar una respuesta.", profile["label"]
 
-# ============================================================
-# ATENCIÓN A CONSULTAS (CHAT Y AUDIO)
-# ============================================================
-# Procesar entrada al enviar por ENTER o Audio
-if (pregunta_top or audio_top is not None) and st.session_state.get("asientos_contables"):
-    if pregunta_top:
+# La consulta y el audio se capturan arriba. Aquí solo se procesa la acción,
+# una vez que las funciones del tutor ya están definidas.
+if (enviar_top or audio_top is not None) and (pregunta_top.strip() or audio_top is not None) and st.session_state.get("asientos_contables"):
+    if enviar_top and pregunta_top.strip():
         _tana_chat_add("user", pregunta_top.strip())
         with st.spinner("TANA está preparando la explicación…"):
             try:
@@ -1786,14 +1687,16 @@ if (pregunta_top or audio_top is not None) and st.session_state.get("asientos_co
                 _tana_chat_add("assistant", respuesta)
             except Exception as exc:
                 st.error(f"No se pudo responder: {_gemini_error_message(exc)}")
-                
     elif audio_top is not None:
         import hashlib
         _audio_sig = hashlib.sha1(audio_top.getvalue()).hexdigest()
-        if st.session_state.get("audio_tana_processed") != _audio_sig:
+        if st.session_state.get("audio_tana_processed") == _audio_sig:
+            audio_top = None
+        else:
             st.session_state["audio_tana_processed"] = _audio_sig
-            _tana_chat_add("user", "🎤 Consulta enviada por voz")
-            with st.spinner("Procesando audio…"):
+        if audio_top is not None:
+            _tana_chat_add("user", "🎤 Pregunta enviada por voz")
+            with st.spinner("TANA está escuchando y preparando la respuesta…"):
                 temp_audio = None
                 try:
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
@@ -1801,23 +1704,19 @@ if (pregunta_top or audio_top is not None) and st.session_state.get("asientos_co
                         temp_audio = tmp.name
                     def audio_contents(client):
                         audio_file = client.files.upload(file=temp_audio)
-                        return [audio_file, f"Escucha el audio y responde usando:\n{_tana_contexto_tutor()}"]
+                        return [audio_file, "Escucha el audio del estudiante, transcribe su pregunta y luego respóndela. No inventes datos. Usa el siguiente contexto:\n" + _tana_contexto_tutor()]
                     response, profile = _generate_with_fallback(audio_contents, types.GenerateContentConfig())
-                    
-                    resp_texto = response.text or "No se entendió el audio."
-                    st.session_state["respuesta_tana"] = resp_texto
+                    respuesta_audio = response.text or "No pude interpretar el audio."
+                    st.session_state["respuesta_tana"] = respuesta_audio
                     st.session_state["respuesta_tana_ruta"] = profile["label"]
-                    _tana_chat_add("assistant", resp_texto)
+                    _tana_chat_add("assistant", respuesta_audio)
                 except Exception as exc:
-                    st.error(f"Error de audio: {exc}")
+                    st.error(f"No se pudo procesar el audio: {_gemini_error_message(exc)}")
                 finally:
                     if temp_audio and os.path.exists(temp_audio):
                         os.remove(temp_audio)
-    # Limpia el círculo del micrófono (vuelve a estado vacío) ahora que
-    # la consulta —de texto o de voz— ya fue enviada y respondida.
-    st.session_state["tana_audio_nonce"] += 1
     st.rerun()
-    
+
 # Nota: el aviso "TANA terminó el desarrollo contable..." se muestra más
 # abajo, como burbuja de chat, SOLO cuando el workbook ya se generó de
 # verdad (ver bloque con tana_resuelto_signature). La línea que estaba
@@ -2072,56 +1971,42 @@ print("Hoja LD (Libro Diario) lista:", LD_LAST_ROW-1, "filas físicas")
 # ============================================================
 # HOJA: LM - Libro Mayor (generado, por cuenta usada en el motor)
 # ============================================================
-# ============================================================
-# CONSOLIDACIÓN Y CREACIÓN DEL LIBRO MAYOR (LM) DINÁMICO
-# ============================================================
-# Consolidar movimientos reales del Libro Diario
-asientos_export = st.session_state.get("asientos_contables", [])
-movimientos = {}
-for asiento in asientos_export:
-    for line in asiento.get("lineas", []):
-        code = str(line.get("codigo", "")).strip()
-        if not re.fullmatch(r"\d{5}", code): 
-            continue
-        rec = movimientos.setdefault(code, {"debe": 0.0, "haber": 0.0})
-        rec["debe"] += float(line.get("debe", 0) or 0)
-        rec["haber"] += float(line.get("haber", 0) or 0)
-
-# Construcción de la hoja de Libro Mayor
 ws5 = wb.create_sheet("LM")
-headers_lm = ["Código", "Denominación", "Naturaleza", "Total Debe S/", "Total Haber S/", "Saldo S/"]
-for i, h in enumerate(headers_lm, start=1):
+headers = ["Código", "Denominación", "Naturaleza", "Total Debe S/", "Total Haber S/", "Saldo S/"]
+for i, h in enumerate(headers, start=1):
     ws5.cell(row=1, column=i, value=h)
 style_header(ws5, 1, 1, 6)
 
-# Ordenar cuentas numéricamente
-cuentas_lm = sorted(list(movimientos.keys()), key=lambda x: (int(x) if x.isdigit() else x))
+NATURALEZA = {
+    "10111": "Deudora", "12121": "Deudora", "20111": "Deudora", "40111": "Acreedora",
+    "42121": "Acreedora", "60111": "Deudora", "61111": "Acreedora", "62111": "Deudora",
+    "68415": "Deudora", "69121": "Deudora", "70121": "Acreedora", "39527": "Acreedora",
+    "41111": "Acreedora",
+}
+cuentas_usadas = sorted(set(x[3] for x in reglas))
 
-r_lm = 2
-for cod in cuentas_lm:
-    desc = pcge_map.get(cod, "Cuenta Contable")
-    # Clasificación dinámica de naturaleza (1, 2, 3, 6 -> Deudora; 4, 5, 7 -> Acreedora)
-    nat = "Deudora" if cod[:1] in ("1", "2", "3", "6") else "Acreedora"
-    
-    tot_debe = movimientos[cod]["debe"]
-    tot_haber = movimientos[cod]["haber"]
-    
-    ws5.cell(row=r_lm, column=1, value=cod).font = BLACK
-    ws5.cell(row=r_lm, column=2, value=desc).font = BLACK
-    ws5.cell(row=r_lm, column=3, value=nat).font = BLACK
-    ws5.cell(row=r_lm, column=4, value=tot_debe).font = BLACK
-    ws5.cell(row=r_lm, column=5, value=tot_haber).font = BLACK
-    
-    # Saldo dinámico según naturaleza
-    saldo_expr = f"=D{r_lm}-E{r_lm}" if nat == "Deudora" else f"=E{r_lm}-D{r_lm}"
-    ws5.cell(row=r_lm, column=6, value=saldo_expr).font = BLACK
-    
-    # Formato de celdas
+r = 2
+for cod in cuentas_usadas:
+    ws5.cell(row=r, column=1, value=cod)
+    ws5.cell(row=r, column=2, value=f'=VLOOKUP($A{r},PCGE,2,0)')
+    ws5.cell(row=r, column=3, value=NATURALEZA[cod])
+    ws5.cell(row=r, column=4, value=f'=SUMIFS(LD!$G:$G,LD!$E:$E,$A{r})')
+    ws5.cell(row=r, column=5, value=f'=SUMIFS(LD!$H:$H,LD!$E:$E,$A{r})')
+    ws5.cell(row=r, column=6, value=f'=IF($C{r}="Deudora",$D{r}-$E{r},$E{r}-$D{r})')
+    for col in range(1, 7):
+        ws5.cell(row=r, column=col).font = BLACK
     for col in (4, 5, 6):
-        ws5.cell(row=r_lm, column=col).number_format = '#,##0.00;(#,##0.00);"-"'
-    r_lm += 1
+        ws5.cell(row=r, column=col).number_format = '#,##0.00;(#,##0.00);"-"'
+    r += 1
+LM_LAST_ROW = r - 1
+ws5.freeze_panes = "A2"
+autofit(ws5, [10, 45, 14, 15, 15, 15])
+ws5.cell(row=1, column=1).comment = Comment(
+    "Nota: reemplacé el FILTER() de tu plantilla original por SUMIFS — FILTER es una función matricial "
+    "moderna que LibreOffice/algunas versiones no evalúan de forma confiable en archivos generados por script. "
+    "El resultado es el mismo saldo por cuenta, más robusto.", "Sistema")
+print("Hoja LM (Libro Mayor) lista:", LM_LAST_ROW-1, "cuentas")
 
-autofit(ws5, [12, 45, 14, 15, 15, 15])
 # ============================================================
 # ============================================================
 # HOJA: HT - Hoja de Trabajo / Balance de Comprobación
