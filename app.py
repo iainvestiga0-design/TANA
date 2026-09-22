@@ -613,21 +613,25 @@ for msg in st.session_state["tana_chat"]:
 inputbar_container = st.container()
 with inputbar_container:
     st.markdown('<span class="tana-inputbar-anchor"></span>', unsafe_allow_html=True)
-    bar = st.columns([0.9, 5.4, 1.3, 0.7], gap="small")
-    with bar[0]:
+  # ============================================================
+# BARRA UNIFICADA DE ENTRADA (Archivos, Voz y Chat)
+# ============================================================
+inputbar_container = st.container()
+with inputbar_container:
+    st.markdown('<span class="tana-inputbar-anchor"></span>', unsafe_allow_html=True)
+    
+    # Herramientas sobre la barra (Subir Archivos y Voz)
+    tool_col1, tool_col2 = st.columns([1, 1])
+    with tool_col1:
         uploaded_file = st.file_uploader(
             "Archivo", type=SUPPORTED_TYPES, label_visibility="collapsed",
             help="PDF, DOC, DOCX, XLS, XLSX, JPG, JPEG y PNG."
         )
-    with bar[1]:
-        pregunta_top = st.text_input(
-            "Consulta", placeholder="Pregunta a TANA…",
-            key="pregunta_tana_top", label_visibility="collapsed"
-        )
-    with bar[2]:
+    with tool_col2:
         audio_top = st.audio_input("Hablar", key="audio_tana_top", label_visibility="collapsed") if hasattr(st, "audio_input") else None
-    with bar[3]:
-        enviar_top = st.button("➤", type="primary", key="btn_enviar_tana_top", use_container_width=True)
+
+    # Campo unificado que responde a ENTER y elimina el botón de enviar
+    pregunta_top = st.chat_input("Escribe tu consulta para TANA...")
 
 if uploaded_file:
     st.caption(f"📄 {uploaded_file.name}")
@@ -1674,10 +1678,12 @@ PREGUNTA:
     )
     return response.text or "No pude generar una respuesta.", profile["label"]
 
-# La consulta y el audio se capturan arriba. Aquí solo se procesa la acción,
-# una vez que las funciones del tutor ya están definidas.
-if (enviar_top or audio_top is not None) and (pregunta_top.strip() or audio_top is not None) and st.session_state.get("asientos_contables"):
-    if enviar_top and pregunta_top.strip():
+# ============================================================
+# ATENCIÓN A CONSULTAS (CHAT Y AUDIO)
+# ============================================================
+# Procesar entrada al enviar por ENTER o Audio
+if (pregunta_top or audio_top is not None) and st.session_state.get("asientos_contables"):
+    if pregunta_top:
         _tana_chat_add("user", pregunta_top.strip())
         with st.spinner("TANA está preparando la explicación…"):
             try:
@@ -1687,18 +1693,34 @@ if (enviar_top or audio_top is not None) and (pregunta_top.strip() or audio_top 
                 _tana_chat_add("assistant", respuesta)
             except Exception as exc:
                 st.error(f"No se pudo responder: {_gemini_error_message(exc)}")
+                
     elif audio_top is not None:
         import hashlib
         _audio_sig = hashlib.sha1(audio_top.getvalue()).hexdigest()
-        if st.session_state.get("audio_tana_processed") == _audio_sig:
-            audio_top = None
-        else:
+        if st.session_state.get("audio_tana_processed") != _audio_sig:
             st.session_state["audio_tana_processed"] = _audio_sig
-        if audio_top is not None:
-            _tana_chat_add("user", "🎤 Pregunta enviada por voz")
-            with st.spinner("TANA está escuchando y preparando la respuesta…"):
+            _tana_chat_add("user", "🎤 Consulta enviada por voz")
+            with st.spinner("Procesando audio…"):
                 temp_audio = None
                 try:
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+                        tmp.write(audio_top.getvalue())
+                        temp_audio = tmp.name
+                    def audio_contents(client):
+                        audio_file = client.files.upload(file=temp_audio)
+                        return [audio_file, f"Escucha el audio y responde usando:\n{_tana_contexto_tutor()}"]
+                    response, profile = _generate_with_fallback(audio_contents, types.GenerateContentConfig())
+                    
+                    resp_texto = response.text or "No se entendió el audio."
+                    st.session_state["respuesta_tana"] = resp_texto
+                    st.session_state["respuesta_tana_ruta"] = profile["label"]
+                    _tana_chat_add("assistant", resp_texto)
+                except Exception as exc:
+                    st.error(f"Error de audio: {exc}")
+                finally:
+                    if temp_audio and os.path.exists(temp_audio):
+                        os.remove(temp_audio)
+    st.rerun()                try:
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
                         tmp.write(audio_top.getvalue())
                         temp_audio = tmp.name
@@ -1971,42 +1993,56 @@ print("Hoja LD (Libro Diario) lista:", LD_LAST_ROW-1, "filas físicas")
 # ============================================================
 # HOJA: LM - Libro Mayor (generado, por cuenta usada en el motor)
 # ============================================================
+# ============================================================
+# CONSOLIDACIÓN Y CREACIÓN DEL LIBRO MAYOR (LM) DINÁMICO
+# ============================================================
+# Consolidar movimientos reales del Libro Diario
+asientos_export = st.session_state.get("asientos_contables", [])
+movimientos = {}
+for asiento in asientos_export:
+    for line in asiento.get("lineas", []):
+        code = str(line.get("codigo", "")).strip()
+        if not re.fullmatch(r"\d{5}", code): 
+            continue
+        rec = movimientos.setdefault(code, {"debe": 0.0, "haber": 0.0})
+        rec["debe"] += float(line.get("debe", 0) or 0)
+        rec["haber"] += float(line.get("haber", 0) or 0)
+
+# Construcción de la hoja de Libro Mayor
 ws5 = wb.create_sheet("LM")
-headers = ["Código", "Denominación", "Naturaleza", "Total Debe S/", "Total Haber S/", "Saldo S/"]
-for i, h in enumerate(headers, start=1):
+headers_lm = ["Código", "Denominación", "Naturaleza", "Total Debe S/", "Total Haber S/", "Saldo S/"]
+for i, h in enumerate(headers_lm, start=1):
     ws5.cell(row=1, column=i, value=h)
 style_header(ws5, 1, 1, 6)
 
-NATURALEZA = {
-    "10111": "Deudora", "12121": "Deudora", "20111": "Deudora", "40111": "Acreedora",
-    "42121": "Acreedora", "60111": "Deudora", "61111": "Acreedora", "62111": "Deudora",
-    "68415": "Deudora", "69121": "Deudora", "70121": "Acreedora", "39527": "Acreedora",
-    "41111": "Acreedora",
-}
-cuentas_usadas = sorted(set(x[3] for x in reglas))
+# Ordenar cuentas numéricamente
+cuentas_lm = sorted(list(movimientos.keys()), key=lambda x: (int(x) if x.isdigit() else x))
 
-r = 2
-for cod in cuentas_usadas:
-    ws5.cell(row=r, column=1, value=cod)
-    ws5.cell(row=r, column=2, value=f'=VLOOKUP($A{r},PCGE,2,0)')
-    ws5.cell(row=r, column=3, value=NATURALEZA[cod])
-    ws5.cell(row=r, column=4, value=f'=SUMIFS(LD!$G:$G,LD!$E:$E,$A{r})')
-    ws5.cell(row=r, column=5, value=f'=SUMIFS(LD!$H:$H,LD!$E:$E,$A{r})')
-    ws5.cell(row=r, column=6, value=f'=IF($C{r}="Deudora",$D{r}-$E{r},$E{r}-$D{r})')
-    for col in range(1, 7):
-        ws5.cell(row=r, column=col).font = BLACK
+r_lm = 2
+for cod in cuentas_lm:
+    desc = pcge_map.get(cod, "Cuenta Contable")
+    # Clasificación dinámica de naturaleza (1, 2, 3, 6 -> Deudora; 4, 5, 7 -> Acreedora)
+    nat = "Deudora" if cod[:1] in ("1", "2", "3", "6") else "Acreedora"
+    
+    tot_debe = movimientos[cod]["debe"]
+    tot_haber = movimientos[cod]["haber"]
+    
+    ws5.cell(row=r_lm, column=1, value=cod).font = BLACK
+    ws5.cell(row=r_lm, column=2, value=desc).font = BLACK
+    ws5.cell(row=r_lm, column=3, value=nat).font = BLACK
+    ws5.cell(row=r_lm, column=4, value=tot_debe).font = BLACK
+    ws5.cell(row=r_lm, column=5, value=tot_haber).font = BLACK
+    
+    # Saldo dinámico según naturaleza
+    saldo_expr = f"=D{r_lm}-E{r_lm}" if nat == "Deudora" else f"=E{r_lm}-D{r_lm}"
+    ws5.cell(row=r_lm, column=6, value=saldo_expr).font = BLACK
+    
+    # Formato de celdas
     for col in (4, 5, 6):
-        ws5.cell(row=r, column=col).number_format = '#,##0.00;(#,##0.00);"-"'
-    r += 1
-LM_LAST_ROW = r - 1
-ws5.freeze_panes = "A2"
-autofit(ws5, [10, 45, 14, 15, 15, 15])
-ws5.cell(row=1, column=1).comment = Comment(
-    "Nota: reemplacé el FILTER() de tu plantilla original por SUMIFS — FILTER es una función matricial "
-    "moderna que LibreOffice/algunas versiones no evalúan de forma confiable en archivos generados por script. "
-    "El resultado es el mismo saldo por cuenta, más robusto.", "Sistema")
-print("Hoja LM (Libro Mayor) lista:", LM_LAST_ROW-1, "cuentas")
+        ws5.cell(row=r_lm, column=col).number_format = '#,##0.00;(#,##0.00);"-"'
+    r_lm += 1
 
+autofit(ws5, [12, 45, 14, 15, 15, 15])
 # ============================================================
 # ============================================================
 # HOJA: HT - Hoja de Trabajo / Balance de Comprobación
