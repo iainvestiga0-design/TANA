@@ -535,10 +535,89 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .t
     z-index: 999;
     background: #fff;
     border: 1px solid #DDE8EF;
-    border-radius: 22px;
-    padding: 10px 16px 14px 16px;
+    border-radius: 26px;
+    padding: 8px 10px;
     box-shadow: 0 6px 22px rgba(18,48,74,.09);
     margin-bottom: 16px;
+}
+
+/* ---- Fila única de la barra (adjuntar + micrófono + texto) ----
+   Los tres controles viven en las mismas columnas de Streamlit, dentro
+   del contenedor fijo de arriba, para que se vean como UNA sola barra
+   (como ChatGPT) y no como cajas separadas apiladas. */
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stHorizontalBlock"] {
+    gap: 4px !important;
+    align-items: center !important;
+}
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="column"] {
+    display: flex !important;
+    align-items: center !important;
+}
+
+/* Botón "Adjuntar archivo" reducido a un círculo con "+" */
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stFileUploader"] {
+    width: 40px !important;
+}
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stFileUploaderDropzone"] {
+    position: relative !important;
+    background: #F1F5F8 !important;
+    border: 1px solid #DDE8EF !important;
+    border-radius: 50% !important;
+    width: 40px !important;
+    height: 40px !important;
+    min-height: 40px !important;
+    padding: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    overflow: hidden !important;
+}
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stFileUploaderDropzoneInstructions"] {
+    display: none !important;
+}
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stFileUploaderDropzone"]::before {
+    content: "+";
+    font-size: 22px;
+    font-weight: 700;
+    color: #087EA4;
+    pointer-events: none;
+}
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stFileUploaderDropzone"] button {
+    position: absolute !important;
+    inset: 0 !important;
+    width: 100% !important;
+    height: 100% !important;
+    opacity: 0 !important;
+    cursor: pointer !important;
+}
+
+/* Botón de voz reducido a un círculo con el ícono de micrófono */
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stAudioInput"] {
+    background: #F1F5F8 !important;
+    border: 1px solid #DDE8EF !important;
+    border-radius: 50% !important;
+    width: 40px !important;
+    height: 40px !important;
+    min-height: 40px !important;
+    padding: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    overflow: hidden !important;
+}
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stAudioInput"] > div {
+    transform: scale(.68);
+}
+
+/* Campo de texto: sin su propio marco, para que se vea unido a la
+   barra exterior en vez de como una caja aparte. */
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stChatInput"] {
+    border: none !important;
+    box-shadow: none !important;
+    background: transparent !important;
+}
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stChatInput"] textarea {
+    background: transparent !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -610,28 +689,39 @@ for msg in st.session_state["tana_chat"]:
 # marcador invisible que el CSS de arriba usa para anclarla. El resto
 # del contenido (burbujas de chat) sigue con scroll normal.
 # ============================================================
-inputbar_container = st.container()
-with inputbar_container:
-    st.markdown('<span class="tana-inputbar-anchor"></span>', unsafe_allow_html=True)
-  # ============================================================
-# BARRA UNIFICADA DE ENTRADA (Archivos, Voz y Chat)
+# Contadores usados como sufijo de "key" de los widgets de archivo y
+# audio: al incrementarlos forzamos que Streamlit los vuelva a crear
+# vacíos en el siguiente rerun, así la barra "se limpia" sola apenas
+# TANA termina de leer el archivo o de responder la consulta.
+st.session_state.setdefault("tana_uploader_nonce", 0)
+st.session_state.setdefault("tana_audio_nonce", 0)
+
+# ============================================================
+# BARRA UNIFICADA DE ENTRADA (Archivo + Voz + Chat, una sola fila)
 # ============================================================
 inputbar_container = st.container()
 with inputbar_container:
     st.markdown('<span class="tana-inputbar-anchor"></span>', unsafe_allow_html=True)
-    
-    # Herramientas sobre la barra (Subir Archivos y Voz)
-    tool_col1, tool_col2 = st.columns([1, 1])
-    with tool_col1:
+
+    col_upload, col_mic, col_text = st.columns([0.09, 0.09, 0.82])
+    with col_upload:
         uploaded_file = st.file_uploader(
             "Archivo", type=SUPPORTED_TYPES, label_visibility="collapsed",
-            help="PDF, DOC, DOCX, XLS, XLSX, JPG, JPEG y PNG."
+            help="PDF, DOC, DOCX, XLS, XLSX, JPG, JPEG y PNG.",
+            key=f"tana_uploader_{st.session_state['tana_uploader_nonce']}",
         )
-    with tool_col2:
-        audio_top = st.audio_input("Hablar", key="audio_tana_top", label_visibility="collapsed") if hasattr(st, "audio_input") else None
-
-    # Campo unificado que responde a ENTER y elimina el botón de enviar
-    pregunta_top = st.chat_input("Escribe tu consulta para TANA...")
+    with col_mic:
+        audio_top = (
+            st.audio_input(
+                "Hablar", label_visibility="collapsed",
+                key=f"audio_tana_top_{st.session_state['tana_audio_nonce']}",
+            )
+            if hasattr(st, "audio_input") else None
+        )
+    with col_text:
+        # Campo unificado que responde a ENTER y elimina el botón de enviar.
+        # st.chat_input se vacía solo en cada rerun tras enviar.
+        pregunta_top = st.chat_input("Escribe tu consulta para TANA...")
 
 if uploaded_file:
     st.caption(f"📄 {uploaded_file.name}")
@@ -687,6 +777,9 @@ if uploaded_file:
                 st.session_state["monografia_texto"] = extraction_to_text(extracted)
                 st.session_state["monografia_nombre"] = uploaded_file.name
                 st.session_state["tana_file_signature"] = file_signature
+                # Limpia el botón de adjuntar (vuelve a su círculo "+" vacío)
+                # ahora que TANA ya leyó el archivo.
+                st.session_state["tana_uploader_nonce"] += 1
                 # Fuerza una nueva ejecución para continuar con el desarrollo.
                 st.rerun()
             except json.JSONDecodeError:
@@ -1720,6 +1813,9 @@ if (pregunta_top or audio_top is not None) and st.session_state.get("asientos_co
                 finally:
                     if temp_audio and os.path.exists(temp_audio):
                         os.remove(temp_audio)
+    # Limpia el círculo del micrófono (vuelve a estado vacío) ahora que
+    # la consulta —de texto o de voz— ya fue enviada y respondida.
+    st.session_state["tana_audio_nonce"] += 1
     st.rerun()
     
 # Nota: el aviso "TANA terminó el desarrollo contable..." se muestra más
