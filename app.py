@@ -95,9 +95,9 @@ SUPPORTED_TYPES = ["pdf", "doc", "docx", "xls", "xlsx", "jpg", "jpeg", "png"]
 # cuando se agota la cuota de un modelo/proyecto. La primera opción conserva
 # el comportamiento actual; las siguientes se usan solo si hay 429/cuota o
 # si el modelo configurado no está disponible.
-GEMINI_MODEL = st.secrets.get("TANA_GEMINI_MODEL", os.getenv("TANA_GEMINI_MODEL", "gemini-3.5-flash"))
-GEMINI_MODEL_2 = st.secrets.get("TANA_GEMINI_MODEL_2", os.getenv("TANA_GEMINI_MODEL_2", "gemini-3.5-flash-lite"))
-GEMINI_MODEL_3 = st.secrets.get("TANA_GEMINI_MODEL_3", os.getenv("TANA_GEMINI_MODEL_3", "gemini-3.6-flash"))
+GEMINI_MODEL = st.secrets.get("TANA_GEMINI_MODEL", os.getenv("TANA_GEMINI_MODEL", "gemini-3.6-flash"))
+GEMINI_MODEL_2 = st.secrets.get("TANA_GEMINI_MODEL_2", os.getenv("TANA_GEMINI_MODEL_2", "gemini-3.5-flash"))
+GEMINI_MODEL_3 = st.secrets.get("TANA_GEMINI_MODEL_3", os.getenv("TANA_GEMINI_MODEL_3", "gemini-3.5-flash-lite"))
 
 # Cargar el PCGE antes del motor de resolución, incluso antes de generar el Excel.
 PCGE_PATHS = [
