@@ -531,14 +531,108 @@ section[data-testid="stSidebar"] .block-container {padding-top: 1rem;}
 div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) {
     position: fixed !important;
     bottom: 0; left: 50%; transform: translateX(-50%);
-    width: min(940px, 94vw);
+    width: min(760px, 94vw);
     z-index: 999;
     background: #fff;
-    border: 1px solid #DDE8EF;
-    border-radius: 22px;
-    padding: 10px 16px 14px 16px;
-    box-shadow: 0 6px 22px rgba(18,48,74,.09);
-    margin-bottom: 16px;
+    border: 1px solid #DFE1E5;
+    border-radius: 999px;
+    padding: 6px 10px;
+    box-shadow: 0 2px 10px rgba(18,48,74,.10);
+    margin-bottom: 18px;
+}
+
+/* Fila interna: todo alineado y centrado verticalmente, como Google */
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) div[data-testid="stHorizontalBlock"] {
+    align-items: center !important;
+    gap: 2px !important;
+}
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {
+    display: flex; align-items: center; justify-content: center;
+    padding: 0 !important;
+}
+
+/* ---- Botón "+" para subir archivo (reemplaza el uploader por defecto) ---- */
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stFileUploader"] {
+    width: 42px;
+}
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stFileUploaderDropzone"] {
+    background: transparent !important;
+    border: none !important;
+    padding: 0 !important;
+    min-height: 40px !important;
+    display: flex; align-items: center; justify-content: center;
+}
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stFileUploaderDropzoneInstructions"] {
+    display: none !important;
+}
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stFileUploaderDropzone"] button {
+    font-size: 0 !important;
+    width: 38px !important; height: 38px !important;
+    min-width: 38px !important;
+    border-radius: 50% !important;
+    border: none !important;
+    background: #F1F3F4 !important;
+    position: relative;
+    padding: 0 !important;
+}
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stFileUploaderDropzone"] button:hover {
+    background: #E8EAED !important;
+}
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stFileUploaderDropzone"] button svg {
+    display: none !important;
+}
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stFileUploaderDropzone"] button::before {
+    content: "+";
+    font-size: 24px;
+    font-weight: 400;
+    color: #5F6368;
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -52%);
+}
+/* Oculta la ficha del archivo ya cargado dentro del uploader (el nombre
+   del archivo se sigue mostrando aparte, como caption bajo la barra). */
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stFileUploaderFile"],
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stFileUploaderDropzone"] small {
+    display: none !important;
+}
+
+/* ---- Campo de texto: sin borde, transparente, tipo Google ---- */
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stTextInput"] {
+    width: 100%;
+}
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stTextInput"] > div {
+    border: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+}
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stTextInput"] input {
+    border: none !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    font-size: 15px;
+    padding-left: 6px !important;
+}
+
+/* ---- Grabador de voz: icono compacto, sin caja alrededor ---- */
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stAudioInput"] {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    min-width: 40px;
+}
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stAudioInput"] > div {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+}
+
+/* ---- Botón enviar: círculo rojo con flecha, estilo TANA original ---- */
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) button[kind="primary"] {
+    border-radius: 50% !important;
+    width: 40px !important; height: 40px !important;
+    min-width: 40px !important;
+    padding: 0 !important;
+    font-size: 16px !important;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -613,7 +707,7 @@ for msg in st.session_state["tana_chat"]:
 inputbar_container = st.container()
 with inputbar_container:
     st.markdown('<span class="tana-inputbar-anchor"></span>', unsafe_allow_html=True)
-    bar = st.columns([0.9, 5.4, 1.3, 0.7], gap="small")
+    bar = st.columns([0.5, 6.2, 0.9, 0.5], gap="small")
     with bar[0]:
         uploaded_file = st.file_uploader(
             "Archivo", type=SUPPORTED_TYPES, label_visibility="collapsed",
