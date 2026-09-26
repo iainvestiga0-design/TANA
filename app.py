@@ -723,6 +723,116 @@ with inputbar_container:
     with bar[3]:
         enviar_top = st.button("➤", type="primary", key="btn_enviar_tana_top", use_container_width=True)
 
+# ------------------------------------------------------------
+# Refuerzo del diseño de la barra vía JS (misma técnica que el
+# bloque PWA de más arriba: accede a window.parent.document, que
+# es el documento real donde vive la app, no el iframe de este
+# componente). Esto es necesario porque el CSS por sí solo pierde
+# la pelea de especificidad contra los estilos internos del tema
+# de Streamlit en algunos elementos (fondo, borde, ícono del
+# selector de archivo). Aquí se fuerzan esos estilos con
+# setProperty(..., 'important'), que siempre gana, y se reaplican
+# con un MutationObserver cada vez que Streamlit vuelve a renderizar
+# la barra (por ejemplo, al escribir o al soltar un archivo).
+# No toca nada del motor contable: solo apariencia de esta barra.
+# ------------------------------------------------------------
+st.components.v1.html(
+    """
+    <script>
+    (function () {
+        function estilarBarraTana() {
+            const doc = window.parent.document;
+            const anchor = doc.querySelector('.tana-inputbar-anchor');
+            if (!anchor) return;
+            const pill = anchor.closest('div[data-testid="stVerticalBlock"]');
+            if (!pill) return;
+
+            const set = (el, styles) => {
+                if (!el) return;
+                for (const [prop, val] of Object.entries(styles)) {
+                    el.style.setProperty(prop, val, 'important');
+                }
+            };
+
+            // Contenedor: píldora blanca fija, redondeada por completo.
+            set(pill, {
+                position: 'fixed', bottom: '0px', left: '50%',
+                transform: 'translateX(-50%)', width: 'min(760px, 94vw)',
+                'z-index': '999', background: '#ffffff',
+                border: '1px solid #DFE1E5', 'border-radius': '999px',
+                padding: '6px 10px', 'box-shadow': '0 2px 10px rgba(18,48,74,.10)',
+                'margin-bottom': '18px',
+            });
+
+            // "+" para subir archivo: se oculta el widget real (pero
+            // sigue siendo clickeable) y se dibuja encima un círculo "+"
+            // decorativo que no bloquea el click (pointer-events:none),
+            // así funciona sin depender de la estructura interna exacta
+            // del componente de subida de Streamlit.
+            const uploaderRoot = pill.querySelector('[data-testid="stFileUploader"]');
+            const dropzone = pill.querySelector('[data-testid="stFileUploaderDropzone"]');
+            if (uploaderRoot) {
+                set(uploaderRoot, { width: '40px', position: 'relative', overflow: 'visible' });
+                if (!uploaderRoot.querySelector('.tana-plus-fake')) {
+                    const fake = doc.createElement('div');
+                    fake.className = 'tana-plus-fake';
+                    fake.textContent = '+';
+                    fake.style.cssText =
+                        'position:absolute;top:0;left:0;width:40px;height:40px;' +
+                        'border-radius:50%;background:#F1F3F4;display:flex;' +
+                        'align-items:center;justify-content:center;font-size:22px;' +
+                        'font-family:Arial,sans-serif;color:#5F6368;' +
+                        'pointer-events:none;z-index:0;';
+                    uploaderRoot.insertBefore(fake, uploaderRoot.firstChild);
+                }
+            }
+            if (dropzone) {
+                set(dropzone, {
+                    opacity: '0', height: '40px', 'min-height': '40px',
+                    width: '40px', padding: '0', margin: '0', cursor: 'pointer',
+                });
+            }
+            // Si ya hay un archivo cargado, Streamlit muestra una ficha con
+            // el nombre dentro del propio uploader; se oculta porque el
+            // nombre ya se muestra aparte, debajo de la barra (st.caption).
+            pill.querySelectorAll('[data-testid="stFileUploaderFile"]').forEach(el => {
+                set(el, { display: 'none' });
+            });
+
+            // Campo de texto: sin borde ni fondo, como el buscador de Google.
+            set(pill.querySelector('[data-testid="stTextInput"] > div'), {
+                border: 'none', background: 'transparent', 'box-shadow': 'none',
+            });
+            set(pill.querySelector('[data-testid="stTextInput"] input'), {
+                border: 'none', background: 'transparent', 'box-shadow': 'none',
+                color: '#202124', 'font-size': '15px',
+            });
+
+            // Grabador de voz: sin caja alrededor, se integra a la píldora.
+            set(pill.querySelector('[data-testid="stAudioInput"]'), {
+                background: 'transparent', border: 'none', 'box-shadow': 'none',
+            });
+            set(pill.querySelector('[data-testid="stAudioInput"] > div'), {
+                background: 'transparent', border: 'none', 'box-shadow': 'none',
+                padding: '0',
+            });
+
+            // Botón enviar: círculo rojo, tamaño fijo.
+            set(pill.querySelector('button[kind="primary"]'), {
+                'border-radius': '50%', width: '40px', height: '40px',
+                'min-width': '40px', padding: '0',
+            });
+        }
+
+        estilarBarraTana();
+        const obs = new MutationObserver(estilarBarraTana);
+        obs.observe(window.parent.document.body, { childList: true, subtree: true });
+    })();
+    </script>
+    """,
+    height=0,
+)
+
 if uploaded_file:
     st.caption(f"📄 {uploaded_file.name}")
 
