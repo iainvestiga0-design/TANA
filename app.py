@@ -530,8 +530,12 @@ section[data-testid="stSidebar"] .block-container {padding-top: 1rem;}
    de la página, que sigue haciendo scroll normal. */
 div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) {
     position: fixed !important;
-    bottom: 0; left: 50%; transform: translateX(-50%);
-    width: min(760px, 94vw);
+    bottom: 0;
+    /* Centrado sin transform: en algunos móviles un contenedor padre con
+       su propio transform "captura" el position:fixed y lo desalinea.
+       left+right+margin:auto centra igual de bien sin ese riesgo. */
+    left: 3vw; right: 3vw; margin-left: auto; margin-right: auto;
+    width: auto; max-width: 760px;
     max-height: 64px !important;
     z-index: 999;
     background: #fff;
@@ -550,7 +554,10 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .t
 
 /* Fila interna: SIEMPRE en fila horizontal, incluso en pantallas
    angostas (Streamlit apila las columnas en móvil por defecto; lo
-   forzamos a que no lo haga dentro de esta barra). */
+   forzamos a que no lo haga dentro de esta barra). Cada ícono tiene un
+   ancho FIJO (flex-basis en px) y solo el campo de texto se encoge o
+   crece: así la suma siempre cabe dentro de la píldora y nunca se
+   recorta el botón de enviar por el overflow:hidden de arriba. */
 div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) div[data-testid="stHorizontalBlock"] {
     display: flex !important;
     flex-direction: row !important;
@@ -563,8 +570,19 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .t
     display: flex !important;
     align-items: center; justify-content: center;
     padding: 0 !important;
-    width: auto !important;
     min-width: 0 !important;
+}
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(1) {
+    flex: 0 0 40px !important; width: 40px !important;
+}
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(2) {
+    flex: 1 1 auto !important; width: auto !important; overflow: hidden;
+}
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(3) {
+    flex: 0 0 46px !important; width: 46px !important; overflow: hidden;
+}
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(4) {
+    flex: 0 0 40px !important; width: 40px !important;
 }
 
 /* ---- Botón "+" para subir archivo (reemplaza el uploader por defecto) ---- */
@@ -626,6 +644,15 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .t
     box-shadow: none !important;
     font-size: 15px;
     padding-left: 6px !important;
+    color: #202124 !important;
+}
+/* El tema oscuro original define el placeholder en un color claro
+   (pensado para fondo negro). Como la píldora ahora es blanca, hay que
+   forzar un gris oscuro legible; esto NO se puede hacer por JS porque
+   ::placeholder es un pseudo-elemento sin nodo real que manipular. */
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stTextInput"] input::placeholder {
+    color: #5F6368 !important;
+    opacity: 1 !important;
 }
 
 /* ---- Grabador de voz: icono compacto, sin caja alrededor ---- */
@@ -633,13 +660,20 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .t
     background: transparent !important;
     border: none !important;
     box-shadow: none !important;
-    min-width: 40px;
+    width: 46px !important; max-width: 46px !important; min-width: 0 !important;
+    overflow: hidden !important;
 }
 div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stAudioInput"] > div {
     background: transparent !important;
     border: none !important;
     box-shadow: none !important;
     padding: 0 !important;
+    width: 46px !important; max-width: 46px !important;
+}
+/* El timer "00:00" es lo que más ancho pedía; se achica para que
+   siempre quepa el ícono del micrófono + el timer en los 46px. */
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stAudioInput"] * {
+    font-size: 10px !important;
 }
 
 /* ---- Botón enviar: círculo rojo con flecha, estilo TANA original ---- */
@@ -770,13 +804,16 @@ st.components.v1.html(
                 }
             };
 
-            // Contenedor: píldora blanca fija. Radio FIJO (28px, no 999px):
-            // en móvil, si las columnas llegaran a apilarse, un radio
-            // relativo al lado corto convertiría esto en un círculo
-            // gigante que tapa la pantalla (eso es lo que pasaba antes).
+            // Contenedor: píldora blanca fija. Centrado con left/right +
+            // margin:auto (sin transform: un contenedor padre con su
+            // propio transform puede "capturar" el position:fixed y
+            // desalinearlo en algunos móviles). Radio FIJO (28px, no
+            // 999px): si las columnas se apilaran, un radio relativo al
+            // lado corto volvería esto un círculo gigante.
             set(pill, {
-                position: 'fixed', bottom: '0px', left: '50%',
-                transform: 'translateX(-50%)', width: 'min(760px, 94vw)',
+                position: 'fixed', bottom: '0px',
+                left: '3vw', right: '3vw', 'margin-left': 'auto', 'margin-right': 'auto',
+                width: 'auto', 'max-width': '760px',
                 'max-height': '64px', overflow: 'hidden', 'box-sizing': 'border-box',
                 'z-index': '999', background: '#ffffff',
                 border: '1px solid #DFE1E5', 'border-radius': '28px',
@@ -786,23 +823,31 @@ st.components.v1.html(
 
             // Fuerza la fila de controles a quedarse en horizontal, incluso
             // en pantallas angostas donde Streamlit apilaría las columnas.
+            // Cada ícono tiene un ancho FIJO en px (40/46/40) y solo el
+            // campo de texto (columna 2) se encoge/crece: así la suma
+            // siempre cabe y el botón enviar nunca se recorta por el
+            // overflow:hidden de la píldora.
             const hblock = pill.querySelector('div[data-testid="stHorizontalBlock"]');
             set(hblock, {
                 display: 'flex', 'flex-direction': 'row', 'flex-wrap': 'nowrap',
                 'align-items': 'center', gap: '2px', width: '100%',
             });
-            pill.querySelectorAll('div[data-testid="column"]').forEach(col => {
-                set(col, {
+            const cols = pill.querySelectorAll('div[data-testid="stHorizontalBlock"] > div[data-testid="column"]');
+            const colWidths = ['40px', null, '46px', '40px']; // null = flexible (texto)
+            cols.forEach((col, i) => {
+                const base = {
                     display: 'flex', 'align-items': 'center', 'justify-content': 'center',
-                    padding: '0', width: 'auto', 'min-width': '0', flex: '0 0 auto',
-                });
+                    padding: '0', 'min-width': '0', overflow: 'hidden',
+                };
+                if (colWidths[i]) {
+                    base.flex = `0 0 ${colWidths[i]}`;
+                    base.width = colWidths[i];
+                } else {
+                    base.flex = '1 1 auto';
+                    base.width = 'auto';
+                }
+                set(col, base);
             });
-            // La columna del campo de texto sí debe crecer para llenar el
-            // espacio sobrante entre el "+" y el micrófono/enviar.
-            const textCol = pill.querySelector('[data-testid="stTextInput"]')
-                ? pill.querySelector('[data-testid="stTextInput"]').closest('div[data-testid="column"]')
-                : null;
-            set(textCol, { flex: '1 1 auto', 'min-width': '0', width: 'auto' });
 
             // "+" para subir archivo: se oculta el widget real (pero
             // sigue siendo clickeable) y se dibuja encima un círculo "+"
@@ -839,7 +884,10 @@ st.components.v1.html(
                 set(el, { display: 'none' });
             });
 
-            // Campo de texto: sin borde ni fondo, como el buscador de Google.
+            // Campo de texto: sin borde ni fondo, como el buscador de
+            // Google. El color (texto escrito) se fuerza aquí porque JS sí
+            // puede tocarlo; el color del placeholder se define en el CSS
+            // de más arriba (::placeholder no es un nodo real, JS no llega).
             set(pill.querySelector('[data-testid="stTextInput"] > div'), {
                 border: 'none', background: 'transparent', 'box-shadow': 'none',
             });
@@ -848,13 +896,16 @@ st.components.v1.html(
                 color: '#202124', 'font-size': '15px',
             });
 
-            // Grabador de voz: sin caja alrededor, se integra a la píldora.
+            // Grabador de voz: ancho tope de 46px para que nunca empuje al
+            // botón de enviar fuera de la píldora (antes esto pasaba en
+            // móvil porque el timer "00:00" pedía más espacio del previsto).
             set(pill.querySelector('[data-testid="stAudioInput"]'), {
                 background: 'transparent', border: 'none', 'box-shadow': 'none',
+                width: '46px', 'max-width': '46px', 'min-width': '0', overflow: 'hidden',
             });
             set(pill.querySelector('[data-testid="stAudioInput"] > div'), {
                 background: 'transparent', border: 'none', 'box-shadow': 'none',
-                padding: '0',
+                padding: '0', width: '46px', 'max-width': '46px',
             });
 
             // Botón enviar: círculo rojo, tamaño fijo.
