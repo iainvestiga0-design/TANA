@@ -532,23 +532,39 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .t
     position: fixed !important;
     bottom: 0; left: 50%; transform: translateX(-50%);
     width: min(760px, 94vw);
+    max-height: 64px !important;
     z-index: 999;
     background: #fff;
     border: 1px solid #DFE1E5;
-    border-radius: 999px;
+    /* Radio fijo (NO 999px): si en móvil el layout llegara a apilarse,
+       un radio relativo al 50% del lado corto convertiría la barra en
+       un círculo gigante que tapa el resto de la pantalla. Con un valor
+       fijo, como mucho se ve un rectángulo menos redondeado. */
+    border-radius: 28px;
     padding: 6px 10px;
     box-shadow: 0 2px 10px rgba(18,48,74,.10);
     margin-bottom: 18px;
+    overflow: hidden;
+    box-sizing: border-box;
 }
 
-/* Fila interna: todo alineado y centrado verticalmente, como Google */
+/* Fila interna: SIEMPRE en fila horizontal, incluso en pantallas
+   angostas (Streamlit apila las columnas en móvil por defecto; lo
+   forzamos a que no lo haga dentro de esta barra). */
 div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) div[data-testid="stHorizontalBlock"] {
+    display: flex !important;
+    flex-direction: row !important;
+    flex-wrap: nowrap !important;
     align-items: center !important;
     gap: 2px !important;
+    width: 100% !important;
 }
 div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {
-    display: flex; align-items: center; justify-content: center;
+    display: flex !important;
+    align-items: center; justify-content: center;
     padding: 0 !important;
+    width: auto !important;
+    min-width: 0 !important;
 }
 
 /* ---- Botón "+" para subir archivo (reemplaza el uploader por defecto) ---- */
@@ -754,15 +770,39 @@ st.components.v1.html(
                 }
             };
 
-            // Contenedor: píldora blanca fija, redondeada por completo.
+            // Contenedor: píldora blanca fija. Radio FIJO (28px, no 999px):
+            // en móvil, si las columnas llegaran a apilarse, un radio
+            // relativo al lado corto convertiría esto en un círculo
+            // gigante que tapa la pantalla (eso es lo que pasaba antes).
             set(pill, {
                 position: 'fixed', bottom: '0px', left: '50%',
                 transform: 'translateX(-50%)', width: 'min(760px, 94vw)',
+                'max-height': '64px', overflow: 'hidden', 'box-sizing': 'border-box',
                 'z-index': '999', background: '#ffffff',
-                border: '1px solid #DFE1E5', 'border-radius': '999px',
+                border: '1px solid #DFE1E5', 'border-radius': '28px',
                 padding: '6px 10px', 'box-shadow': '0 2px 10px rgba(18,48,74,.10)',
                 'margin-bottom': '18px',
             });
+
+            // Fuerza la fila de controles a quedarse en horizontal, incluso
+            // en pantallas angostas donde Streamlit apilaría las columnas.
+            const hblock = pill.querySelector('div[data-testid="stHorizontalBlock"]');
+            set(hblock, {
+                display: 'flex', 'flex-direction': 'row', 'flex-wrap': 'nowrap',
+                'align-items': 'center', gap: '2px', width: '100%',
+            });
+            pill.querySelectorAll('div[data-testid="column"]').forEach(col => {
+                set(col, {
+                    display: 'flex', 'align-items': 'center', 'justify-content': 'center',
+                    padding: '0', width: 'auto', 'min-width': '0', flex: '0 0 auto',
+                });
+            });
+            // La columna del campo de texto sí debe crecer para llenar el
+            // espacio sobrante entre el "+" y el micrófono/enviar.
+            const textCol = pill.querySelector('[data-testid="stTextInput"]')
+                ? pill.querySelector('[data-testid="stTextInput"]').closest('div[data-testid="column"]')
+                : null;
+            set(textCol, { flex: '1 1 auto', 'min-width': '0', width: 'auto' });
 
             // "+" para subir archivo: se oculta el widget real (pero
             // sigue siendo clickeable) y se dibuja encima un círculo "+"
