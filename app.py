@@ -535,8 +535,8 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .t
     width: min(760px, 94vw);
     max-height: 64px !important;
     z-index: 999;
-    background: #fff;
-    border: 1px solid #DFE1E5;
+    background: var(--tana-bar-bg);
+    border: 1px solid var(--tana-bar-border);
     /* Radio fijo (NO 999px): si en móvil el layout llegara a apilarse,
        un radio relativo al 50% del lado corto convertiría la barra en
        un círculo gigante que tapa el resto de la pantalla. Con un valor
@@ -602,12 +602,12 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .t
     min-width: 38px !important;
     border-radius: 50% !important;
     border: none !important;
-    background: #F1F3F4 !important;
+    background: var(--tana-bar-icon-bg) !important;
     position: relative;
     padding: 0 !important;
 }
 div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stFileUploaderDropzone"] button:hover {
-    background: #E8EAED !important;
+    background: var(--tana-bar-icon-bg-hover) !important;
 }
 div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stFileUploaderDropzone"] button svg {
     display: none !important;
@@ -616,7 +616,7 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .t
     content: "+";
     font-size: 24px;
     font-weight: 400;
-    color: #5F6368;
+    color: var(--tana-bar-icon-color);
     position: absolute; top: 50%; left: 50%; transform: translate(-50%, -52%);
 }
 /* Oculta la ficha del archivo ya cargado dentro del uploader (el nombre
@@ -626,11 +626,40 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .t
     display: none !important;
 }
 
+/* ---- Variables de color: la barra se adapta sola a modo claro/oscuro
+   del dispositivo. Todo lo de abajo usa var(--tana-bar-*) en vez de
+   colores fijos, así que un solo cambio de esquema del teléfono/PC
+   repinta toda la barra sin JS extra (las variables CSS se heredan
+   incluso dentro de estilos puestos por JS con !important). ---- */
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) {
+    --tana-bar-bg: #ffffff;
+    --tana-bar-border: #DFE1E5;
+    --tana-bar-text: #202124;
+    --tana-bar-placeholder: #5F6368;
+    --tana-bar-icon-bg: #F1F3F4;
+    --tana-bar-icon-color: #5F6368;
+    --tana-bar-icon-bg-hover: #E8EAED;
+}
+@media (prefers-color-scheme: dark) {
+    div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) {
+        --tana-bar-bg: #2A2B2E;
+        --tana-bar-border: #4A4C50;
+        --tana-bar-text: #E8EAED;
+        --tana-bar-placeholder: #9AA0A6;
+        --tana-bar-icon-bg: #3C3D40;
+        --tana-bar-icon-color: #E8EAED;
+        --tana-bar-icon-bg-hover: #4A4C50;
+    }
+}
+
 /* ---- Campo de texto: sin borde, transparente, tipo Google ---- */
 div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stTextInput"] {
     width: 100%;
 }
-div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stTextInput"] > div {
+/* Selector amplio (todo descendiente) para que NINGÚN div interno del
+   componente (baseweb suele anidar una capa extra con su propio fondo)
+   deje una caja oscura visible dentro de la píldora blanca. */
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stTextInput"] div {
     border: none !important;
     background: transparent !important;
     box-shadow: none !important;
@@ -641,14 +670,12 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .t
     box-shadow: none !important;
     font-size: 15px;
     padding-left: 6px !important;
-    color: #202124 !important;
+    color: var(--tana-bar-text) !important;
 }
-/* El tema oscuro original define el placeholder en un color claro
-   (pensado para fondo negro). Como la píldora ahora es blanca, hay que
-   forzar un gris oscuro legible; esto NO se puede hacer por JS porque
-   ::placeholder es un pseudo-elemento sin nodo real que manipular. */
+/* ::placeholder es un pseudo-elemento sin nodo real: solo se puede
+   tocar por CSS, nunca por JS. */
 div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stTextInput"] input::placeholder {
-    color: #5F6368 !important;
+    color: var(--tana-bar-placeholder) !important;
     opacity: 1 !important;
 }
 
@@ -660,12 +687,17 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .t
     width: 46px !important; max-width: 46px !important; min-width: 0 !important;
     overflow: hidden !important;
 }
-div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stAudioInput"] > div {
+/* Mismo selector amplio que el campo de texto: elimina cualquier fondo
+   oscuro anidado dentro del widget de audio. */
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stAudioInput"] div {
     background: transparent !important;
     border: none !important;
     box-shadow: none !important;
     padding: 0 !important;
     width: 46px !important; max-width: 46px !important;
+}
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stAudioInput"] * {
+    color: var(--tana-bar-text) !important;
 }
 /* El timer "00:00" es lo que más ancho pedía; se achica para que
    siempre quepa el ícono del micrófono + el timer en los 46px. */
@@ -801,17 +833,20 @@ st.components.v1.html(
                 }
             };
 
-            // Contenedor: píldora blanca fija, centrada con left:50% +
-            // transform (método original, probado). Radio FIJO (28px, no
-            // 999px): si las columnas se apilaran, un radio relativo al
-            // lado corto volvería esto un círculo gigante.
+            // Contenedor: píldora fija, centrada con left:50% + transform
+            // (método original, probado). Radio FIJO (28px, no 999px): si
+            // las columnas se apilaran, un radio relativo al lado corto
+            // volvería esto un círculo gigante. Los colores usan variables
+            // CSS (definidas más arriba con @media prefers-color-scheme),
+            // así la barra sigue el modo claro/oscuro del dispositivo solo,
+            // sin que este script necesite detectar nada por su cuenta.
             set(pill, {
                 position: 'fixed', bottom: '0px',
                 left: '50%', transform: 'translateX(-50%)',
                 width: 'min(760px, 94vw)',
                 'max-height': '64px', overflow: 'hidden', 'box-sizing': 'border-box',
-                'z-index': '999', background: '#ffffff',
-                border: '1px solid #DFE1E5', 'border-radius': '28px',
+                'z-index': '999', background: 'var(--tana-bar-bg)',
+                border: '1px solid var(--tana-bar-border)', 'border-radius': '28px',
                 padding: '6px 10px', 'box-shadow': '0 2px 10px rgba(18,48,74,.10)',
                 'margin-bottom': '18px',
             });
@@ -859,9 +894,9 @@ st.components.v1.html(
                     fake.textContent = '+';
                     fake.style.cssText =
                         'position:absolute;top:0;left:0;width:40px;height:40px;' +
-                        'border-radius:50%;background:#F1F3F4;display:flex;' +
+                        'border-radius:50%;background:var(--tana-bar-icon-bg);display:flex;' +
                         'align-items:center;justify-content:center;font-size:22px;' +
-                        'font-family:Arial,sans-serif;color:#5F6368;' +
+                        'font-family:Arial,sans-serif;color:var(--tana-bar-icon-color);' +
                         'pointer-events:none;z-index:0;';
                     uploaderRoot.insertBefore(fake, uploaderRoot.firstChild);
                 }
@@ -880,28 +915,43 @@ st.components.v1.html(
             });
 
             // Campo de texto: sin borde ni fondo, como el buscador de
-            // Google. El color (texto escrito) se fuerza aquí porque JS sí
-            // puede tocarlo; el color del placeholder se define en el CSS
-            // de más arriba (::placeholder no es un nodo real, JS no llega).
-            set(pill.querySelector('[data-testid="stTextInput"] > div'), {
-                border: 'none', background: 'transparent', 'box-shadow': 'none',
-            });
+            // Google. Se limpia CADA div interno (no solo el primero) para
+            // que no quede ninguna caja oscura anidada visible dentro de
+            // la píldora; baseweb suele envolver el input en más de una
+            // capa y solo aplanar la primera dejaba una caja de fondo
+            // suelta. El color del placeholder vive en el CSS de arriba
+            // (::placeholder no es un nodo real, JS no puede tocarlo).
+            const textWrap = pill.querySelector('[data-testid="stTextInput"]');
+            if (textWrap) {
+                textWrap.querySelectorAll('div').forEach(d => {
+                    set(d, { border: 'none', background: 'transparent', 'box-shadow': 'none' });
+                });
+            }
             set(pill.querySelector('[data-testid="stTextInput"] input'), {
                 border: 'none', background: 'transparent', 'box-shadow': 'none',
-                color: '#202124', 'font-size': '15px',
+                color: 'var(--tana-bar-text)', 'font-size': '15px',
             });
 
             // Grabador de voz: ancho tope de 46px para que nunca empuje al
-            // botón de enviar fuera de la píldora (antes esto pasaba en
-            // móvil porque el timer "00:00" pedía más espacio del previsto).
-            set(pill.querySelector('[data-testid="stAudioInput"]'), {
-                background: 'transparent', border: 'none', 'box-shadow': 'none',
-                width: '46px', 'max-width': '46px', 'min-width': '0', overflow: 'hidden',
-            });
-            set(pill.querySelector('[data-testid="stAudioInput"] > div'), {
-                background: 'transparent', border: 'none', 'box-shadow': 'none',
-                padding: '0', width: '46px', 'max-width': '46px',
-            });
+            // botón de enviar fuera de la píldora, y mismo aplanado amplio
+            // que el campo de texto para que no quede ninguna caja oscura
+            // suelta alrededor del ícono de micrófono.
+            const audioWrap = pill.querySelector('[data-testid="stAudioInput"]');
+            if (audioWrap) {
+                set(audioWrap, {
+                    background: 'transparent', border: 'none', 'box-shadow': 'none',
+                    width: '46px', 'max-width': '46px', 'min-width': '0', overflow: 'hidden',
+                });
+                audioWrap.querySelectorAll('div').forEach(d => {
+                    set(d, {
+                        background: 'transparent', border: 'none', 'box-shadow': 'none',
+                        padding: '0', width: '46px', 'max-width': '46px',
+                    });
+                });
+                audioWrap.querySelectorAll('*').forEach(el => {
+                    set(el, { color: 'var(--tana-bar-text)' });
+                });
+            }
 
             // Botón enviar: círculo rojo, tamaño fijo.
             set(pill.querySelector('button[kind="primary"]'), {
