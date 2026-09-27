@@ -531,11 +531,8 @@ section[data-testid="stSidebar"] .block-container {padding-top: 1rem;}
 div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) {
     position: fixed !important;
     bottom: 0;
-    /* Centrado sin transform: en algunos móviles un contenedor padre con
-       su propio transform "captura" el position:fixed y lo desalinea.
-       left+right+margin:auto centra igual de bien sin ese riesgo. */
-    left: 3vw; right: 3vw; margin-left: auto; margin-right: auto;
-    width: auto; max-width: 760px;
+    left: 50%; transform: translateX(-50%);
+    width: min(760px, 94vw);
     max-height: 64px !important;
     z-index: 999;
     background: #fff;
@@ -804,16 +801,14 @@ st.components.v1.html(
                 }
             };
 
-            // Contenedor: píldora blanca fija. Centrado con left/right +
-            // margin:auto (sin transform: un contenedor padre con su
-            // propio transform puede "capturar" el position:fixed y
-            // desalinearlo en algunos móviles). Radio FIJO (28px, no
+            // Contenedor: píldora blanca fija, centrada con left:50% +
+            // transform (método original, probado). Radio FIJO (28px, no
             // 999px): si las columnas se apilaran, un radio relativo al
             // lado corto volvería esto un círculo gigante.
             set(pill, {
                 position: 'fixed', bottom: '0px',
-                left: '3vw', right: '3vw', 'margin-left': 'auto', 'margin-right': 'auto',
-                width: 'auto', 'max-width': '760px',
+                left: '50%', transform: 'translateX(-50%)',
+                width: 'min(760px, 94vw)',
                 'max-height': '64px', overflow: 'hidden', 'box-sizing': 'border-box',
                 'z-index': '999', background: '#ffffff',
                 border: '1px solid #DFE1E5', 'border-radius': '28px',
