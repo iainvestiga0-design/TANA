@@ -740,116 +740,103 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .t
     #tana-mobile-header { background:rgba(14,16,20,.96) !important; border-bottom-color:#30343A !important; }
     #tana-mobile-header button { background:#202328 !important; border-color:#3A3F46 !important; color:#E8EAED !important; }
 }
+    /* ===== AJUSTES RESPONSIVE MÓVIL =====
+       Solo presentación. En móvil TANA usa todo el ancho disponible;
+       no se altera ningún motor contable ni la lógica de sesión. */
+    @media (max-width: 768px) {
+        /* El contenido principal vuelve a ocupar todo el ancho */
+        div[data-testid="stAppViewContainer"] main {
+            width: 100% !important;
+            max-width: 100% !important;
+        }
+        div[data-testid="stMainBlockContainer"],
+        div[data-testid="stMainBlockContainer"] .block-container,
+        .block-container {
+            width: 100% !important;
+            max-width: 100% !important;
+            margin-left: auto !important;
+            margin-right: auto !important;
+            padding-left: 12px !important;
+            padding-right: 12px !important;
+            box-sizing: border-box !important;
+        }
+
+        /* Evita que una barra lateral abierta reduzca el área de trabajo.
+           Streamlit la maneja como panel superpuesto; aquí solo fijamos su ancho. */
+        section[data-testid="stSidebar"] {
+            width: min(86vw, 310px) !important;
+            max-width: 310px !important;
+        }
+        section[data-testid="stSidebar"] .block-container {
+            width: 100% !important;
+            max-width: 100% !important;
+            padding: 12px !important;
+            box-sizing: border-box !important;
+        }
+
+        /* Mantiene visible el control nativo de abrir/cerrar la barra lateral. */
+        [data-testid="collapsedControl"] {
+            display: block !important;
+            visibility: visible !important;
+            opacity: 1 !important;
+            z-index: 1200 !important;
+        }
+        [data-testid="collapsedControl"] button {
+            width: 40px !important;
+            height: 40px !important;
+            border-radius: 10px !important;
+        }
+
+        /* Encabezado de bienvenida más cómodo en pantalla pequeña */
+        .tana-bubble-user, .tana-bubble-assistant {
+            max-width: 96%;
+        }
+
+        /* No reduce el contenido: solo adapta proporciones */
+        .tana-result-card {
+            width: 100% !important;
+            box-sizing: border-box !important;
+        }
+    }
 </style>
 """, unsafe_allow_html=True)
 
 LOGO_PATH = os.path.join(os.path.dirname(__file__), "LOGO TANA.jpg")
 
-# ============================================================
-# MENÚ MÓVIL NATIVO — SOLO PRESENTACIÓN
-# Usa un st.button real de Streamlit para que el menú funcione
-# de forma fiable en celular, sin depender del DOM interno de
-# Streamlit. No toca ningún motor contable.
-# ============================================================
-st.markdown("""
-<style>
-@media (min-width: 769px) {
-    div[data-testid="stVerticalBlock"]:has(.tana-mobile-menu-anchor) {
-        display: none !important;
-    }
-}
-@media (max-width: 768px) {
-    div[data-testid="stVerticalBlock"]:has(.tana-mobile-menu-anchor) {
-        position: fixed !important;
-        top: 7px !important;
-        left: 8px !important;
-        width: 235px !important;
-        z-index: 2000 !important;
-        padding: 0 !important;
-        margin: 0 !important;
-        background: transparent !important;
-    }
-    div[data-testid="stVerticalBlock"]:has(.tana-mobile-menu-anchor) > div[data-testid="element-container"] {
-        margin: 0 !important;
-        padding: 0 !important;
-    }
-    div[data-testid="stVerticalBlock"]:has(.tana-mobile-menu-anchor) .stButton > button {
-        width: 42px !important;
-        height: 42px !important;
-        min-height: 42px !important;
-        padding: 0 !important;
-        border-radius: 12px !important;
-        border: 1px solid #DDE5EA !important;
-        background: rgba(255,255,255,.96) !important;
-        color: #12304A !important;
-        box-shadow: 0 2px 8px rgba(18,48,74,.12) !important;
-        font-size: 22px !important;
-        line-height: 1 !important;
-    }
-    div[data-testid="stVerticalBlock"]:has(.tana-mobile-menu-panel) {
-        margin-top: 6px !important;
-        padding: 12px !important;
-        width: 220px !important;
-        background: rgba(255,255,255,.98) !important;
-        border: 1px solid #E1E7EC !important;
-        border-radius: 16px !important;
-        box-shadow: 0 8px 30px rgba(18,48,74,.18) !important;
-    }
-    div[data-testid="stVerticalBlock"]:has(.tana-mobile-menu-panel) .stButton > button {
-        width: 100% !important;
-        min-height: 42px !important;
-        text-align: left !important;
-        justify-content: flex-start !important;
-        border-radius: 10px !important;
-        margin-top: 4px !important;
-    }
-    .tana-mobile-history-title {
-        font-size: 11px !important;
-        font-weight: 800 !important;
-        color: #8B98A3 !important;
-        text-transform: uppercase !important;
-        letter-spacing: .04em !important;
-        margin: 10px 2px 5px !important;
-    }
-    .tana-mobile-history-item {
-        font-size: 13px !important;
-        color: #334452 !important;
-        padding: 5px 3px !important;
-        line-height: 1.3 !important;
-    }
-}
-</style>
-""", unsafe_allow_html=True)
-
-mobile_menu = st.container()
-with mobile_menu:
-    st.markdown('<span class="tana-mobile-menu-anchor"></span>', unsafe_allow_html=True)
-    menu_clicked = st.button("☰", key="tana_mobile_menu_btn", help="Abrir menú")
-    if menu_clicked:
-        st.session_state["tana_mobile_menu_open"] = not st.session_state.get("tana_mobile_menu_open", False)
-        st.rerun()
-    if st.session_state.get("tana_mobile_menu_open", False):
-        panel = st.container()
-        with panel:
-            st.markdown('<span class="tana-mobile-menu-panel"></span>', unsafe_allow_html=True)
-            st.markdown('<div style="font-weight:800;font-size:18px;color:#12304A;margin-bottom:6px;">TANA</div>', unsafe_allow_html=True)
-            if st.button("➕  Nuevo chat", key="tana_mobile_new_chat", use_container_width=True):
-                for _key in (
-                    "monografia_json", "monografia_texto", "monografia_nombre", "tana_file_signature",
-                    "asientos_contables", "asientos_validos", "errores_asientos", "alertas_asientos",
-                    "respuesta_tana", "respuesta_tana_ruta", "audio_tana_processed",
-                    "registro_compras", "registro_ventas", "kardex", "tana_chat",
-                ):
-                    st.session_state.pop(_key, None)
-                st.session_state["tana_mobile_menu_open"] = False
-                st.rerun()
-            st.markdown('<div class="tana-mobile-history-title">Historial</div>', unsafe_allow_html=True)
-            historial_movil = st.session_state.get("tana_historial", [])
-            if historial_movil:
-                for item in reversed(historial_movil[-15:]):
-                    st.markdown(f'<div class="tana-mobile-history-item">📄 {item}</div>', unsafe_allow_html=True)
-            else:
-                st.markdown('<div class="tana-mobile-history-item" style="color:#A6B0B8;">Aún no hay monografías resueltas en esta sesión.</div>', unsafe_allow_html=True)
+# Cabecera móvil: solo presentación. El botón abre el sidebar nativo de Streamlit.
+st.components.v1.html(
+    """
+    <script>
+    (function () {
+        const d = window.parent.document;
+        const ID = 'tana-mobile-header';
+        function render() {
+            let old = d.getElementById(ID);
+            if (window.parent.innerWidth > 768) {
+                if (old) old.remove();
+                return;
+            }
+            if (old) return;
+            const h = d.createElement('div');
+            h.id = ID;
+            h.innerHTML = '<div style="font-weight:800;font-size:18px;color:#12304A;">TANA</div>' +
+                          '<button type="button" aria-label="Abrir menú" style="border:1px solid #DDE5EA;background:#fff;color:#12304A;width:40px;height:40px;border-radius:12px;font-size:22px;line-height:1;box-shadow:0 1px 4px rgba(18,48,74,.08);">☰</button>';
+            h.style.cssText = 'position:fixed;top:0;left:0;right:0;height:48px;z-index:1100;display:flex;align-items:center;justify-content:space-between;padding:0 12px;background:rgba(255,255,255,.96);backdrop-filter:blur(8px);border-bottom:1px solid #E7EBEF;box-sizing:border-box;';
+            d.body.appendChild(h);
+            h.querySelector('button').addEventListener('click', function () {
+                const b = d.querySelector('[data-testid="collapsedControl"] button');
+                if (b) { b.click(); return; }
+                const s = d.querySelector('button[aria-label*="sidebar" i]');
+                if (s) s.click();
+            });
+        }
+        render();
+        window.parent.addEventListener('resize', render);
+    })();
+    </script>
+    """,
+    height=0,
+)
 
 with st.sidebar:
     logo_col, title_col = st.columns([0.35, 1])
