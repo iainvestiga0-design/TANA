@@ -31,6 +31,176 @@ st.set_page_config(
 )
 
 # ============================================================
+# AUTENTICACIÓN TANA — SUPABASE
+# Solo controla acceso de usuarios. NO modifica ningún motor
+# contable, Gemini, PCGE, cálculos, asientos, estados ni Excel.
+# Requiere en Streamlit Secrets:
+# SUPABASE_URL = "https://TU-PROYECTO.supabase.co"
+# SUPABASE_ANON_KEY = "TU-ANON-KEY"
+# ============================================================
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
+
+
+def _tana_supabase_config():
+    try:
+        url = str(st.secrets.get("SUPABASE_URL", "") or "").strip().rstrip("/")
+        key = str(st.secrets.get("SUPABASE_ANON_KEY", "") or "").strip()
+    except Exception:
+        url = ""
+        key = ""
+    url = url or os.getenv("SUPABASE_URL", "").strip().rstrip("/")
+    key = key or os.getenv("SUPABASE_ANON_KEY", "").strip()
+    return url, key
+
+
+def _tana_supabase_request(path, method="POST", payload=None, access_token=None):
+    url, anon_key = _tana_supabase_config()
+    if not url or not anon_key:
+        raise RuntimeError(
+            "TANA no tiene configurado Supabase. En Streamlit Secrets agrega "
+            "SUPABASE_URL y SUPABASE_ANON_KEY."
+        )
+
+    body = None
+    if payload is not None:
+        body = json.dumps(payload).encode("utf-8")
+
+    headers = {
+        "apikey": anon_key,
+        "Content-Type": "application/json",
+    }
+    if access_token:
+        headers["Authorization"] = f"Bearer {access_token}"
+
+    req = Request(f"{url}{path}", data=body, headers=headers, method=method)
+    try:
+        with urlopen(req, timeout=20) as response:
+            raw = response.read().decode("utf-8")
+            return json.loads(raw) if raw else {}
+    except HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        try:
+            data = json.loads(raw)
+            message = data.get("msg") or data.get("message") or data.get("error_description") or data.get("error") or raw
+        except Exception:
+            message = raw or str(exc)
+        raise RuntimeError(str(message)) from exc
+    except URLError as exc:
+        raise RuntimeError(f"No se pudo conectar con Supabase: {exc.reason}") from exc
+
+
+def _tana_auth_error_message(exc):
+    msg = str(exc).strip()
+    low = msg.lower()
+    if "invalid login credentials" in low:
+        return "Correo o contraseña incorrectos."
+    if "email not confirmed" in low:
+        return "Tu correo todavía no está confirmado. Revisa tu bandeja de entrada y confirma tu cuenta."
+    if "user already registered" in low or "already been registered" in low:
+        return "Ese correo ya está registrado. Usa Iniciar sesión."
+    if "password should be at least" in low:
+        return "La contraseña debe tener al menos 6 caracteres."
+    if "rate limit" in low or "too many requests" in low:
+        return "Supabase limitó temporalmente los intentos. Espera unos minutos y vuelve a intentarlo."
+    return msg
+
+
+def _tana_clear_auth_state():
+    for key in ("tana_auth_user", "tana_auth_session"):
+        st.session_state.pop(key, None)
+
+
+def _tana_auth_screen():
+    """Pantalla de acceso. Se ejecuta antes de cualquier motor de TANA."""
+    st.markdown("""
+    <style>
+    .tana-auth-wrap { max-width: 470px; margin: 7vh auto 0 auto; padding: 0 16px; }
+    .tana-auth-card { background:#fff; border:1px solid #DDE8EF; border-radius:20px; padding:30px 28px; box-shadow:0 8px 30px rgba(18,48,74,.08); }
+    .tana-auth-logo { text-align:center; font-size:34px; font-weight:900; color:#12304A; margin-bottom:6px; }
+    .tana-auth-sub { text-align:center; color:#6B7B87; margin-bottom:24px; }
+    </style>
+    <div class="tana-auth-wrap">
+      <div class="tana-auth-card">
+        <div class="tana-auth-logo">TANA</div>
+        <div class="tana-auth-sub">Inteligencia Artificial Contable</div>
+    </div></div>
+    """, unsafe_allow_html=True)
+
+    # El formulario real queda debajo del encabezado visual.
+    _, center, _ = st.columns([0.15, 0.70, 0.15])
+    with center:
+        login_tab, register_tab = st.tabs(["🔐 Iniciar sesión", "📝 Crear cuenta"])
+
+        with login_tab:
+            with st.form("tana_login_form", clear_on_submit=False):
+                email = st.text_input("Correo electrónico", key="tana_login_email", placeholder="tu@correo.com")
+                password = st.text_input("Contraseña", type="password", key="tana_login_password")
+                submit = st.form_submit_button("Entrar a TANA", type="primary", use_container_width=True)
+
+            if submit:
+                if not email.strip() or not password:
+                    st.warning("Ingresa tu correo y contraseña.")
+                else:
+                    try:
+                        data = _tana_supabase_request(
+                            "/auth/v1/token?grant_type=password",
+                            payload={"email": email.strip(), "password": password},
+                        )
+                        user = data.get("user") or {}
+                        st.session_state["tana_auth_session"] = data
+                        st.session_state["tana_auth_user"] = user
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(_tana_auth_error_message(exc))
+
+        with register_tab:
+            with st.form("tana_register_form", clear_on_submit=False):
+                email_new = st.text_input("Correo electrónico", key="tana_register_email", placeholder="tu@correo.com")
+                password_new = st.text_input("Contraseña", type="password", key="tana_register_password")
+                password_new2 = st.text_input("Repite la contraseña", type="password", key="tana_register_password2")
+                submit_new = st.form_submit_button("Crear mi cuenta", type="primary", use_container_width=True)
+
+            if submit_new:
+                if not email_new.strip() or not password_new:
+                    st.warning("Completa el correo y la contraseña.")
+                elif password_new != password_new2:
+                    st.error("Las contraseñas no coinciden.")
+                elif len(password_new) < 6:
+                    st.error("La contraseña debe tener al menos 6 caracteres.")
+                else:
+                    try:
+                        data = _tana_supabase_request(
+                            "/auth/v1/signup",
+                            payload={"email": email_new.strip(), "password": password_new},
+                        )
+                        user = data.get("user") or {}
+                        session = data.get("session")
+                        if session:
+                            st.session_state["tana_auth_session"] = session
+                            st.session_state["tana_auth_user"] = user
+                            st.success("Cuenta creada. Entrando a TANA…")
+                            st.rerun()
+                        else:
+                            st.success(
+                                "Cuenta creada correctamente. Revisa tu correo, confirma tu cuenta "
+                                "y después vuelve a TANA para iniciar sesión."
+                            )
+                    except Exception as exc:
+                        st.error(_tana_auth_error_message(exc))
+
+        st.caption("El acceso se gestiona mediante Supabase Authentication. TANA no guarda contraseñas.")
+
+
+# Bloqueo de acceso: nada del motor contable se ejecuta hasta autenticar al usuario.
+if "tana_auth_user" not in st.session_state:
+    _tana_auth_screen()
+    st.stop()
+
+TANA_AUTH_USER = st.session_state.get("tana_auth_user") or {}
+TANA_AUTH_EMAIL = str(TANA_AUTH_USER.get("email") or "Usuario TANA")
+
+# ============================================================
 # PWA: manifest + service worker + meta tags
 # ============================================================
 # Streamlit no permite escribir directamente en el <head> del documento,
@@ -869,9 +1039,21 @@ with st.sidebar:
 
     st.markdown(
         '<div class="tana-side-account">'
-        '<div class="tana-avatar">T</div><span>Cuenta del suscriptor de TANA</span></div>',
+        '<div class="tana-avatar">T</div><span>' + TANA_AUTH_EMAIL.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;") + '</span></div>',
         unsafe_allow_html=True,
     )
+    if st.button("🚪 Cerrar sesión", use_container_width=True, key="tana_logout_btn"):
+        try:
+            session_data = st.session_state.get("tana_auth_session") or {}
+            access_token = session_data.get("access_token")
+            if access_token:
+                try:
+                    _tana_supabase_request("/auth/v1/logout", method="POST", access_token=access_token)
+                except Exception:
+                    pass
+        finally:
+            _tana_clear_auth_state()
+            st.rerun()
 
 # ============================================================
 # HISTORIAL DE CONVERSACIÓN (área principal)
