@@ -8,6 +8,10 @@ import tempfile
 from decimal import Decimal, InvalidOperation
 
 import streamlit as st
+try:
+    import extra_streamlit_components as stx
+except Exception:
+    stx = None
 import openpyxl
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -132,8 +136,34 @@ def _tana_clear_auth_state():
         st.session_state.pop(key, None)
 
 
+def _tana_cookie_manager():
+    """Administrador de cookies del navegador.
+
+    CookieManager funciona fuera del iframe HTML y permite que el refresh token
+    sobreviva al cierre/reapertura del navegador. El token nunca se muestra.
+    """
+    if stx is None:
+        return None
+    manager = st.session_state.get("tana_cookie_manager")
+    if manager is None:
+        try:
+            manager = stx.CookieManager(key="tana_cookie_manager")
+            st.session_state["tana_cookie_manager"] = manager
+        except Exception:
+            return None
+    return manager
+
+
 def _tana_cookie_value(name):
     """Lee una cookie persistente enviada por el navegador."""
+    manager = _tana_cookie_manager()
+    if manager is not None:
+        try:
+            value = manager.get(name)
+            if value:
+                return str(value).strip()
+        except Exception:
+            pass
     try:
         return str(st.context.cookies.get(name, "") or "").strip()
     except Exception:
@@ -141,33 +171,42 @@ def _tana_cookie_value(name):
 
 
 def _tana_set_refresh_cookie(refresh_token):
-    """Guarda el refresh token en una cookie persistente del navegador.
-
-    Se codifica para evitar caracteres especiales. La cookie dura 30 días y
-    se marca Secure/SameSite=Lax. No se muestra el token en pantalla.
-    """
+    """Guarda el refresh token en una cookie real del navegador durante 30 días."""
     if not refresh_token:
         return
-    import base64
-    encoded = base64.urlsafe_b64encode(str(refresh_token).encode("utf-8")).decode("ascii")
-    st.components.v1.html(
-        f"""<script>
-        (function() {{
-            const v = {json.dumps(encoded)};
-            document.cookie = 'tana_refresh_token=' + encodeURIComponent(v) + '; Max-Age=2592000; Path=/; SameSite=Lax; Secure';
-        }})();
-        </script>""",
-        height=0,
-    )
+    manager = _tana_cookie_manager()
+    if manager is None:
+        return
+    try:
+        manager.set(
+            "tana_refresh_token",
+            str(refresh_token),
+            key="tana_set_refresh_token",
+            path="/",
+            max_age=2592000,
+            secure=True,
+            same_site="lax",
+        )
+    except Exception:
+        pass
 
 
 def _tana_delete_refresh_cookie():
-    st.components.v1.html(
-        """<script>
-        document.cookie = 'tana_refresh_token=; Max-Age=0; Path=/; SameSite=Lax; Secure';
-        </script>""",
-        height=0,
-    )
+    manager = _tana_cookie_manager()
+    if manager is not None:
+        try:
+            manager.delete("tana_refresh_token", key="tana_delete_refresh_token")
+            return
+        except Exception:
+            pass
+    # Fallback para instalaciones sin CookieManager.
+    try:
+        st.components.v1.html(
+            """<script>document.cookie='tana_refresh_token=; Max-Age=0; Path=/; SameSite=Lax; Secure';</script>""",
+            height=0,
+        )
+    except Exception:
+        pass
 
 
 def _tana_restore_auth_from_cookie():
@@ -178,25 +217,21 @@ def _tana_restore_auth_from_cookie():
     if not raw:
         return False
     try:
-        import base64, urllib.parse
-        encoded = urllib.parse.unquote(raw)
-        refresh_token = base64.urlsafe_b64decode(encoded.encode("ascii")).decode("utf-8")
         data = _tana_supabase_request(
             "/auth/v1/token?grant_type=refresh_token",
-            payload={"refresh_token": refresh_token},
+            payload={"refresh_token": raw},
         )
         user = data.get("user") or {}
         if not user:
             return False
         st.session_state["tana_auth_session"] = data
         st.session_state["tana_auth_user"] = user
-        _tana_set_refresh_cookie(data.get("refresh_token") or refresh_token)
+        _tana_set_refresh_cookie(data.get("refresh_token") or raw)
         return True
     except Exception:
         _tana_delete_refresh_cookie()
         _tana_clear_auth_state()
         return False
-
 
 def _tana_auth_screen():
     """Pantalla de acceso. Se ejecuta antes de cualquier motor de TANA."""
@@ -368,47 +403,89 @@ def _tana_load_persistent_history():
         return
     user_id = _tana_history_user_id()
     st.session_state["tana_historial"] = []
+    st.session_state["tana_historial_items"] = []
     if not user_id:
         return
     try:
         import urllib.parse
         query = urllib.parse.urlencode({
-            "select": "title,created_at",
+            "select": "id,title,created_at,monografia_json",
             "user_id": f"eq.{user_id}",
-            "order": "created_at.asc",
+            "order": "created_at.desc",
             "limit": "50",
         })
         rows = _tana_history_request(f"tana_historial?{query}")
         if isinstance(rows, list):
-            st.session_state["tana_historial"] = [
-                str(row.get("title") or "").strip()
-                for row in rows
-                if str(row.get("title") or "").strip()
-            ]
+            items = []
+            for row in rows:
+                title = str(row.get("title") or "").strip()
+                if title:
+                    items.append({
+                        "id": row.get("id"),
+                        "title": title,
+                        "created_at": row.get("created_at"),
+                        "monografia_json": row.get("monografia_json"),
+                    })
+            st.session_state["tana_historial_items"] = items
+            st.session_state["tana_historial"] = [item["title"] for item in items]
     finally:
         st.session_state["tana_history_loaded_for"] = user_id
 
 
-def _tana_save_history(title):
+def _tana_save_history(title, monografia_json=None):
     title = str(title or "").strip()
     user_id = _tana_history_user_id()
     if not title or not user_id:
         return
-    # Evita duplicar el mismo archivo dentro de la misma sesión.
+    if monografia_json is None:
+        monografia_json = st.session_state.get("monografia_json")
+
+    # Evita duplicar el mismo archivo dentro de la sesión.
     if title not in st.session_state.get("tana_historial", []):
         st.session_state.setdefault("tana_historial", []).insert(0, title)
+
+    payload = {"user_id": user_id, "title": title}
+    if monografia_json is not None:
+        payload["monografia_json"] = monografia_json
+
     result = _tana_history_request(
         "tana_historial",
         method="POST",
-        payload={"user_id": user_id, "title": title},
+        payload=payload,
     )
     if result is None:
-        # Si la escritura remota falla, no perdemos el registro local de esta
-        # ejecución y permitimos reintentar en la siguiente carga.
         st.session_state["tana_history_sync_pending"] = True
     else:
         st.session_state.pop("tana_history_sync_pending", None)
         st.session_state.pop("tana_history_last_error", None)
+
+
+def _tana_open_history(item):
+    """Abre una monografía guardada y regenera el motor contable para poder consultarla."""
+    data = item.get("monografia_json") if isinstance(item, dict) else None
+    title = str((item or {}).get("title") or "archivo").strip() if isinstance(item, dict) else str(item or "archivo")
+    if not data:
+        st.warning("Este registro histórico solo contiene el nombre del archivo. Los registros nuevos sí podrán abrirse y consultarse.")
+        return
+
+    # Limpia solo el estado de trabajo actual; los motores contables permanecen intactos.
+    for key in (
+        "monografia_json", "monografia_texto", "monografia_nombre", "tana_file_signature",
+        "asientos_contables", "asientos_validos", "errores_asientos", "alertas_asientos",
+        "respuesta_tana", "respuesta_tana_ruta", "audio_tana_processed",
+        "registro_compras", "registro_ventas", "kardex",
+    ):
+        st.session_state.pop(key, None)
+
+    st.session_state["monografia_json"] = data
+    st.session_state["monografia_nombre"] = title
+    st.session_state["monografia_texto"] = extraction_to_text(data) if isinstance(data, dict) else str(data)
+    st.session_state["tana_file_signature"] = f"historial|{item.get('id') if isinstance(item, dict) else title}"
+    st.session_state["tana_chat"] = [
+        {"role": "user", "content": f"📂 Abrí del historial: <b>{title}</b>"},
+        {"role": "assistant", "content": "He recuperado la monografía. Estoy regenerando los cálculos para que puedas preguntarme cualquier duda sobre este trabajo…"},
+    ]
+    st.rerun()
 
 
 _tana_load_persistent_history()
@@ -1241,14 +1318,15 @@ with st.sidebar:
         st.rerun()
 
     st.markdown('<div class="tana-side-section">Historial</div>', unsafe_allow_html=True)
-    historial = st.session_state.get("tana_historial", [])
-    if historial:
-        st.markdown('<div class="tana-side-section" style="margin-top:4px;">Hoy</div>', unsafe_allow_html=True)
-        for item in reversed(historial[-15:]):
-            st.markdown(f'<div class="tana-side-item">📄 {item}</div>', unsafe_allow_html=True)
+    historial_items = st.session_state.get("tana_historial_items", [])
+    if historial_items:
+        st.markdown('<div class="tana-side-section" style="margin-top:4px;">Tus trabajos</div>', unsafe_allow_html=True)
+        for idx, item in enumerate(historial_items[:15]):
+            title = str(item.get("title") or "archivo")
+            if st.button(f"📄 {title}", key=f"tana_history_open_{item.get('id', idx)}", use_container_width=True):
+                _tana_open_history(item)
     else:
-        st.markdown('<div class="tana-side-empty">Aún no hay monografías resueltas en esta sesión.</div>',
-                     unsafe_allow_html=True)
+        st.markdown('<div class="tana-side-empty">Aún no hay monografías guardadas.</div>', unsafe_allow_html=True)
 
     st.markdown(
         '<div class="tana-side-account">'
@@ -1268,6 +1346,7 @@ with st.sidebar:
             _tana_delete_refresh_cookie()
             _tana_clear_auth_state()
             st.session_state.pop("tana_historial", None)
+            st.session_state.pop("tana_historial_items", None)
             st.session_state.pop("tana_history_loaded_for", None)
             st.rerun()
 
@@ -1556,7 +1635,7 @@ if "monografia_json" in st.session_state:
     if not any(m["role"] == "user" and _nombre_mono in m["content"] for m in st.session_state["tana_chat"]):
         _tana_chat_add("user", f"📄 Cargó la monografía: <b>{_nombre_mono}</b>")
         _tana_chat_add("assistant", f"Monografía recibida: <b>{_nombre_mono}</b>. Estoy desarrollando los asientos…")
-        _tana_save_history(_nombre_mono)
+        _tana_save_history(_nombre_mono, data)
         st.rerun()
 
 
