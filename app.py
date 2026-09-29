@@ -43,14 +43,24 @@ from urllib.error import HTTPError, URLError
 
 
 def _tana_supabase_config():
+    """Obtiene la configuración de Supabase de forma compatible.
+    Acepta la clave Publishable actual y la variable histórica ANON_KEY.
+    """
     try:
         url = str(st.secrets.get("SUPABASE_URL", "") or "").strip().rstrip("/")
-        key = str(st.secrets.get("SUPABASE_ANON_KEY", "") or "").strip()
+        key = (
+            str(st.secrets.get("SUPABASE_PUBLISHABLE_KEY", "") or "").strip()
+            or str(st.secrets.get("SUPABASE_ANON_KEY", "") or "").strip()
+        )
     except Exception:
         url = ""
         key = ""
     url = url or os.getenv("SUPABASE_URL", "").strip().rstrip("/")
-    key = key or os.getenv("SUPABASE_ANON_KEY", "").strip()
+    key = (
+        key
+        or os.getenv("SUPABASE_PUBLISHABLE_KEY", "").strip()
+        or os.getenv("SUPABASE_ANON_KEY", "").strip()
+    )
     return url, key
 
 
