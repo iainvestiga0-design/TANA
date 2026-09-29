@@ -43,23 +43,28 @@ from urllib.error import HTTPError, URLError
 
 
 def _tana_supabase_config():
-    """Obtiene la configuración de Supabase de forma compatible.
-    Acepta la clave Publishable actual y la variable histórica ANON_KEY.
-    """
+    """Lee Supabase de Secrets/entorno sin depender de un único nombre."""
+    url = ""
+    key = ""
     try:
-        url = str(st.secrets.get("SUPABASE_URL", "") or "").strip().rstrip("/")
-        key = (
-            str(st.secrets.get("SUPABASE_PUBLISHABLE_KEY", "") or "").strip()
-            or str(st.secrets.get("SUPABASE_ANON_KEY", "") or "").strip()
-        )
+        # Acceso directo + dict() para cubrir distintas versiones de Streamlit.
+        secrets = dict(st.secrets)
+        url = str(secrets.get("SUPABASE_URL", "") or "").strip().rstrip("/")
+        key = str(
+            secrets.get("SUPABASE_PUBLISHABLE_KEY", "")
+            or secrets.get("SUPABASE_ANON_KEY", "")
+            or secrets.get("SUPABASE_KEY", "")
+            or ""
+        ).strip()
     except Exception:
-        url = ""
-        key = ""
+        pass
+
     url = url or os.getenv("SUPABASE_URL", "").strip().rstrip("/")
     key = (
         key
         or os.getenv("SUPABASE_PUBLISHABLE_KEY", "").strip()
         or os.getenv("SUPABASE_ANON_KEY", "").strip()
+        or os.getenv("SUPABASE_KEY", "").strip()
     )
     return url, key
 
@@ -67,9 +72,15 @@ def _tana_supabase_config():
 def _tana_supabase_request(path, method="POST", payload=None, access_token=None):
     url, anon_key = _tana_supabase_config()
     if not url or not anon_key:
+        try:
+            _tana_secret_names = sorted(str(k) for k in dict(st.secrets).keys())
+        except Exception:
+            _tana_secret_names = []
         raise RuntimeError(
-            "TANA no tiene configurado Supabase. En Streamlit Secrets agrega "
-            "SUPABASE_URL y SUPABASE_ANON_KEY."
+            "TANA no pudo leer la configuración de Supabase. "
+            f"Variables detectadas en Secrets: {_tana_secret_names}. "
+            "TANA acepta SUPABASE_URL y SUPABASE_PUBLISHABLE_KEY "
+            "o SUPABASE_ANON_KEY. No se muestran valores por seguridad."
         )
 
     body = None
@@ -121,6 +132,72 @@ def _tana_clear_auth_state():
         st.session_state.pop(key, None)
 
 
+def _tana_cookie_value(name):
+    """Lee una cookie persistente enviada por el navegador."""
+    try:
+        return str(st.context.cookies.get(name, "") or "").strip()
+    except Exception:
+        return ""
+
+
+def _tana_set_refresh_cookie(refresh_token):
+    """Guarda el refresh token en una cookie persistente del navegador.
+
+    Se codifica para evitar caracteres especiales. La cookie dura 30 días y
+    se marca Secure/SameSite=Lax. No se muestra el token en pantalla.
+    """
+    if not refresh_token:
+        return
+    import base64
+    encoded = base64.urlsafe_b64encode(str(refresh_token).encode("utf-8")).decode("ascii")
+    st.components.v1.html(
+        f"""<script>
+        (function() {{
+            const v = {json.dumps(encoded)};
+            document.cookie = 'tana_refresh_token=' + encodeURIComponent(v) + '; Max-Age=2592000; Path=/; SameSite=Lax; Secure';
+        }})();
+        </script>""",
+        height=0,
+    )
+
+
+def _tana_delete_refresh_cookie():
+    st.components.v1.html(
+        """<script>
+        document.cookie = 'tana_refresh_token=; Max-Age=0; Path=/; SameSite=Lax; Secure';
+        </script>""",
+        height=0,
+    )
+
+
+def _tana_restore_auth_from_cookie():
+    """Restaura la sesión automáticamente al volver a abrir TANA."""
+    if st.session_state.get("tana_auth_user"):
+        return True
+    raw = _tana_cookie_value("tana_refresh_token")
+    if not raw:
+        return False
+    try:
+        import base64, urllib.parse
+        encoded = urllib.parse.unquote(raw)
+        refresh_token = base64.urlsafe_b64decode(encoded.encode("ascii")).decode("utf-8")
+        data = _tana_supabase_request(
+            "/auth/v1/token?grant_type=refresh_token",
+            payload={"refresh_token": refresh_token},
+        )
+        user = data.get("user") or {}
+        if not user:
+            return False
+        st.session_state["tana_auth_session"] = data
+        st.session_state["tana_auth_user"] = user
+        _tana_set_refresh_cookie(data.get("refresh_token") or refresh_token)
+        return True
+    except Exception:
+        _tana_delete_refresh_cookie()
+        _tana_clear_auth_state()
+        return False
+
+
 def _tana_auth_screen():
     """Pantalla de acceso. Se ejecuta antes de cualquier motor de TANA."""
     st.markdown("""
@@ -160,6 +237,7 @@ def _tana_auth_screen():
                         user = data.get("user") or {}
                         st.session_state["tana_auth_session"] = data
                         st.session_state["tana_auth_user"] = user
+                        _tana_set_refresh_cookie(data.get("refresh_token"))
                         st.rerun()
                     except Exception as exc:
                         st.error(_tana_auth_error_message(exc))
@@ -189,6 +267,7 @@ def _tana_auth_screen():
                         if session:
                             st.session_state["tana_auth_session"] = session
                             st.session_state["tana_auth_user"] = user
+                            _tana_set_refresh_cookie(session.get("refresh_token"))
                             st.success("Cuenta creada. Entrando a TANA…")
                             st.rerun()
                         else:
@@ -202,13 +281,97 @@ def _tana_auth_screen():
         st.caption("El acceso se gestiona mediante Supabase Authentication. TANA no guarda contraseñas.")
 
 
-# Bloqueo de acceso: nada del motor contable se ejecuta hasta autenticar al usuario.
-if "tana_auth_user" not in st.session_state:
-    _tana_auth_screen()
-    st.stop()
+# Bloqueo de acceso: primero intentamos restaurar automáticamente la sesión
+# persistida en el navegador. Solo mostramos login si no existe una sesión válida.
+if not _tana_restore_auth_from_cookie():
+    if "tana_auth_user" not in st.session_state:
+        _tana_auth_screen()
+        st.stop()
 
 TANA_AUTH_USER = st.session_state.get("tana_auth_user") or {}
 TANA_AUTH_EMAIL = str(TANA_AUTH_USER.get("email") or "Usuario TANA")
+
+
+# ============================================================
+# HISTORIAL PERSISTENTE POR USUARIO — SUPABASE
+# Solo guarda metadatos del trabajo (nombre y fecha). Los motores
+# contables y el procesamiento con Gemini no se modifican.
+# Requiere la tabla/policies del SQL que acompaña a este archivo.
+# ============================================================
+def _tana_history_user_id():
+    return str(TANA_AUTH_USER.get("id") or "").strip()
+
+
+def _tana_history_request(path, method="GET", payload=None):
+    token = str((st.session_state.get("tana_auth_session") or {}).get("access_token") or "").strip()
+    if not token:
+        return {}
+    url, anon_key = _tana_supabase_config()
+    if not url or not anon_key:
+        return {}
+    body = None
+    if payload is not None:
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    headers = {
+        "apikey": anon_key,
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }
+    if method in ("POST", "PATCH", "DELETE"):
+        headers["Prefer"] = "return=minimal"
+    req = Request(f"{url}/rest/v1/{path.lstrip('/')}", data=body, headers=headers, method=method)
+    try:
+        with urlopen(req, timeout=15) as response:
+            raw = response.read().decode("utf-8")
+            return json.loads(raw) if raw else {}
+    except Exception:
+        # El historial nunca debe detener TANA ni afectar los motores contables.
+        return {}
+
+
+def _tana_load_persistent_history():
+    if st.session_state.get("tana_history_loaded_for") == _tana_history_user_id():
+        return
+    user_id = _tana_history_user_id()
+    st.session_state["tana_historial"] = []
+    if not user_id:
+        return
+    try:
+        import urllib.parse
+        query = urllib.parse.urlencode({
+            "select": "title,created_at",
+            "user_id": f"eq.{user_id}",
+            "order": "created_at.asc",
+            "limit": "50",
+        })
+        rows = _tana_history_request(f"tana_historial?{query}")
+        if isinstance(rows, list):
+            st.session_state["tana_historial"] = [
+                str(row.get("title") or "").strip()
+                for row in rows
+                if str(row.get("title") or "").strip()
+            ]
+    finally:
+        st.session_state["tana_history_loaded_for"] = user_id
+
+
+def _tana_save_history(title):
+    title = str(title or "").strip()
+    user_id = _tana_history_user_id()
+    if not title or not user_id:
+        return
+    # Evita duplicar el mismo archivo dentro de la misma sesión.
+    if title not in st.session_state.get("tana_historial", []):
+        st.session_state.setdefault("tana_historial", []).insert(0, title)
+    _tana_history_request(
+        "tana_historial",
+        method="POST",
+        payload={"user_id": user_id, "title": title},
+    )
+
+
+_tana_load_persistent_history()
 
 # ============================================================
 # PWA: manifest + service worker + meta tags
@@ -1062,7 +1225,10 @@ with st.sidebar:
                 except Exception:
                     pass
         finally:
+            _tana_delete_refresh_cookie()
             _tana_clear_auth_state()
+            st.session_state.pop("tana_historial", None)
+            st.session_state.pop("tana_history_loaded_for", None)
             st.rerun()
 
 # ============================================================
@@ -1350,8 +1516,7 @@ if "monografia_json" in st.session_state:
     if not any(m["role"] == "user" and _nombre_mono in m["content"] for m in st.session_state["tana_chat"]):
         _tana_chat_add("user", f"📄 Cargó la monografía: <b>{_nombre_mono}</b>")
         _tana_chat_add("assistant", f"Monografía recibida: <b>{_nombre_mono}</b>. Estoy desarrollando los asientos…")
-        if _nombre_mono not in st.session_state.get("tana_historial", []):
-            st.session_state.setdefault("tana_historial", []).append(_nombre_mono)
+        _tana_save_history(_nombre_mono)
         st.rerun()
 
 
