@@ -6,9 +6,15 @@ import shutil
 import subprocess
 import tempfile
 import time
+import hashlib
+import datetime as _dt
 from decimal import Decimal, InvalidOperation
 
 import streamlit as st
+try:
+    import extra_streamlit_components as stx
+except Exception:
+    stx = None
 import openpyxl
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -150,17 +156,44 @@ _TANA_COOKIE_NAME = "tana_refresh_token"
 _TANA_COOKIE_MAX_AGE = 30 * 24 * 60 * 60
 
 
-def _tana_cookie_value(name=_TANA_COOKIE_NAME):
-    """Lee la cookie que envía el navegador (disponible desde la 1.ª ejecución)."""
+def _tana_cookie_manager():
+    """Componente de cookies del navegador. Debe crearse en CADA ejecución
+    (es un widget: si se guarda en session_state deja de funcionar)."""
+    if stx is None:
+        return None
     try:
-        raw = st.context.cookies.get(name, "")
+        return stx.CookieManager(key="tana_cookie_manager")
     except Exception:
-        return ""
-    return unquote(str(raw or "")).strip()
+        return None
+
+
+_TANA_CM = None  # se asigna justo antes del bloqueo de acceso
+
+
+def _tana_cookie_value(name=_TANA_COOKIE_NAME):
+    """Busca la sesión guardada por DOS vías independientes:
+    1) el servidor (st.context.cookies, disponible desde la 1.ª ejecución)
+    2) el navegador (componente; llega en la 2.ª ejecución automática)."""
+    diag = st.session_state.setdefault("tana_diag", {})
+    server_val = ""
+    try:
+        server_val = unquote(str(st.context.cookies.get(name, "") or "")).strip()
+    except Exception:
+        server_val = ""
+    browser_val = ""
+    if _TANA_CM is not None:
+        try:
+            browser_val = unquote(str(_TANA_CM.get(name) or "")).strip()
+        except Exception:
+            browser_val = ""
+    diag["cookie_servidor"] = bool(server_val)
+    diag["cookie_navegador"] = bool(browser_val)
+    diag["componente_cookies"] = _TANA_CM is not None
+    return server_val or browser_val
 
 
 def _tana_emit_cookie_script(token="", clear=False):
-    """Guarda (o borra) la cookie de sesión en el navegador."""
+    """Vía JS directa: guarda (o borra) la cookie y una copia en localStorage."""
     value = "" if clear else quote(str(token or ""), safe="")
     if not clear and not value:
         return
@@ -169,8 +202,9 @@ def _tana_emit_cookie_script(token="", clear=False):
     script = (
         "<script>(function(){"
         f"var c={json.dumps(cookie)};"
-        "if(location.protocol==='https:'){c+='; Secure';}"
-        "try{window.parent.document.cookie=c;}catch(e){document.cookie=c;}"
+        "var w=window.parent;"
+        "try{if(w.location.protocol==='https:'){c+='; Secure';}}catch(e){}"
+        "try{w.document.cookie=c;}catch(e){try{document.cookie=c;}catch(e2){}}"
         "})();</script>"
     )
     try:
@@ -225,16 +259,21 @@ def _tana_restore_auth_from_cookie():
     raw = _tana_cookie_value()
     if not raw:
         return False
+    diag = st.session_state.setdefault("tana_diag", {})
     try:
         data = _tana_refresh_request(raw)
     except Exception as exc:
+        diag["error_restauracion"] = str(exc)[:160]
         # Sin internet / Supabase caído: no se borra la cookie, se puede reintentar.
         if not _tana_is_connection_error(exc):
             st.session_state["tana_no_restore"] = True  # token inválido: se limpia
+            st.session_state["tana_restore_msg"] = "Tu sesión guardada venció. Inicia sesión otra vez."
         return False
     if not (data.get("user") and data.get("access_token")):
+        diag["error_restauracion"] = "Supabase no devolvió usuario."
         st.session_state["tana_no_restore"] = True
         return False
+    diag.pop("error_restauracion", None)
     _tana_store_session(data, fallback_refresh=raw)
     return True
 
@@ -260,11 +299,29 @@ def _tana_ensure_fresh_session():
 
 
 def _tana_sync_cookie():
-    """Mantiene la cookie con el refresh token más reciente."""
+    """Mantiene la cookie con el refresh token más reciente, por dos vías
+    (JS directo + componente de cookies). Se repite en cada ejecución porque es
+    idempotente: si una ejecución se corta, la siguiente completa la escritura."""
     if st.session_state.get("tana_no_restore"):
         return
     token = (st.session_state.get("tana_auth_session") or {}).get("refresh_token")
+    if not token:
+        return
     _tana_emit_cookie_script(token)
+    if _TANA_CM is None:
+        return
+    key = "tana_ck_" + hashlib.sha1(str(token).encode()).hexdigest()[:10]
+    expires = _dt.datetime.now() + _dt.timedelta(days=30)
+    try:
+        _TANA_CM.set(_TANA_COOKIE_NAME, str(token), expires_at=expires, key=key,
+                     path="/", max_age=_TANA_COOKIE_MAX_AGE, same_site="lax")
+    except TypeError:
+        try:
+            _TANA_CM.set(_TANA_COOKIE_NAME, str(token), key=key)
+        except Exception:
+            pass
+    except Exception:
+        pass
 
 
 def _tana_auth_screen():
@@ -296,6 +353,8 @@ def _tana_auth_screen():
             "**(3)** mantener tu sesión iniciada en este dispositivo hasta 30 días, "
             "sin pedirte el correo y la clave cada vez."
         )
+        if st.session_state.get("tana_restore_msg"):
+            st.info(st.session_state["tana_restore_msg"])
         login_tab, register_tab = st.tabs(["🔐 Iniciar sesión", "📝 Crear cuenta"])
 
         with login_tab:
@@ -354,11 +413,31 @@ def _tana_auth_screen():
                         st.error(_tana_auth_error_message(exc))
 
         st.caption("El acceso se gestiona mediante Supabase Authentication. TANA no guarda contraseñas.")
+        _d = st.session_state.get("tana_diag") or {}
+        with st.expander("Diagnóstico de sesión", expanded=False):
+            st.caption(
+                f"Cookie vista por el servidor: {'sí' if _d.get('cookie_servidor') else 'no'} · "
+                f"por el navegador: {'sí' if _d.get('cookie_navegador') else 'no'} · "
+                f"componente de cookies: {'activo' if _d.get('componente_cookies') else 'no disponible'}"
+            )
+            if _d.get("error_restauracion"):
+                st.caption(f"Último error al restaurar: {_d['error_restauracion']}")
 
 
 # Bloqueo de acceso: primero se intenta restaurar la sesión guardada en el
 # navegador. Solo se muestra el login si no existe una sesión válida.
+_TANA_CM = _tana_cookie_manager()
+
 if not _tana_restore_auth_from_cookie():
+    # Primera carga: el componente de cookies necesita un instante para leer el
+    # navegador. Se espera una sola vez antes de enseñar el login, así quien ya
+    # tenía sesión no ve el formulario parpadear.
+    if (_TANA_CM is not None and not st.session_state.get("tana_boot_wait")
+            and not st.session_state.get("tana_no_restore")):
+        st.session_state["tana_boot_wait"] = True
+        st.caption("Verificando sesión…")
+        time.sleep(0.9)
+        st.rerun()
     _tana_auth_screen()
     st.stop()
 
@@ -566,7 +645,8 @@ def _tana_open_history(item):
 
     st.session_state["monografia_json"] = data
     st.session_state["monografia_nombre"] = title
-    st.session_state["monografia_texto"] = extraction_to_text(data) if isinstance(data, dict) else str(data)
+    # El texto se genera más abajo (extraction_to_text aún no existe en este punto del archivo).
+    st.session_state.pop("monografia_texto", None)
     st.session_state["tana_file_signature"] = f"historial|{item.get('id') if isinstance(item, dict) else title}"
     st.session_state["tana_chat"] = [
         {"role": "user", "content": f"📂 Abrí del historial: <b>{title}</b>"},
@@ -1698,6 +1778,13 @@ def extraction_to_text(data):
     return "\n".join(parts)
 
 profiles_status = get_gemini_profiles()
+
+# Si se abrió un trabajo del historial, aquí ya existe extraction_to_text.
+if "monografia_json" in st.session_state and not st.session_state.get("monografia_texto"):
+    _mono_hist = st.session_state["monografia_json"]
+    st.session_state["monografia_texto"] = (
+        extraction_to_text(_mono_hist) if isinstance(_mono_hist, dict) else str(_mono_hist)
+    )
 
 # El archivo se procesa automáticamente al cargarse. No se muestra un botón
 # intermedio: la lógica contable original permanece intacta.
