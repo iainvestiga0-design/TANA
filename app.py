@@ -765,12 +765,29 @@ st.components.v1.html(
                           '<button type="button" aria-label="Abrir menú" style="border:1px solid #DDE5EA;background:#fff;color:#12304A;width:40px;height:40px;border-radius:12px;font-size:22px;line-height:1;box-shadow:0 1px 4px rgba(18,48,74,.08);">☰</button>';
             h.style.cssText = 'position:fixed;top:0;left:0;right:0;height:48px;z-index:1100;display:flex;align-items:center;justify-content:space-between;padding:0 12px;background:rgba(255,255,255,.96);backdrop-filter:blur(8px);border-bottom:1px solid #E7EBEF;box-sizing:border-box;';
             d.body.appendChild(h);
-            h.querySelector('button').addEventListener('click', function () {
-                const b = d.querySelector('[data-testid="collapsedControl"] button');
-                if (b) { b.click(); return; }
-                const s = d.querySelector('button[aria-label*="sidebar" i]');
-                if (s) s.click();
-            });
+            const openSidebar = function () {
+                // Streamlit ha cambiado esta estructura entre versiones.
+                // Probamos varias formas de encontrar el control nativo.
+                const ctrl = d.querySelector('[data-testid="collapsedControl"]');
+                const candidates = [
+                    ctrl && ctrl.querySelector ? ctrl.querySelector('button') : null,
+                    ctrl && ctrl.tagName === 'BUTTON' ? ctrl : null,
+                    d.querySelector('button[aria-label*="sidebar" i]'),
+                    d.querySelector('button[title*="sidebar" i]'),
+                    d.querySelector('button[aria-label*="barra lateral" i]')
+                ].filter(Boolean);
+                if (candidates.length) {
+                    candidates[0].click();
+                    return true;
+                }
+                return false;
+            };
+            h.querySelector('button').addEventListener('click', openSidebar);
+            // Streamlit puede reconstruir el control después de cada rerun.
+            // Este observador no toca la lógica de TANA; solo mantiene operativo
+            // el botón móvil.
+            const obs = new MutationObserver(function () {});
+            obs.observe(d.body, {childList:true, subtree:true});
         }
         render();
         window.parent.addEventListener('resize', render);
