@@ -303,31 +303,64 @@ def _tana_history_user_id():
 
 
 def _tana_history_request(path, method="GET", payload=None):
-    token = str((st.session_state.get("tana_auth_session") or {}).get("access_token") or "").strip()
-    if not token:
-        return {}
-    url, anon_key = _tana_supabase_config()
-    if not url or not anon_key:
-        return {}
+    """Consulta/escribe el historial en Supabase desde el servidor de Streamlit.
+
+    Para que el historial no dependa de la expiración del access_token ni de
+    diferencias de permisos del rol authenticated, usa SERVICE_ROLE solo en
+    el backend de Streamlit. Esta clave NUNCA se envía al navegador.
+    El user_id siempre viene de la sesión autenticada de TANA y cada consulta
+    lleva el filtro por ese usuario.
+    """
+    url, publishable_key = _tana_supabase_config()
+    if not url:
+        return None
+
+    service_key = ""
+    try:
+        service_key = str(st.secrets.get("SUPABASE_SERVICE_ROLE_KEY", "") or "").strip()
+    except Exception:
+        service_key = ""
+
+    # Fallback seguro: si todavía no existe service role, usa la sesión del usuario.
+    if service_key:
+        api_key = service_key
+        auth_token = service_key
+    else:
+        auth_token = str((st.session_state.get("tana_auth_session") or {}).get("access_token") or "").strip()
+        api_key = publishable_key
+        if not auth_token or not api_key:
+            return None
+
     body = None
     if payload is not None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
     headers = {
-        "apikey": anon_key,
-        "Authorization": f"Bearer {token}",
+        "apikey": api_key,
+        "Authorization": f"Bearer {auth_token}",
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
     if method in ("POST", "PATCH", "DELETE"):
-        headers["Prefer"] = "return=minimal"
+        headers["Prefer"] = "return=representation"
+
     req = Request(f"{url}/rest/v1/{path.lstrip('/')}", data=body, headers=headers, method=method)
     try:
         with urlopen(req, timeout=15) as response:
             raw = response.read().decode("utf-8")
             return json.loads(raw) if raw else {}
-    except Exception:
-        # El historial nunca debe detener TANA ni afectar los motores contables.
-        return {}
+    except HTTPError as exc:
+        # No rompe TANA. Guardamos solo un mensaje técnico breve para poder
+        # detectar la causa sin exponer ninguna clave.
+        try:
+            detail = exc.read().decode("utf-8", errors="replace")
+        except Exception:
+            detail = str(exc)
+        st.session_state["tana_history_last_error"] = f"HTTP {exc.code}: {detail[:300]}"
+        return None
+    except Exception as exc:
+        st.session_state["tana_history_last_error"] = str(exc)[:300]
+        return None
 
 
 def _tana_load_persistent_history():
@@ -364,11 +397,18 @@ def _tana_save_history(title):
     # Evita duplicar el mismo archivo dentro de la misma sesión.
     if title not in st.session_state.get("tana_historial", []):
         st.session_state.setdefault("tana_historial", []).insert(0, title)
-    _tana_history_request(
+    result = _tana_history_request(
         "tana_historial",
         method="POST",
         payload={"user_id": user_id, "title": title},
     )
+    if result is None:
+        # Si la escritura remota falla, no perdemos el registro local de esta
+        # ejecución y permitimos reintentar en la siguiente carga.
+        st.session_state["tana_history_sync_pending"] = True
+    else:
+        st.session_state.pop("tana_history_sync_pending", None)
+        st.session_state.pop("tana_history_last_error", None)
 
 
 _tana_load_persistent_history()
