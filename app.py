@@ -713,10 +713,72 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .t
     padding: 0 !important;
     font-size: 16px !important;
 }
+
+/* ============================================================
+   TANA MOBILE — SOLO PRESENTACIÓN
+   No modifica motores, prompts, cálculos, validaciones ni Excel.
+   ============================================================ */
+.tana-mobile-header { display:none; }
+@media (max-width: 768px) {
+    .block-container { padding-top:.35rem !important; padding-left:12px !important; padding-right:12px !important; padding-bottom:calc(6.2rem + env(safe-area-inset-bottom)) !important; max-width:100% !important; }
+    section[data-testid="stSidebar"] { width:min(88vw,360px) !important; min-width:min(88vw,360px) !important; z-index:1200 !important; }
+    section[data-testid="stSidebar"] .block-container { padding:.85rem .8rem !important; }
+    .tana-bubble-user, .tana-bubble-assistant { max-width:94% !important; font-size:14px !important; }
+    .tana-welcome { padding:32px 8px 14px 8px !important; }
+    .tana-welcome-title { font-size:23px !important; line-height:1.2 !important; }
+    .tana-welcome-subtitle { font-size:14px !important; line-height:1.45 !important; padding:0 8px; }
+    div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) { width:calc(100vw - 18px) !important; max-width:none !important; bottom:calc(6px + env(safe-area-inset-bottom)) !important; margin-bottom:0 !important; padding:5px 7px !important; border-radius:22px !important; }
+    div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) div[data-testid="stHorizontalBlock"] { gap:1px !important; }
+    div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(1) { flex-basis:38px !important; width:38px !important; }
+    div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(3) { flex-basis:42px !important; width:42px !important; }
+    div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) div[data-testid="stHorizontalBlock"] > div[data-testid="column"]:nth-child(4) { flex-basis:38px !important; width:38px !important; }
+    div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stTextInput"] input { font-size:14px !important; padding-left:3px !important; }
+    div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stAudioInput"], div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stAudioInput"] div { width:42px !important; max-width:42px !important; }
+    div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) button[kind="primary"] { width:38px !important; height:38px !important; min-width:38px !important; }
+}
+@media (prefers-color-scheme: dark) and (max-width:768px) {
+    #tana-mobile-header { background:rgba(14,16,20,.96) !important; border-bottom-color:#30343A !important; }
+    #tana-mobile-header button { background:#202328 !important; border-color:#3A3F46 !important; color:#E8EAED !important; }
+}
 </style>
 """, unsafe_allow_html=True)
 
 LOGO_PATH = os.path.join(os.path.dirname(__file__), "LOGO TANA.jpg")
+
+# Cabecera móvil: solo presentación. El botón abre el sidebar nativo de Streamlit.
+st.components.v1.html(
+    """
+    <script>
+    (function () {
+        const d = window.parent.document;
+        const ID = 'tana-mobile-header';
+        function render() {
+            let old = d.getElementById(ID);
+            if (window.parent.innerWidth > 768) {
+                if (old) old.remove();
+                return;
+            }
+            if (old) return;
+            const h = d.createElement('div');
+            h.id = ID;
+            h.innerHTML = '<div style="font-weight:800;font-size:18px;color:#12304A;">TANA</div>' +
+                          '<button type="button" aria-label="Abrir menú" style="border:1px solid #DDE5EA;background:#fff;color:#12304A;width:40px;height:40px;border-radius:12px;font-size:22px;line-height:1;box-shadow:0 1px 4px rgba(18,48,74,.08);">☰</button>';
+            h.style.cssText = 'position:fixed;top:0;left:0;right:0;height:48px;z-index:1100;display:flex;align-items:center;justify-content:space-between;padding:0 12px;background:rgba(255,255,255,.96);backdrop-filter:blur(8px);border-bottom:1px solid #E7EBEF;box-sizing:border-box;';
+            d.body.appendChild(h);
+            h.querySelector('button').addEventListener('click', function () {
+                const b = d.querySelector('[data-testid="collapsedControl"] button');
+                if (b) { b.click(); return; }
+                const s = d.querySelector('button[aria-label*="sidebar" i]');
+                if (s) s.click();
+            });
+        }
+        render();
+        window.parent.addEventListener('resize', render);
+    })();
+    </script>
+    """,
+    height=0,
+)
 
 with st.sidebar:
     logo_col, title_col = st.columns([0.35, 1])
@@ -764,10 +826,10 @@ def _tana_chat_add(role, content):
 
 if not st.session_state["tana_chat"]:
     st.markdown(
-        '<div style="text-align:center; padding:70px 0 20px 0;">'
+        '<div class="tana-welcome" style="text-align:center; padding:70px 0 20px 0;">'
         f'{"<img src=\'data:image/jpeg;base64," + __import__("base64").b64encode(open(LOGO_PATH,"rb").read()).decode() + "\' width=64 style=\'border-radius:14px;\'>" if os.path.exists(LOGO_PATH) else ""}'
-        '<div style="font-size:26px;font-weight:800;color:#12304A;margin-top:14px;">¿Qué monografía resolvemos hoy?</div>'
-        '<div style="color:#6B7B87;font-size:14.5px;margin-top:6px;">'
+        '<div class="tana-welcome-title" style="font-size:26px;font-weight:800;color:#12304A;margin-top:14px;">¿Qué monografía resolvemos hoy?</div>'
+        '<div class="tana-welcome-subtitle" style="color:#6B7B87;font-size:14.5px;margin-top:6px;">'
         'Sube tu monografía abajo y TANA desarrolla los asientos, la HT y los estados financieros.</div>'
         '</div>',
         unsafe_allow_html=True,
