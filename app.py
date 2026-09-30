@@ -3253,7 +3253,8 @@ def es_funcion(code):
       - 94 y 95: gastos por función.
 
     ADICIONALES SOLO SI CORRESPONDE:
-      - 78: otros ingresos, si existe en la práctica.
+      - 75, 76, 77 y 78: otros ingresos e ingresos financieros, si existen.
+      - 87 y 88: participaciones e impuesto a la renta, si existen.
       - 65 y 67: solo si la cuenta existe y NO tiene destino a 94/95.
 
     NO pertenecen al ERF:
@@ -3264,7 +3265,7 @@ def es_funcion(code):
     """
     if not code:
         return False
-    if code[:2] in {"70", "69", "78", "94", "95"}:
+    if code[:2] in {"70", "69", "75", "76", "77", "78", "87", "88", "94", "95"}:
         return True
     if code[:2] in {"65", "67"} and len(code) == 5:
         return code not in CUENTAS_6_CON_DESTINO
@@ -3354,15 +3355,12 @@ for code in cuentas_reporte:
     ws6.cell(r, 7, aj_deudor)
     ws6.cell(r, 8, aj_acreedor)
 
-    # Saldos ajustados: SOLO cuentas de balance (elemento 1 al 5).
-    # Las cuentas de resultados (elemento 6-9) no se muestran aquí;
-    # su saldo neto se refleja directamente en R.Naturaleza/R.Función.
-    if clasificar_resultado(code):
-        sa_debe, sa_haber = 0.0, 0.0
-    elif aj_deudor or aj_acreedor:
-        sa_debe, sa_haber = 0.0, 0.0
-    else:
-        sa_debe, sa_haber = deudor, acreedor
+    # Saldos ajustados: TODAS las cuentas (1 al 9) después de los ajustes
+    # y eliminaciones. Como los ajustes son de partida doble, esta columna
+    # suma igual en DEBE y HABER (antes las cuentas de resultados quedaban
+    # en blanco y los totales no coincidían).
+    _neto_ajustado = (deudor + aj_deudor) - (acreedor + aj_acreedor)
+    sa_debe, sa_haber = max(_neto_ajustado, 0.0), max(-_neto_ajustado, 0.0)
     ws6.cell(r, 9, sa_debe)
     ws6.cell(r, 10, sa_haber)
 
@@ -3417,6 +3415,26 @@ for c in range(3, 19):
     letter = get_column_letter(c)
     ws6.cell(r, c, f'=SUM({letter}4:{letter}{HT_LAST_ROW})').font = BOLD
     ws6.cell(r, c).number_format = '#,##0.00;(#,##0.00);"-"'
+
+# Resultado del ejercicio (utilidad o pérdida): se coloca en la columna más
+# corta de cada par (R.Naturaleza, R.Función y E.S.F.) para que cada par
+# quede con sumas iguales, como en una hoja de trabajo tradicional.
+r += 1
+HT_RESULT_ROW = r
+ws6.cell(r, 2, "RESULTADO DEL EJERCICIO").font = BOLD
+r += 1
+HT_EQUAL_ROW = r
+ws6.cell(r, 2, "SUMAS IGUALES").font = BOLD
+for c_a, c_b in ((11, 12), (13, 14), (15, 16)):
+    la, lb = get_column_letter(c_a), get_column_letter(c_b)
+    ws6.cell(HT_RESULT_ROW, c_a, f'=MAX({lb}{HT_TOTAL_ROW}-{la}{HT_TOTAL_ROW},0)')
+    ws6.cell(HT_RESULT_ROW, c_b, f'=MAX({la}{HT_TOTAL_ROW}-{lb}{HT_TOTAL_ROW},0)')
+    ws6.cell(HT_EQUAL_ROW, c_a, f'={la}{HT_TOTAL_ROW}+{la}{HT_RESULT_ROW}')
+    ws6.cell(HT_EQUAL_ROW, c_b, f'={lb}{HT_TOTAL_ROW}+{lb}{HT_RESULT_ROW}')
+    for rr_ in (HT_RESULT_ROW, HT_EQUAL_ROW):
+        for cc_ in (c_a, c_b):
+            ws6.cell(rr_, cc_).font = BOLD
+            ws6.cell(rr_, cc_).number_format = '#,##0.00;(#,##0.00);"-"'
 
 ws6.freeze_panes = "A4"
 autofit(ws6, [11, 44, 14, 14, 14, 14, 13, 13, 14, 14, 14, 14, 14, 14, 14, 14, 14, 14])
@@ -3602,6 +3620,29 @@ def _sum_ht(prefix, column):
     return f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*HT!${column}$4:${column}${HT_LAST_ROW})'
 
 
+def _sum_ht_net(prefix, plus_col, minus_col):
+    """Saldo neto de una familia de cuentas: columna 'plus' menos columna 'minus'."""
+    return (f'=SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*HT!${plus_col}$4:${plus_col}${HT_LAST_ROW})'
+            f'-SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},2)="{prefix}")*HT!${minus_col}$4:${minus_col}${HT_LAST_ROW})')
+
+
+def _sum_ht_codes_net(codes, plus_col, minus_col):
+    if not codes:
+        return '=0'
+    partes = []
+    for code in codes:
+        partes.append(f'SUMPRODUCT((HT!$A$4:$A${HT_LAST_ROW}="{code}")*HT!${plus_col}$4:${plus_col}${HT_LAST_ROW})'
+                      f'-SUMPRODUCT((HT!$A$4:$A${HT_LAST_ROW}="{code}")*HT!${minus_col}$4:${minus_col}${HT_LAST_ROW})')
+    return '=' + '+'.join(partes)
+
+
+# Resultado REAL del ejercicio = ingresos - gastos de todo el balance de
+# comprobación (cuentas 6 a 9, saldos HT E/F). Es el importe que hace que
+# ACTIVO = PASIVO + PATRIMONIO siempre que los asientos estén cuadrados.
+NI_FORMULA = (f'SUMPRODUCT((LEFT(HT!$A$4:$A${HT_LAST_ROW},1)>="6")'
+              f'*(HT!$F$4:$F${HT_LAST_ROW}-HT!$E$4:$E${HT_LAST_ROW}))')
+
+
 def _sum_ht_codes(codes, column):
     if not codes:
         return '=0'
@@ -3718,84 +3759,59 @@ _write_amount(ws8, r, '=' + ''.join(parts), True)
 r += 2
 
 _write_label(ws8, r, 'OTROS INGRESOS Y GASTOS', True); r += 1
-sum_str = '+'.join([f'E{x}' for x in gasto_operativo_rows])
-_write_amount(ws8, r, f'=E{utilidad_bruta_row}{"+" + sum_str if sum_str else ""}', True)
-r += 2
-
-_write_label(ws8, r, 'INGRESOS Y GASTOS FINANCIEROS Y OTROS', True); r += 1
 
 otros_rows = []
-# 78 - Otros ingresos
-if _prefix_exists('78'):
-    _write_label(ws8, r, 'Otros ingresos (78)')
-    _write_amount(ws8, r, _sum_ht('78', 'N'))
-    otros_rows.append(r)
-    r += 1
+# Otros ingresos e ingresos financieros: solo si existen en la práctica.
+for prefix, label in [('75', 'Otros ingresos de gestión'), ('76', 'Ganancia por medición'),
+                      ('77', 'Ingresos financieros'), ('78', 'Otros ingresos')]:
+    if _prefix_exists(prefix):
+        _write_label(ws8, r, label.upper())
+        _write_amount(ws8, r, _sum_ht_net(prefix, 'N', 'M'))
+        otros_rows.append(r)
+        r += 1
 
-# 67 - Gastos financieros
+# 67 - Gastos financieros: solo si existen y no fueron llevados a 94/95.
 for code in sorted(c for c in cuentas_reporte if len(c) == 5 and c.startswith('67') and c not in CUENTAS_6_CON_DESTINO):
     _write_label(ws8, r, f'{code} - {pcge_map.get(code, code)}')
-    _write_amount(ws8, r, f'=-{_sum_ht_codes([code], "M")[1:]}')
+    _write_amount(ws8, r, _sum_ht_codes_net([code], 'N', 'M'))
     otros_rows.append(r)
-    r += 1
-
-_write_label(ws8, r, 'RESULTADO ANTES DE IMPUESTOS', True)
-resultado_ejercicio_erf_row = r
-otros_str = ''.join([f'+E{x}' for x in otros_rows])
-_write_amount(ws8, r, f'=E{utilidad_operativa_row}{otros_str}', True)
-
-autofit(ws8, [5, 45, 5, 12, 18])
-# 78: se incorpora si existe.
-otros_78_row = None
-if _prefix_exists('78'):
-    otros_78_row = r
-    _write_label(ws8, r, 'OTROS INGRESOS')
-    _write_amount(ws8, r, _sum_ht('78', 'N'))
-    r += 1
-
-# Ingreso financiero 77, si existe.
-ingreso_fin_row = None
-if _prefix_exists('77'):
-    ingreso_fin_row = r
-    _write_label(ws8, r, 'INGRESO FINANCIERO')
-    _write_amount(ws8, r, _sum_ht('77', 'N'))
-    r += 1
-
-# 67: solo si existe y no tiene destino a 94/95; se presenta como gasto financiero.
-gasto_fin_rows = []
-for code in sorted(c for c in cuentas_reporte if len(c) == 5 and c.startswith('67') and c not in CUENTAS_6_CON_DESTINO):
-    rr = r
-    _write_label(ws8, r, f'{code} - {pcge_map.get(code, code)}')
-    _write_amount(ws8, r, f'=-{_sum_ht_codes([code], "M")[1:]}')
-    gasto_fin_rows.append(rr)
     r += 1
 
 resultado_antes_part_row = r
 _write_label(ws8, r, 'RESULTADO ANTES DE PARTICIPACIONES E IMPUESTOS', True)
-parts = [f'E{utilidad_operativa_row}']
-if otros_78_row is not None:
-    parts.append(f'+E{otros_78_row}')
-if ingreso_fin_row is not None:
-    parts.append(f'+E{ingreso_fin_row}')
-parts += [f'+E{x}' for x in gasto_fin_rows]
-_write_amount(ws8, r, '=' + ''.join(parts), True)
+_write_amount(ws8, r, '=' + f'E{utilidad_operativa_row}' + ''.join(f'+E{x}' for x in otros_rows), True)
 r += 1
 
-# Participaciones: solo si existe elemento 87; si no existe, se mantiene 0.
+# Participaciones (87) e impuesto a la renta (88): si no existen, quedan en 0.
 part_row = r
 _write_label(ws8, r, 'PARTICIPACIONES')
-_write_amount(ws8, r, f'=-{_sum_ht("87", "M")[1:]}')
+_write_amount(ws8, r, _sum_ht_net('87', 'N', 'M'))
 r += 1
 
-# Impuesto a la renta: solo si existe elemento 88; si no existe, 0.
 impuesto_row = r
 _write_label(ws8, r, 'IMPUESTO A LA RENTA')
-_write_amount(ws8, r, f'=-{_sum_ht("88", "M")[1:]}')
+_write_amount(ws8, r, _sum_ht_net('88', 'N', 'M'))
 r += 1
+
+# Conciliación con el resultado real: si algún gasto por naturaleza no fue
+# distribuido a 94/95 (o hay otra cuenta de resultados fuera de esta
+# estructura), se muestra en una línea propia para que el ERF, el ERN y el ESF
+# den siempre el mismo resultado. En una práctica bien distribuida no aparece.
+_erf_py = sum(movimientos[c]['haber'] - movimientos[c]['debe'] for c in cuentas_reporte if es_funcion(c))
+_ni_py = sum(movimientos[c]['haber'] - movimientos[c]['debe'] for c in cuentas_reporte if c[:1] in '6789')
+_residuo_py = _ni_py - _erf_py
+no_distribuido_row = None
+if abs(_residuo_py) >= 0.005:
+    no_distribuido_row = r
+    _write_label(ws8, r, 'GASTOS POR NATURALEZA NO DISTRIBUIDOS A FUNCIÓN' if _residuo_py < 0
+                 else 'OTROS INGRESOS NO DISTRIBUIDOS A FUNCIÓN')
+    _write_amount(ws8, r, f'={NI_FORMULA}-(E{resultado_antes_part_row}+E{part_row}+E{impuesto_row})')
+    r += 1
 
 resultado_erf_row = r
 _write_label(ws8, r, 'RESULTADO DEL EJERCICIO', True)
-_write_amount(ws8, r, f'=E{resultado_antes_part_row}+E{part_row}+E{impuesto_row}', True)
+_write_amount(ws8, r, f'=E{resultado_antes_part_row}+E{part_row}+E{impuesto_row}'
+              + (f'+E{no_distribuido_row}' if no_distribuido_row else ''), True)
 r += 2
 
 # Control interno: no se muestra en el informe, pero permite comprobar que ERF = ERN.
@@ -3824,7 +3840,7 @@ _write_label(ws7, r, 'INGRESOS OPERACIONALES', True); r += 1
 # Ventas y otros ingresos: se detectan por prefijo, sin inventar cuentas.
 ventas_ern_row = r
 _write_label(ws7, r, 'VENTAS')
-_write_amount(ws7, r, _sum_ht('70', 'L'))
+_write_amount(ws7, r, _sum_ht_net('70', 'L', 'K'))
 r += 1
 
 # Ingresos por naturaleza que efectivamente existan. La 74 es gasto.
@@ -3839,7 +3855,7 @@ for prefix, label in [
 ]:
     if _prefix_exists(prefix):
         _write_label(ws7, r, label.upper())
-        _write_amount(ws7, r, _sum_ht(prefix, 'L'))
+        _write_amount(ws7, r, _sum_ht_net(prefix, 'L', 'K'))
         r += 1
 
 ventas_total_ern_row = r
@@ -3861,11 +3877,13 @@ for prefix, label in [
     ('67', 'Gastos financieros'),
     ('68', 'Valuación, deterioro y depreciación'),
     ('74', 'Descuentos, rebajas y bonificaciones concedidos'),
+    ('87', 'Participaciones de los trabajadores'),
+    ('88', 'Impuesto a la renta'),
 ]:
     if _prefix_exists(prefix):
         rr = r
         _write_label(ws7, r, label.upper())
-        _write_amount(ws7, r, _sum_ht(prefix, 'K'))
+        _write_amount(ws7, r, _sum_ht_net(prefix, 'K', 'L'))
         naturaleza_rows.append(rr)
         r += 1
 
@@ -3960,8 +3978,10 @@ cuentas_balance = [c for c in cuentas_reporte if _es_balance_real(c)]
 # pasivos 4, luego patrimonio 5.
 activos = []
 activos_anomalos = []
+activos_correctoras = []   # 19, 29 y 39 con saldo acreedor: restan del activo
 pasivos = []
 patrimonio = []
+_CORRECTORAS_ACTIVO = ('19', '29', '39')
 
 for code in cuentas_balance:
     saldo = _saldo_python(code)
@@ -3977,7 +3997,11 @@ for code in cuentas_balance:
         else:
             activos.append(code)
     else:
-        if code.startswith(('1','2','3')):
+        if code.startswith(_CORRECTORAS_ACTIVO):
+            # Depreciación acumulada, estimación de cobranza dudosa y
+            # desvalorización de existencias NO son pasivos: se restan del activo.
+            activos_correctoras.append(code)
+        elif code.startswith(('1','2','3')):
             # Cuenta normalmente activa con saldo acreedor: se presenta como
             # pasivo, sin duplicarla.
             pasivos.append(code)
@@ -4012,6 +4036,15 @@ for code in activos_anomalos:
     ac_rows.append(r)
     r += 1
 
+for code in activos_correctoras:
+    if code.startswith('3'):
+        continue
+    desc = pcge_map.get(code, '') or f'Cuenta {code}'
+    _write_label(ws9, r, desc)
+    _set_report_value(ws9, r, 5, f'=-{_saldo_acreedor_esf(code)[1:]}')
+    ac_rows.append(r)
+    r += 1
+
 ws9.cell(r,2,'TOTAL ACTIVO CORRIENTE').font = BOLD
 _set_report_value(ws9, r, 5, '=' + '+'.join(f'E{x}' for x in ac_rows) if ac_rows else '=0', True)
 TOTAL_AC_ROW=r
@@ -4026,6 +4059,15 @@ for code in activos:
     desc = pcge_map.get(code, '') or f'Cuenta {code}'
     _write_label(ws9, r, desc)
     _set_report_value(ws9, r, 5, _saldo_deudor_esf(code))
+    anc_rows.append(r)
+    r += 1
+
+for code in activos_correctoras:
+    if not code.startswith('3'):
+        continue
+    desc = pcge_map.get(code, '') or f'Cuenta {code}'
+    _write_label(ws9, r, desc)
+    _set_report_value(ws9, r, 5, f'=-{_saldo_acreedor_esf(code)[1:]}')
     anc_rows.append(r)
     r += 1
 
@@ -4052,7 +4094,7 @@ for code in pasivos:
     # Las obligaciones financieras que comienzan en 45 se mantienen en
     # corriente en esta plantilla, tal como el modelo del usuario.
     desc = pcge_map.get(code, '') or f'Cuenta {code}'
-    _write_label(ws9, r2, desc)
+    ws9.cell(r2, 7, desc).font = BLACK
     _set_report_value(ws9, r2, 10, _saldo_acreedor_esf(code))
     pc_rows.append(r2)
     r2 += 1
@@ -4087,15 +4129,16 @@ r2 += 1
 pat_rows=[]
 for code in patrimonio:
     desc=pcge_map.get(code,'') or f'Cuenta {code}'
-    _write_label(ws9,r2,desc)
+    ws9.cell(r2,7,desc).font = BLACK
     # Patrimonio: saldo acreedor aumenta; saldo deudor disminuye.
     _set_report_value(ws9,r2,10,f'={_saldo_acreedor_esf(code)[1:]}-{_saldo_deudor_esf(code)[1:]}')
     pat_rows.append(r2)
     r2 += 1
 
 ws9.cell(r2,7,'Resultado del ejercicio').font=BLACK
-# El ESF toma el mismo resultado final del ERF; ERN mantiene un control cruzado.
-_set_report_value(ws9,r2,10,f'=ERF!E{resultado_erf_row}')
+# Resultado real del ejercicio tomado del balance de comprobación (HT). Es el
+# mismo importe de ERF y ERN y hace que ACTIVO = PASIVO + PATRIMONIO.
+_set_report_value(ws9,r2,10,f'={NI_FORMULA}')
 pat_rows.append(r2)
 r2 += 1
 
