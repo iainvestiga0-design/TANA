@@ -1341,7 +1341,22 @@ def _excel_auditar_y_corregir(uploaded_file, question):
             result["puede_corregir"] = False
             result["mensaje_error"] = (result.get("mensaje_error") or "") + " Para corregir automáticamente, vuelve a subir el archivo en formato .xlsx."
 
-        return {"resultado": result, "buffer": corrected_buffer, "filename": _tana_nombre_descarga(uploaded_file.name, ".xlsx") if corrected_buffer else None}
+        # Siempre ofrecemos un Excel descargable después de revisar un Excel.
+        # Si hubo correcciones seguras, contiene esas correcciones; si no, conserva
+        # el archivo original para que el usuario pueda guardarlo/revisarlo.
+        if corrected_buffer is None:
+            download_buffer = io.BytesIO(uploaded_bytes)
+            download_buffer.seek(0)
+            corrected_buffer = download_buffer.getvalue()
+            result["excel_descargable"] = True
+        else:
+            result["excel_descargable"] = True
+
+        return {
+            "resultado": result,
+            "buffer": corrected_buffer,
+            "filename": _tana_nombre_descarga(uploaded_file.name, ".xlsx"),
+        }
     finally:
         if temp_path:
             try: os.remove(temp_path)
@@ -2128,10 +2143,14 @@ if uploaded_file and Path(uploaded_file.name).suffix.lower() in {".xls", ".xlsx"
         if _r.get("mensaje_error"):
             st.info(str(_r.get("mensaje_error")))
         if st.session_state.get("excel_auditoria_buffer"):
+            if _r.get("correcciones_aplicadas"):
+                st.success("📊 TANA realizó las correcciones seguras encontradas y preparó el Excel.")
+            else:
+                st.info("📊 TANA revisó el Excel. No se aplicaron cambios automáticos; se entrega una copia del archivo revisado.")
             st.download_button(
-                "⬇️ Descargar Excel corregido",
+                "⬇️ Descargar Excel revisado por TANA",
                 data=st.session_state["excel_auditoria_buffer"],
-                file_name=st.session_state.get("excel_auditoria_filename", "TANA_Corregido.xlsx"),
+                file_name=st.session_state.get("excel_auditoria_filename", "Excel - TANA.xlsx"),
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 key="download_excel_corregido",
             )
