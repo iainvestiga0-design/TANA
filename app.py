@@ -1676,6 +1676,34 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .t
     box-shadow: none !important; outline: none !important; color: #FFFFFF !important;
 }
 
+
+/* ---- Historial en celular: panel que se muestra con la clase
+   body.tana-side-open (la pone el botón ☰ de la cabecera móvil). ---- */
+#tana-side-backdrop, #tana-side-close { display: none; }
+@media (max-width: 768px) {
+    body.tana-side-open section[data-testid="stSidebar"] {
+        display: flex !important; visibility: visible !important; opacity: 1 !important;
+        transform: none !important; margin-left: 0 !important; left: 0 !important;
+        position: fixed !important; top: 0 !important; bottom: 0 !important;
+        height: 100% !important;
+        width: min(86vw, 310px) !important; min-width: min(86vw, 310px) !important; max-width: 310px !important;
+        z-index: 1300 !important; box-shadow: 0 0 40px rgba(0,0,0,.55);
+    }
+    body.tana-side-open section[data-testid="stSidebar"] * { visibility: visible !important; }
+    body.tana-side-open section[data-testid="stSidebar"] > div { width: 100% !important; opacity: 1 !important; }
+    body.tana-side-open #tana-side-backdrop {
+        display: block; position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(0,0,0,.55); z-index: 1250;
+    }
+    body.tana-side-open #tana-side-close {
+        display: flex; align-items: center; justify-content: center;
+        position: fixed; top: 10px; left: calc(min(86vw, 310px) - 50px);
+        width: 40px; height: 40px; z-index: 1400; border-radius: 10px;
+        border: 1px solid #DDE5EA; background: #fff; color: #12304A;
+        font-size: 18px; line-height: 1; cursor: pointer;
+    }
+}
+
 /* ---- Campo de texto: sin borde, transparente, tipo Google ---- */
 div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stTextInput"] {
     width: 100%;
@@ -1847,6 +1875,17 @@ st.components.v1.html(
                 if (old) old.remove();
                 return;
             }
+            // Capas del historial móvil: fondo oscuro + botón ✕ (su
+            // visibilidad la controla el CSS con la clase body.tana-side-open).
+            if (!d.getElementById('tana-side-backdrop')) {
+                const bd = d.createElement('div'); bd.id = 'tana-side-backdrop';
+                d.body.appendChild(bd);
+            }
+            if (!d.getElementById('tana-side-close')) {
+                const cb = d.createElement('button'); cb.id = 'tana-side-close';
+                cb.type = 'button'; cb.setAttribute('aria-label', 'Cerrar historial'); cb.textContent = '✕';
+                d.body.appendChild(cb);
+            }
             if (old) return;
             const h = d.createElement('div');
             h.id = ID;
@@ -1854,37 +1893,30 @@ st.components.v1.html(
                           '<button type="button" aria-label="Abrir menú" style="border:1px solid #DDE5EA;background:#fff;color:#12304A;width:40px;height:40px;border-radius:12px;font-size:22px;line-height:1;box-shadow:0 1px 4px rgba(18,48,74,.08);">☰</button>';
             h.style.cssText = 'position:fixed;top:0;left:0;right:0;height:48px;z-index:1100;display:flex;align-items:center;justify-content:space-between;padding:0 12px;background:rgba(255,255,255,.96);backdrop-filter:blur(8px);border-bottom:1px solid #E7EBEF;box-sizing:border-box;';
             d.body.appendChild(h);
-            // Abre/cierra el historial (sidebar nativo). Streamlit cambia el
-            // nombre interno de este control entre versiones
-            // (collapsedControl, stSidebarCollapsedControl,
-            // stExpandSidebarButton, stSidebarCollapseButton...), así que se
-            // buscan todos los posibles, por data-testid, aria-label o title.
-            const infoEl = el => (
-                (el.getAttribute('data-testid') || '') + ' ' +
-                (el.getAttribute('aria-label') || '') + ' ' +
-                (el.getAttribute('title') || '') + ' ' +
-                ((el.parentElement && el.parentElement.getAttribute('data-testid')) || '') + ' ' +
-                ((el.closest('[data-testid]') && el.closest('[data-testid]').getAttribute('data-testid')) || '')
-            ).toLowerCase();
-            const buscar = re => Array.from(d.querySelectorAll('button, [role="button"]'))
-                .find(el => re.test(infoEl(el)));
-            const sidebarAbierta = () => {
-                const sb = d.querySelector('section[data-testid="stSidebar"]');
-                if (!sb) return false;
-                if (sb.getAttribute('aria-expanded') === 'false') return false;
-                return sb.getBoundingClientRect().right > 20;
-            };
-            h.querySelector('button').addEventListener('click', function () {
-                let b;
-                if (sidebarAbierta()) {
-                    b = buscar(/collapse(?!dcontrol)|close.{0,12}sidebar|sidebar.{0,12}close|cerrar/);
-                } else {
-                    b = buscar(/expandsidebar|collapsedcontrol|open.{0,12}sidebar|sidebar.{0,12}open|abrir/);
-                }
-                if (!b) b = buscar(/sidebar|barra lateral/);
-                if (b) b.click();
-            });
+            // (El ☰ y el historial se manejan con el delegado de clics de abajo.)
         }
+        // Historial móvil SIN depender del botón interno de Streamlit
+        // (su nombre cambia entre versiones). El sidebar ya existe en la
+        // página aunque esté oculto: aquí solo se muestra con una clase.
+        const abrir  = () => d.body.classList.add('tana-side-open');
+        const cerrar = () => d.body.classList.remove('tana-side-open');
+        if (d.__tanaSideHandler) d.removeEventListener('click', d.__tanaSideHandler, true);
+        d.__tanaSideHandler = function (e) {
+            const t = e.target;
+            if (!t || !t.closest) return;
+            if (t.closest('#tana-mobile-header button')) {
+                e.preventDefault();
+                d.body.classList.contains('tana-side-open') ? cerrar() : abrir();
+                return;
+            }
+            if (t.closest('#tana-side-backdrop') || t.closest('#tana-side-close')) { cerrar(); return; }
+            // Al elegir algo del historial / Nuevo chat, se cierra el panel.
+            if (d.body.classList.contains('tana-side-open') && t.closest('section[data-testid="stSidebar"] button')) {
+                setTimeout(cerrar, 350);
+            }
+        };
+        d.addEventListener('click', d.__tanaSideHandler, true);
+        window.parent.addEventListener('resize', () => { if (window.parent.innerWidth > 768) cerrar(); });
         render();
         window.parent.addEventListener('resize', render);
     })();
