@@ -2134,11 +2134,30 @@ st.components.v1.html(
             }
 
             // Botón enviar: círculo rojo, tamaño fijo.
-            set(pill.querySelector('[data-testid="stFormSubmitButton"] button, button[kind^="primary"]'), {
+            // Botón enviar: solo el icono blanco, SIN fondo. El rojo/naranja lo
+            // pone el tema de Streamlit; un estilo inline con !important le
+            // gana a cualquier hoja de estilos. El resplandor al pasar el
+            // mouse se hace con listeners (no se puede con CSS inline).
+            const sendBtn = pill.querySelector('[data-testid="stFormSubmitButton"] button, button[kind^="primary"]');
+            set(sendBtn, {
                 'border-radius': '50%', width: '40px', height: '40px',
                 'min-width': '40px', padding: '0', border: 'none',
                 'box-shadow': 'none', color: '#FFFFFF',
+                background: 'transparent', 'background-color': 'transparent',
+                'background-image': 'none', outline: 'none',
             });
+            if (sendBtn) {
+                sendBtn.querySelectorAll('*').forEach(el => set(el, { color: '#FFFFFF', background: 'transparent' }));
+                if (!sendBtn.dataset.tanaHover) {
+                    sendBtn.dataset.tanaHover = '1';
+                    const glow = c => () => set(sendBtn, { 'background-color': c, background: c });
+                    sendBtn.addEventListener('mouseenter', glow('rgba(255,255,255,.14)'));
+                    sendBtn.addEventListener('mouseleave', glow('transparent'));
+                    sendBtn.addEventListener('mousedown',  glow('rgba(255,255,255,.22)'));
+                    sendBtn.addEventListener('mouseup',    glow('rgba(255,255,255,.14)'));
+                    sendBtn.addEventListener('blur',       glow('transparent'));
+                }
+            }
         }
 
 
