@@ -1744,7 +1744,7 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .t
    ============================================================ */
 .tana-mobile-header { display:none; }
 @media (max-width: 768px) {
-    .block-container { padding-top:.35rem !important; padding-left:12px !important; padding-right:12px !important; padding-bottom:calc(6.2rem + env(safe-area-inset-bottom)) !important; max-width:100% !important; }
+    .block-container { padding-top:.35rem !important; padding-left:12px !important; padding-right:12px !important; padding-bottom:calc(12rem + env(safe-area-inset-bottom)) !important; max-width:100% !important; }
     section[data-testid="stSidebar"] { width:min(88vw,360px) !important; min-width:min(88vw,360px) !important; z-index:1200 !important; }
     section[data-testid="stSidebar"] .block-container { padding:.85rem .8rem !important; }
     .tana-bubble-user, .tana-bubble-assistant { max-width:94% !important; font-size:14px !important; }
@@ -1854,11 +1854,35 @@ st.components.v1.html(
                           '<button type="button" aria-label="Abrir menú" style="border:1px solid #DDE5EA;background:#fff;color:#12304A;width:40px;height:40px;border-radius:12px;font-size:22px;line-height:1;box-shadow:0 1px 4px rgba(18,48,74,.08);">☰</button>';
             h.style.cssText = 'position:fixed;top:0;left:0;right:0;height:48px;z-index:1100;display:flex;align-items:center;justify-content:space-between;padding:0 12px;background:rgba(255,255,255,.96);backdrop-filter:blur(8px);border-bottom:1px solid #E7EBEF;box-sizing:border-box;';
             d.body.appendChild(h);
+            // Abre/cierra el historial (sidebar nativo). Streamlit cambia el
+            // nombre interno de este control entre versiones
+            // (collapsedControl, stSidebarCollapsedControl,
+            // stExpandSidebarButton, stSidebarCollapseButton...), así que se
+            // buscan todos los posibles, por data-testid, aria-label o title.
+            const infoEl = el => (
+                (el.getAttribute('data-testid') || '') + ' ' +
+                (el.getAttribute('aria-label') || '') + ' ' +
+                (el.getAttribute('title') || '') + ' ' +
+                ((el.parentElement && el.parentElement.getAttribute('data-testid')) || '') + ' ' +
+                ((el.closest('[data-testid]') && el.closest('[data-testid]').getAttribute('data-testid')) || '')
+            ).toLowerCase();
+            const buscar = re => Array.from(d.querySelectorAll('button, [role="button"]'))
+                .find(el => re.test(infoEl(el)));
+            const sidebarAbierta = () => {
+                const sb = d.querySelector('section[data-testid="stSidebar"]');
+                if (!sb) return false;
+                if (sb.getAttribute('aria-expanded') === 'false') return false;
+                return sb.getBoundingClientRect().right > 20;
+            };
             h.querySelector('button').addEventListener('click', function () {
-                const b = d.querySelector('[data-testid="collapsedControl"] button');
-                if (b) { b.click(); return; }
-                const s = d.querySelector('button[aria-label*="sidebar" i]');
-                if (s) s.click();
+                let b;
+                if (sidebarAbierta()) {
+                    b = buscar(/collapse(?!dcontrol)|close.{0,12}sidebar|sidebar.{0,12}close|cerrar/);
+                } else {
+                    b = buscar(/expandsidebar|collapsedcontrol|open.{0,12}sidebar|sidebar.{0,12}open|abrir/);
+                }
+                if (!b) b = buscar(/sidebar|barra lateral/);
+                if (b) b.click();
             });
         }
         render();
