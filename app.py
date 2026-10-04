@@ -1825,7 +1825,13 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .t
 </style>
 """, unsafe_allow_html=True)
 
-LOGO_PATH = os.path.join(os.path.dirname(__file__), "LOGO TANA.jpg")
+# Logo: solo el símbolo (PNG recortado, sin la frase "Inteligencia Artificial").
+# Si el PNG no está en el repositorio, usa el JPG anterior como respaldo.
+_BASE_DIR = os.path.dirname(__file__)
+LOGO_PATH = os.path.join(_BASE_DIR, "LOGO_TANA.png")
+if not os.path.exists(LOGO_PATH):
+    LOGO_PATH = os.path.join(_BASE_DIR, "LOGO TANA.jpg")
+LOGO_MIME = "image/png" if LOGO_PATH.lower().endswith(".png") else "image/jpeg"
 
 # Cabecera móvil: solo presentación. El botón abre el sidebar nativo de Streamlit.
 st.components.v1.html(
@@ -1866,7 +1872,7 @@ with st.sidebar:
     logo_col, title_col = st.columns([0.35, 1])
     with logo_col:
         if os.path.exists(LOGO_PATH):
-            st.image(LOGO_PATH, width=42)
+            st.image(LOGO_PATH, width=46)
     with title_col:
         st.markdown('<div style="font-weight:800;font-size:19px;color:#12304A;padding-top:6px;">TANA</div>',
                      unsafe_allow_html=True)
@@ -1937,7 +1943,7 @@ def _tana_chat_add(role, content):
 if not st.session_state["tana_chat"]:
     st.markdown(
         '<div class="tana-welcome" style="text-align:center; padding:70px 0 20px 0;">'
-        f'{"<img src=\'data:image/jpeg;base64," + __import__("base64").b64encode(open(LOGO_PATH,"rb").read()).decode() + "\' width=64 style=\'border-radius:14px;\'>" if os.path.exists(LOGO_PATH) else ""}'
+        f'{"<img src=\'data:" + LOGO_MIME + ";base64," + __import__("base64").b64encode(open(LOGO_PATH,"rb").read()).decode() + "\' alt=\'TANA\' style=\'width:96px;height:auto;background:#fff;padding:14px;border-radius:24px;box-shadow:0 4px 18px rgba(0,0,0,.28);\'>" if os.path.exists(LOGO_PATH) else ""}'
         '<div class="tana-welcome-title" style="font-size:26px;font-weight:800;margin-top:14px;">¿Qué monografía resolvemos hoy?</div>'
         '<div class="tana-welcome-subtitle" style="font-size:14.5px;margin-top:6px;">'
         'Sube tu monografía abajo y TANA desarrolla los asientos, la HT y los estados financieros.</div>'
