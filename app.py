@@ -1050,6 +1050,232 @@ REGLAS:
 - La información extraída servirá después para el motor contable de TANA.
 """
 
+
+# ============================================================
+# MODO EXCEL: AUDITORÍA DIRIGIDA POR LA PREGUNTA DEL USUARIO
+# ============================================================
+# Los archivos Excel no entran al flujo de "monografía". Se revisa únicamente
+# el objetivo que el usuario escriba: ERN, ERF, ESF, HT, asientos, etc.
+
+EXCEL_TARGET_ALIASES = {
+    "ern": ["ern", "resultado por naturaleza", "estado de resultados por naturaleza"],
+    "erf": ["erf", "resultado por función", "estado de resultados por función"],
+    "esf": ["esf", "situación financiera", "estado de situación financiera", "balance general"],
+    "ht": ["ht", "hoja de trabajo", "hoja de trabajo contable"],
+    "asientos": ["asiento", "asientos", "libro diario", "diario"],
+    "kardex": ["kardex", "inventario", "promedio ponderado"],
+}
+
+
+def _excel_target_from_question(question):
+    q = str(question or "").lower()
+    for target, aliases in EXCEL_TARGET_ALIASES.items():
+        if any(alias in q for alias in aliases):
+            return target
+    return "otro"
+
+
+def _excel_workbook_snapshot(uploaded_bytes, filename):
+    """Extrae una vista estructural del Excel para ayudar a validar sin alterar el original."""
+    suffix = Path(filename).suffix.lower()
+    if suffix not in {".xlsx", ".xlsm", ".xltx", ".xltm"}:
+        return {
+            "formato": suffix or "desconocido",
+            "nota": "Formato Excel antiguo/no compatible con lectura estructural local. Analizar mediante Gemini.",
+        }
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    path = tmp.name
+    try:
+        tmp.write(uploaded_bytes)
+        tmp.close()
+        wb = openpyxl.load_workbook(path, data_only=False, read_only=False)
+        wb_values = openpyxl.load_workbook(path, data_only=True, read_only=False)
+        sheets = []
+        for ws in wb.worksheets:
+            wsv = wb_values[ws.title]
+            rows = []
+            max_row = min(ws.max_row or 0, 250)
+            max_col = min(ws.max_column or 0, 30)
+            for r in range(1, max_row + 1):
+                vals = []
+                nonempty = False
+                for c in range(1, max_col + 1):
+                    formula = ws.cell(r, c).value
+                    cached = wsv.cell(r, c).value
+                    if formula not in (None, "") or cached not in (None, ""):
+                        nonempty = True
+                    vals.append({"cell": ws.cell(r, c).coordinate, "formula": formula, "valor": cached})
+                if nonempty:
+                    rows.append(vals)
+            sheets.append({
+                "nombre": ws.title,
+                "filas": ws.max_row,
+                "columnas": ws.max_column,
+                "datos": rows,
+            })
+        return {"formato": suffix, "hojas": sheets}
+    finally:
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+
+
+def _excel_auditoria_prompt(question, filename, snapshot, target):
+    return f"""
+Eres TANA, auditor contable de un archivo Excel peruano.
+
+ARCHIVO: {filename}
+OBJETIVO EXCLUSIVO DEL USUARIO: {question}
+OBJETIVO DETECTADO: {target}
+
+REGLA PRINCIPAL:
+Trabaja ÚNICAMENTE sobre el objetivo solicitado. NO desarrolles asientos, Kardex,
+compras, ventas, costos ni otros estados si el usuario no los pidió.
+
+Si el usuario pregunta si un estado "cuadra", valida sus totales y su coherencia
+contable usando SOLO la información existente en el archivo. Si encuentra un error,
+identifica la hoja y celda que debe corregirse cuando pueda determinarlo con seguridad.
+No inventes datos.
+
+REGLAS POR OBJETIVO:
+- ERN: ingresos/naturaleza menos gastos por naturaleza debe producir el resultado
+  presentado; revisa subtotales y total final. No revises ERF ni ESF salvo que sea
+  estrictamente necesario para confirmar el resultado y dilo.
+- ERF: ventas/costos/gastos por función y resultado deben cuadrar según la estructura
+  presentada en el archivo.
+- ESF: Activo debe ser igual a Pasivo + Patrimonio. Revisa subtotales y total final.
+- HT: revisa sumas, igualdad Debe/Haber y traslado de saldos SOLO de la HT.
+- ASIENTOS: revisa Debe = Haber de los asientos indicados, sin desarrollar estados.
+- KARDEX: revisa cantidades, costos y saldos SOLO del Kardex solicitado.
+
+CORRECCIÓN:
+Si puedes determinar inequívocamente la celda y el valor/formula correcto, devuelve
+una corrección. Si no puedes determinarlo sin inventar información, NO corrijas: indica
+el error y qué debe revisar el estudiante.
+
+Devuelve ÚNICAMENTE JSON válido:
+{{
+  "objetivo": "ERN|ERF|ESF|HT|ASIENTOS|KARDEX|OTRO",
+  "cuadra": true,
+  "puede_corregir": true,
+  "resumen": "respuesta breve y clara",
+  "hallazgos": [
+    {{"hoja":"", "celda":"", "tipo":"error|advertencia|ok", "detalle":""}}
+  ],
+  "correcciones": [
+    {{"hoja":"", "celda":"", "valor":0, "formula":"", "motivo":""}}
+  ],
+  "mensaje_error": ""
+}}
+
+No agregues texto fuera del JSON.
+
+VISTA ESTRUCTURAL DEL ARCHIVO:
+{json.dumps(snapshot, ensure_ascii=False)[:50000]}
+"""
+
+
+def _excel_auditar_y_corregir(uploaded_file, question):
+    """Audita un Excel exclusivamente según la pregunta y, si es seguro, genera una copia corregida."""
+    target = _excel_target_from_question(question)
+    if target == "otro":
+        return {
+            "resultado": {
+                "objetivo": "OTRO", "cuadra": False, "puede_corregir": False,
+                "resumen": "Necesito que indiques exactamente qué parte del Excel quieres revisar.",
+                "hallazgos": [], "correcciones": [],
+                "mensaje_error": "Ejemplo: 'TANA, ¿cuadra el Estado de Resultados por Naturaleza?'"
+            },
+            "buffer": None,
+            "filename": None,
+        }
+
+    uploaded_bytes = uploaded_file.getvalue()
+    snapshot = _excel_workbook_snapshot(uploaded_bytes, uploaded_file.name)
+    prompt = _excel_auditoria_prompt(question, uploaded_file.name, snapshot, target)
+
+    profiles = get_gemini_profiles()
+    if not profiles:
+        raise RuntimeError("No está configurada ninguna GEMINI_API_KEY en Streamlit Secrets.")
+
+    suffix = "." + uploaded_file.name.rsplit(".", 1)[-1].lower()
+    temp_path = None
+    errors = []
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(uploaded_bytes)
+            temp_path = tmp.name
+        for profile in profiles:
+            client = get_gemini_client(profile["api_key"])
+            try:
+                gemini_file = client.files.upload(file=temp_path)
+                response = client.models.generate_content(
+                    model=profile["model"],
+                    contents=[gemini_file, prompt],
+                    config=types.GenerateContentConfig(response_mime_type="application/json"),
+                )
+                result = json.loads(response.text or "{}")
+                result["_ruta"] = profile["label"]
+                break
+            except Exception as exc:
+                errors.append((profile["label"], profile["model"], exc))
+                if not _is_gemini_fallback_error(exc):
+                    raise RuntimeError(_gemini_error_message(exc)) from exc
+        else:
+            raise RuntimeError(_fallback_error_message(errors))
+
+        corrections = result.get("correcciones", []) if isinstance(result, dict) else []
+        corrected_buffer = None
+        can_correct = bool(result.get("puede_corregir")) and bool(corrections)
+        if can_correct and suffix in {".xlsx", ".xlsm", ".xltx", ".xltm"}:
+            tmp_in = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+            in_path = tmp_in.name
+            try:
+                tmp_in.write(uploaded_bytes)
+                tmp_in.close()
+                wb = openpyxl.load_workbook(in_path, keep_vba=(suffix == ".xlsm"))
+                applied = []
+                for corr in corrections:
+                    sheet = str(corr.get("hoja", "") or "")
+                    cell = str(corr.get("celda", "") or "")
+                    if sheet not in wb.sheetnames or not re.fullmatch(r"[A-Z]{1,3}[1-9][0-9]*", cell, re.I):
+                        continue
+                    # Seguridad: solo se modifica la hoja/objetivo que el usuario pidió.
+                    if target == "ern" and "ern" not in sheet.lower(): continue
+                    if target == "erf" and "erf" not in sheet.lower(): continue
+                    if target == "esf" and not any(x in sheet.lower() for x in ("esf", "situación", "situacion")): continue
+                    if target == "ht" and "ht" not in sheet.lower() and "hoja" not in sheet.lower(): continue
+                    if target == "kardex" and "kardex" not in sheet.lower(): continue
+                    value = corr.get("formula") if str(corr.get("formula", "") or "").strip() else corr.get("valor")
+                    if value is None:
+                        continue
+                    wb[sheet][cell] = value
+                    applied.append(corr)
+                if applied:
+                    out = io.BytesIO()
+                    wb.calculation.fullCalcOnLoad = True
+                    wb.calculation.forceFullCalc = True
+                    wb.calculation.calcMode = "auto"
+                    wb.save(out)
+                    out.seek(0)
+                    corrected_buffer = out.getvalue()
+                    result["correcciones_aplicadas"] = applied
+                else:
+                    result["puede_corregir"] = False
+            finally:
+                try: os.remove(in_path)
+                except Exception: pass
+        elif can_correct:
+            result["puede_corregir"] = False
+            result["mensaje_error"] = (result.get("mensaje_error") or "") + " Para corregir automáticamente, vuelve a subir el archivo en formato .xlsx."
+
+        return {"resultado": result, "buffer": corrected_buffer, "filename": f"TANA_Corregido_{Path(uploaded_file.name).stem}.xlsx" if corrected_buffer else None}
+    finally:
+        if temp_path:
+            try: os.remove(temp_path)
+            except Exception: pass
+
 def _gemini_error_message(exc):
     msg = str(exc)
     low = msg.lower()
@@ -1797,9 +2023,50 @@ if "monografia_json" in st.session_state and not st.session_state.get("monografi
         extraction_to_text(_mono_hist) if isinstance(_mono_hist, dict) else str(_mono_hist)
     )
 
-# El archivo se procesa automáticamente al cargarse. No se muestra un botón
-# intermedio: la lógica contable original permanece intacta.
-if uploaded_file:
+# EXCEL: flujo independiente. No se convierte en monografía ni dispara el motor contable.
+if uploaded_file and Path(uploaded_file.name).suffix.lower() in {".xls", ".xlsx", ".xlsm", ".xltx", ".xltm"}:
+    _excel_sig = f"excel|{uploaded_file.name}|{getattr(uploaded_file, 'size', 0)}|{pregunta_top.strip()}"
+    if enviar_top and pregunta_top.strip() and st.session_state.get("excel_auditoria_signature") != _excel_sig:
+        with st.spinner("TANA está revisando únicamente lo que pediste del Excel…"):
+            try:
+                _excel_result = _excel_auditar_y_corregir(uploaded_file, pregunta_top.strip())
+                st.session_state["excel_auditoria"] = _excel_result["resultado"]
+                st.session_state["excel_auditoria_buffer"] = _excel_result["buffer"]
+                st.session_state["excel_auditoria_filename"] = _excel_result["filename"]
+                st.session_state["excel_auditoria_signature"] = _excel_sig
+                _tana_chat_add("user", pregunta_top.strip())
+                _r = _excel_result["resultado"]
+                _tana_chat_add("assistant", _r.get("resumen", "Revisión de Excel realizada."))
+                st.rerun()
+            except Exception as exc:
+                st.error(f"No se pudo revisar el Excel: {_gemini_error_message(exc)}")
+                st.stop()
+    elif uploaded_file and not pregunta_top.strip():
+        st.warning("📊 Para archivos Excel, TANA necesita que le indiques exactamente qué quieres revisar. Ejemplo: «¿Cuadra el Estado de Resultados por Naturaleza?»")
+
+    if st.session_state.get("excel_auditoria"):
+        _r = st.session_state["excel_auditoria"]
+        if _r.get("cuadra") is True:
+            st.success("✅ " + str(_r.get("resumen", "El estado solicitado cuadra.")))
+        elif _r.get("cuadra") is False:
+            st.error("❌ " + str(_r.get("resumen", "El estado solicitado no cuadra.")))
+        for _h in _r.get("hallazgos", []) or []:
+            _detalle = str(_h.get("detalle", "") or "")
+            if _detalle:
+                st.write(f"**{_h.get('hoja','')} { _h.get('celda','') }**: {_detalle}")
+        if _r.get("mensaje_error"):
+            st.info(str(_r.get("mensaje_error")))
+        if st.session_state.get("excel_auditoria_buffer"):
+            st.download_button(
+                "⬇️ Descargar Excel corregido",
+                data=st.session_state["excel_auditoria_buffer"],
+                file_name=st.session_state.get("excel_auditoria_filename", "TANA_Corregido.xlsx"),
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key="download_excel_corregido",
+            )
+
+# El archivo NO Excel sigue el flujo normal de monografías.
+if uploaded_file and Path(uploaded_file.name).suffix.lower() not in {".xls", ".xlsx", ".xlsm", ".xltx", ".xltm"}:
     file_signature = f"{uploaded_file.name}|{getattr(uploaded_file, 'size', 0)}"
     if st.session_state.get("tana_file_signature") != file_signature:
         for _key in (
