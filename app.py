@@ -1479,7 +1479,7 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .t
     bottom: 0;
     left: 50%; transform: translateX(-50%);
     width: min(760px, 94vw);
-    max-height: 64px !important;
+    max-height: 70px !important;
     z-index: 999;
     background: var(--tana-bar-bg);
     border: 1px solid var(--tana-bar-border);
@@ -1611,6 +1611,27 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .t
 @media (max-width: 768px) {
     .tana-file-chip { bottom: 78px; width: calc(100vw - 24px); }
     .tana-file-chip .tana-file-hint { display:none; }
+}
+
+
+/* ---- Fix recorte de la barra: quita lo que empujaba la fila hacia abajo ---- */
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) { gap: 0 !important; max-height: 70px !important; }
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) > div[data-testid="element-container"]:has(.tana-inputbar-anchor) {
+    display: none !important;
+}
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stForm"] {
+    padding: 0 !important; border: none !important; margin: 0 !important;
+}
+/* "Press Enter to submit form": texto de ayuda que Streamlit pone bajo el
+   campo dentro de un form; agregaba alto extra y cortaba los botones. */
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="InputInstructions"],
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stTextInput"] small {
+    display: none !important;
+}
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stTextInput"],
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stElementContainer"],
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) div[data-testid="element-container"] {
+    margin: 0 !important;
 }
 
 /* ---- Campo de texto: sin borde, transparente, tipo Google ---- */
@@ -1957,12 +1978,15 @@ st.components.v1.html(
                 position: 'fixed', bottom: '0px',
                 left: '50%', transform: 'translateX(-50%)',
                 width: 'min(760px, 94vw)',
-                'max-height': '64px', overflow: 'hidden', 'box-sizing': 'border-box',
+                'max-height': '70px', overflow: 'hidden', 'box-sizing': 'border-box',
                 'z-index': '999', background: 'var(--tana-bar-bg)',
                 border: '1px solid var(--tana-bar-border)', 'border-radius': '28px',
                 padding: '6px 10px', 'box-shadow': '0 4px 16px rgba(0,0,0,.35)',
-                'margin-bottom': '18px',
+                'margin-bottom': '18px', gap: '0px', 'max-height': '70px',
             });
+            set(anchor.closest('div[data-testid="element-container"]'), { display: 'none' });
+            pill.querySelectorAll('[data-testid="InputInstructions"], [data-testid="stTextInput"] small').forEach(el => set(el, { display: 'none' }));
+            set(pill.querySelector('[data-testid="stForm"]'), { padding: '0', border: 'none', margin: '0' });
 
             // Fuerza la fila de controles a quedarse en horizontal, incluso
             // en pantallas angostas donde Streamlit apilaría las columnas.
