@@ -1609,7 +1609,7 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .t
 .tana-file-chip .tana-file-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .tana-file-chip .tana-file-hint { color:#B4B8BF; font-weight:400; font-size:12.5px; white-space:nowrap; }
 @media (max-width: 768px) {
-    .tana-file-chip { bottom: 78px; width: calc(100vw - 24px); }
+    .tana-file-chip { bottom: calc(142px + env(safe-area-inset-bottom, 0px)); width: calc(100vw - 24px); }
     .tana-file-chip .tana-file-hint { display:none; }
 }
 
@@ -1763,6 +1763,7 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .t
 @media (prefers-color-scheme: dark) and (max-width:768px) {
     #tana-mobile-header { background:rgba(14,16,20,.96) !important; border-bottom-color:#30343A !important; }
     #tana-mobile-header button { background:#202328 !important; border-color:#3A3F46 !important; color:#E8EAED !important; }
+    #tana-mobile-header div { color:#F1F3F4 !important; }
 }
     /* ===== AJUSTES RESPONSIVE MÓVIL =====
        Solo presentación. En móvil TANA usa todo el ancho disponible;
@@ -2007,6 +2008,8 @@ st.components.v1.html(
             if (!anchor) return;
             const pill = anchor.closest('div[data-testid="stVerticalBlock"]');
             if (!pill) return;
+            // ¿Celular? (mismo corte que el CSS móvil)
+            const esMovil = window.parent.matchMedia('(max-width: 768px)').matches;
 
             const set = (el, styles) => {
                 if (!el) return;
@@ -2030,7 +2033,7 @@ st.components.v1.html(
                 'z-index': '999', background: 'var(--tana-bar-bg)',
                 border: '1px solid var(--tana-bar-border)', 'border-radius': '28px',
                 padding: '6px 10px', 'box-shadow': '0 4px 16px rgba(0,0,0,.35)',
-                'margin-bottom': '18px', gap: '0px', 'max-height': '70px',
+                'margin-bottom': esMovil ? 'calc(56px + env(safe-area-inset-bottom, 0px))' : '18px', gap: '0px', 'max-height': '70px',
             });
             set(anchor.closest('div[data-testid="element-container"]'), { display: 'none' });
             pill.querySelectorAll('[data-testid="InputInstructions"], [data-testid="stTextInput"] small').forEach(el => set(el, { display: 'none' }));
@@ -2042,27 +2045,29 @@ st.components.v1.html(
             // campo de texto (columna 2) se encoge/crece: así la suma
             // siempre cabe y el botón enviar nunca se recorta por el
             // overflow:hidden de la píldora.
+            // Fila de controles = REJILLA de 4 celdas fijas:
+            // [archivo | texto (flexible) | micrófono | enviar].
+            // Streamlit en pantallas angostas apila las columnas; con una
+            // rejilla inline (!important) siempre quedan en UNA fila y el
+            // campo de texto recibe todo el espacio sobrante. Se usan los
+            // hijos directos de la fila (children) para no depender del
+            // nombre interno de la columna, que cambia entre versiones.
             const hblock = pill.querySelector('div[data-testid="stHorizontalBlock"]');
+            const anchos = esMovil
+                ? ['38px', 'minmax(0, 1fr)', '40px', '38px']
+                : ['40px', 'minmax(0, 1fr)', '46px', '40px'];
             set(hblock, {
-                display: 'flex', 'flex-direction': 'row', 'flex-wrap': 'nowrap',
-                'align-items': 'center', gap: '2px', width: '100%',
+                display: 'grid', 'grid-template-columns': anchos.join(' '),
+                'grid-auto-flow': 'column', 'align-items': 'center',
+                gap: '2px', width: '100%',
             });
-            const cols = pill.querySelectorAll('div[data-testid="stHorizontalBlock"] > div[data-testid="column"]');
-            const colWidths = ['40px', null, '46px', '40px']; // null = flexible (texto)
-            cols.forEach((col, i) => {
-                const base = {
+            if (hblock) {
+                Array.from(hblock.children).forEach(col => set(col, {
                     display: 'flex', 'align-items': 'center', 'justify-content': 'center',
-                    padding: '0', 'min-width': '0', overflow: 'hidden',
-                };
-                if (colWidths[i]) {
-                    base.flex = `0 0 ${colWidths[i]}`;
-                    base.width = colWidths[i];
-                } else {
-                    base.flex = '1 1 auto';
-                    base.width = 'auto';
-                }
-                set(col, base);
-            });
+                    padding: '0', margin: '0', 'min-width': '0', width: 'auto',
+                    flex: 'none', overflow: 'hidden',
+                }));
+            }
 
             // "+" para subir archivo: se oculta el widget real (pero
             // sigue siendo clickeable) y se dibuja encima un círculo "+"
@@ -2122,16 +2127,17 @@ st.components.v1.html(
             // botón de enviar fuera de la píldora, y mismo aplanado amplio
             // que el campo de texto para que no quede ninguna caja oscura
             // suelta alrededor del ícono de micrófono.
+            const anchoAudio = esMovil ? '40px' : '46px';
             const audioWrap = pill.querySelector('[data-testid="stAudioInput"]');
             if (audioWrap) {
                 set(audioWrap, {
                     background: 'transparent', border: 'none', 'box-shadow': 'none',
-                    width: '46px', 'max-width': '46px', 'min-width': '0', overflow: 'hidden',
+                    width: anchoAudio, 'max-width': anchoAudio, 'min-width': '0', overflow: 'hidden',
                 });
                 audioWrap.querySelectorAll('div').forEach(d => {
                     set(d, {
                         background: 'transparent', border: 'none', 'box-shadow': 'none',
-                        padding: '0', width: '46px', 'max-width': '46px',
+                        padding: '0', width: anchoAudio, 'max-width': anchoAudio,
                     });
                 });
                 audioWrap.querySelectorAll('*').forEach(el => {
