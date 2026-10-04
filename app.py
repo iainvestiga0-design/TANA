@@ -1634,6 +1634,48 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .t
     margin: 0 !important;
 }
 
+
+/* ---- Título de bienvenida: legible en modo claro y oscuro ---- */
+.tana-welcome-title { color:#12304A; }
+.tana-welcome-subtitle { color:#6B7B87; }
+@media (prefers-color-scheme: dark) {
+    .tana-welcome-title { color:#F1F3F4 !important; }
+    .tana-welcome-subtitle { color:#B4BAC2 !important; }
+}
+
+/* ---- Botón enviar: solo el icono blanco, sin fondo ----
+   Dentro de un st.form el botón es kind="primaryFormSubmit", por eso se
+   usa [kind^="primary"] y el testid del form (antes no coincidía y el
+   botón salía con el color naranja/rojo del tema). */
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stFormSubmitButton"] button,
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) button[kind^="primary"] {
+    background: transparent !important;
+    background-color: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+    color: #FFFFFF !important;
+    border-radius: 50% !important;
+    width: 40px !important; height: 40px !important; min-width: 40px !important;
+    padding: 0 !important;
+    font-size: 22px !important;
+    transition: background-color .15s ease;
+}
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stFormSubmitButton"] button *,
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) button[kind^="primary"] * {
+    color: #FFFFFF !important; background: transparent !important; font-size: 22px !important;
+}
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stFormSubmitButton"] button:hover,
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) button[kind^="primary"]:hover {
+    background-color: rgba(255,255,255,.14) !important;
+}
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stFormSubmitButton"] button:active,
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stFormSubmitButton"] button:focus,
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) button[kind^="primary"]:active,
+div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) button[kind^="primary"]:focus {
+    background-color: rgba(255,255,255,.22) !important;
+    box-shadow: none !important; outline: none !important; color: #FFFFFF !important;
+}
+
 /* ---- Campo de texto: sin borde, transparente, tipo Google ---- */
 div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stTextInput"] {
     width: 100%;
@@ -1896,8 +1938,8 @@ if not st.session_state["tana_chat"]:
     st.markdown(
         '<div class="tana-welcome" style="text-align:center; padding:70px 0 20px 0;">'
         f'{"<img src=\'data:image/jpeg;base64," + __import__("base64").b64encode(open(LOGO_PATH,"rb").read()).decode() + "\' width=64 style=\'border-radius:14px;\'>" if os.path.exists(LOGO_PATH) else ""}'
-        '<div class="tana-welcome-title" style="font-size:26px;font-weight:800;color:#12304A;margin-top:14px;">¿Qué monografía resolvemos hoy?</div>'
-        '<div class="tana-welcome-subtitle" style="color:#6B7B87;font-size:14.5px;margin-top:6px;">'
+        '<div class="tana-welcome-title" style="font-size:26px;font-weight:800;margin-top:14px;">¿Qué monografía resolvemos hoy?</div>'
+        '<div class="tana-welcome-subtitle" style="font-size:14.5px;margin-top:6px;">'
         'Sube tu monografía abajo y TANA desarrolla los asientos, la HT y los estados financieros.</div>'
         '</div>',
         unsafe_allow_html=True,
@@ -2092,9 +2134,10 @@ st.components.v1.html(
             }
 
             // Botón enviar: círculo rojo, tamaño fijo.
-            set(pill.querySelector('button[kind="primary"]'), {
+            set(pill.querySelector('[data-testid="stFormSubmitButton"] button, button[kind^="primary"]'), {
                 'border-radius': '50%', width: '40px', height: '40px',
-                'min-width': '40px', padding: '0',
+                'min-width': '40px', padding: '0', border: 'none',
+                'box-shadow': 'none', color: '#FFFFFF',
             });
         }
 
