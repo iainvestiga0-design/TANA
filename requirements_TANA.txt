@@ -1,0 +1,6 @@
+streamlit>=1.37
+extra-streamlit-components>=0.1.71
+openpyxl
+pypdf
+python-docx
+Pillow

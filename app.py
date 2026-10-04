@@ -639,7 +639,7 @@ def _tana_open_history(item):
         "monografia_json", "monografia_texto", "monografia_nombre", "tana_file_signature",
         "asientos_contables", "asientos_validos", "errores_asientos", "alertas_asientos",
         "respuesta_tana", "respuesta_tana_ruta", "audio_tana_processed",
-        "registro_compras", "registro_ventas", "kardex",
+        "registro_compras", "registro_ventas", "kardex", "costos", "tipo_empresa",
     ):
         st.session_state.pop(key, None)
 
@@ -1009,6 +1009,7 @@ Devuelve únicamente JSON válido con esta estructura:
   "empresa": "",
   "tipo_documento": "",
   "periodo": "",
+  "tipo_empresa": "COMERCIAL|INDUSTRIAL|SERVICIOS|MIXTA|NO_DETERMINADO",
   "estado_inicial": [],
   "operaciones": [
     {
@@ -1040,6 +1041,12 @@ REGLAS:
 - Separa cada operación en un elemento.
 - Incluye el estado financiero inicial si existe.
 - Incluye todo lo que el ejercicio pide realizar en "solicitudes".
+- Clasifica la empresa por su actividad principal: COMERCIAL, INDUSTRIAL, SERVICIOS o MIXTA.
+  Si el enunciado describe transformación/fabricación, clasifica como INDUSTRIAL aunque
+  aparezca la palabra "comercial" por error en el encabezado.
+- Conserva datos que permitan identificar materia prima, mano de obra, costos indirectos,
+  producción terminada, productos en proceso, servicios prestados y cualquier base de
+  distribución de costos. No calcules todavía el costo si el dato no está sustentado.
 - La información extraída servirá después para el motor contable de TANA.
 """
 
@@ -1479,7 +1486,7 @@ with st.sidebar:
             "monografia_json", "monografia_texto", "monografia_nombre", "tana_file_signature",
             "asientos_contables", "asientos_validos", "errores_asientos", "alertas_asientos",
             "respuesta_tana", "respuesta_tana_ruta", "audio_tana_processed",
-            "registro_compras", "registro_ventas", "kardex",
+            "registro_compras", "registro_ventas", "kardex", "costos", "tipo_empresa",
         ):
             st.session_state.pop(_key, None)
         st.rerun()
@@ -1561,21 +1568,25 @@ for msg in st.session_state["tana_chat"]:
 inputbar_container = st.container()
 with inputbar_container:
     st.markdown('<span class="tana-inputbar-anchor"></span>', unsafe_allow_html=True)
-    bar = st.columns([0.5, 6.2, 0.9, 0.5], gap="small")
-    with bar[0]:
-        uploaded_file = st.file_uploader(
-            "Archivo", type=SUPPORTED_TYPES, label_visibility="collapsed",
-            help="PDF, DOC, DOCX, XLS, XLSX, JPG, JPEG y PNG."
-        )
-    with bar[1]:
-        pregunta_top = st.text_input(
-            "Consulta", placeholder="Pregunta a TANA…",
-            key="pregunta_tana_top", label_visibility="collapsed"
-        )
-    with bar[2]:
-        audio_top = st.audio_input("Hablar", key="audio_tana_top", label_visibility="collapsed") if hasattr(st, "audio_input") else None
-    with bar[3]:
-        enviar_top = st.button("➤", type="primary", key="btn_enviar_tana_top", use_container_width=True)
+    # FORMULARIO: al colocar la pregunta dentro de un st.form, Enter en el
+    # campo de texto envía el formulario igual que pulsar el botón. Además,
+    # clear_on_submit=True limpia automáticamente la pregunta después del envío.
+    with st.form("tana_input_form", clear_on_submit=True, border=False):
+        bar = st.columns([0.5, 6.2, 0.9, 0.5], gap="small")
+        with bar[0]:
+            uploaded_file = st.file_uploader(
+                "Archivo", type=SUPPORTED_TYPES, label_visibility="collapsed",
+                help="PDF, DOC, DOCX, XLS, XLSX, JPG, JPEG y PNG."
+            )
+        with bar[1]:
+            pregunta_top = st.text_input(
+                "Consulta", placeholder="Pregunta a TANA…",
+                key="pregunta_tana_top", label_visibility="collapsed"
+            )
+        with bar[2]:
+            audio_top = st.audio_input("Hablar", key="audio_tana_top", label_visibility="collapsed") if hasattr(st, "audio_input") else None
+        with bar[3]:
+            enviar_top = st.form_submit_button("➤", type="primary", key="btn_enviar_tana_top", use_container_width=True)
 
 # ------------------------------------------------------------
 # Refuerzo del diseño de la barra vía JS (misma técnica que el
@@ -1837,7 +1848,21 @@ Tienes dos fuentes obligatorias:
 2) El PCGE de TANA que se adjunta abajo.
 
 OBJETIVO:
-Desarrollar los asientos contables de TODAS las operaciones detectadas.
+Desarrollar los asientos contables de TODAS las operaciones detectadas y, cuando la
+actividad sea INDUSTRIAL o SERVICIOS, desarrollar también el esquema de costos que
+corresponda al enunciado.
+
+CLASIFICACIÓN DEL NEGOCIO:
+- Usa "tipo_empresa" extraído de la monografía.
+- INDUSTRIAL: identifica materia prima, mano de obra directa y costos indirectos de
+  fabricación; determina producción terminada, productos en proceso y costo unitario
+  solo cuando los datos estén sustentados.
+- SERVICIOS: identifica mano de obra directa del servicio, materiales/insumos directos,
+  servicios de terceros y costos indirectos; determina costo de servicios y costo
+  unitario por servicio solo cuando exista una unidad de servicio sustentada.
+- COMERCIAL: conserva el flujo actual de compras, inventarios y costo de ventas.
+- Si no hay datos suficientes para una partida de costos, déjala en cero y explica
+  "requiere_revision"; nunca inventes importes.
 
 REGLAS OBLIGATORIAS:
 - EL ASIENTO DE APERTURA ES OBLIGATORIO: Genera siempre el Asiento N° 1 (Asiento de Apertura o Inicial) utilizando los datos extraídos en "estado_inicial". Asegúrate de registrar todos los activos en el Debe y los pasivos/patrimonio en el Haber.
@@ -1902,6 +1927,7 @@ Si INCLUIR_KARDEX es false, no incluyas la clave "kardex".
 
 Devuelve SOLO JSON válido con esta estructura:
 {
+  "tipo_empresa": "COMERCIAL",
   "asientos": [
     {
       "numero": 1,
@@ -1923,6 +1949,45 @@ Devuelve SOLO JSON válido con esta estructura:
     }
   ],
   "alertas": [],
+  "costos": {
+    "tipo": "INDUSTRIAL|SERVICIOS|COMERCIAL|NO_DETERMINADO",
+    "unidad_costeo": "",
+    "unidades_producidas": 0.0,
+    "unidades_servicio": 0.0,
+    "inventario_inicial_materia_prima": 0.0,
+    "inventario_final_materia_prima": 0.0,
+    "inventario_inicial_proceso": 0.0,
+    "inventario_final_proceso": 0.0,
+    "inventario_inicial_terminados": 0.0,
+    "inventario_final_terminados": 0.0,
+    "materia_prima": [
+      {"concepto": "", "cantidad": 0.0, "costo_unitario": 0.0, "total": 0.0, "observacion": ""}
+    ],
+    "mano_obra_directa": [
+      {"concepto": "", "base": 0.0, "total": 0.0, "observacion": ""}
+    ],
+    "costos_indirectos_fabricacion": [
+      {"concepto": "", "base": 0.0, "total": 0.0, "observacion": ""}
+    ],
+    "costos_directos_servicio": [
+      {"concepto": "", "base": 0.0, "total": 0.0, "observacion": ""}
+    ],
+    "costos_indirectos_servicio": [
+      {"concepto": "", "base": 0.0, "total": 0.0, "observacion": ""}
+    ],
+    "resumen": {
+      "materia_prima_consumida": 0.0,
+      "mano_obra_directa": 0.0,
+      "costos_indirectos": 0.0,
+      "costo_produccion": 0.0,
+      "costo_produccion_terminada": 0.0,
+      "costo_de_ventas": 0.0,
+      "costo_de_servicios": 0.0,
+      "costo_unitario": 0.0
+    },
+    "requiere_revision": false,
+    "observacion": ""
+  },
   "registro_compras": [
     {
       "numero": 1,
@@ -1980,6 +2045,31 @@ Devuelve SOLO JSON válido con esta estructura:
 
 Nota: "registro_compras", "registro_ventas" y "kardex" son OPCIONALES.
 Inclúyelos únicamente según los indicadores INCLUIR_* de arriba.
+
+REGLAS PARA "costos":
+- La clave "costos" es obligatoria en la respuesta.
+- Si el tipo es INDUSTRIAL, "materia_prima" debe contener el consumo de materia prima
+  utilizado en la producción; "mano_obra_directa" el costo del personal directamente
+  vinculado a producción; y "costos_indirectos_fabricacion" los CIF sustentados por el
+  enunciado. No confundas el sueldo de administración/ventas con MOD.
+- Para INDUSTRIAL, el resumen debe respetar, cuando los datos estén disponibles:
+  MP consumida + MOD + CIF = Costo de producción del período;
+  Costo de producción terminada = Costo del período + Inventario inicial de proceso
+  - Inventario final de proceso;
+  Costo de ventas = Inventario inicial de terminados + Costo de producción terminada
+  - Inventario final de terminados.
+- Si no existen productos en proceso, usa cero y conserva esa condición.
+- Si el ejercicio informa unidades producidas, calcula costo unitario = costo de
+  producción terminada / unidades producidas cuando sea aplicable.
+- Si el tipo es SERVICIOS, usa "costos_directos_servicio" y
+  "costos_indirectos_servicio"; no fuerces un Kardex de productos terminados.
+  "costo_de_servicios" representa el costo del servicio del período cuando esté
+  sustentado.
+- Para COMERCIAL, puedes dejar las listas de costos industriales vacías; el costo
+  de ventas debe provenir del Kardex o de la información sustentada.
+- Los totales deben ser números positivos y deben poder conciliarse con las operaciones.
+- Si un importe no puede determinarse con seguridad, marca "requiere_revision": true
+  y explica el motivo. No inventes importes.
 
 PCGE DE TANA:
 {pcge}
@@ -2726,6 +2816,15 @@ if "monografia_json" in st.session_state and "asientos_contables" not in st.sess
             registro_compras = resolved.get("registro_compras", []) if isinstance(resolved, dict) else []
             registro_ventas = resolved.get("registro_ventas", []) if isinstance(resolved, dict) else []
             kardex = resolved.get("kardex", []) if isinstance(resolved, dict) else []
+            costos = resolved.get("costos", {}) if isinstance(resolved, dict) else {}
+            if not isinstance(costos, dict):
+                costos = {}
+            tipo_empresa = str(
+                resolved.get("tipo_empresa", st.session_state.get("monografia_json", {}).get("tipo_empresa", ""))
+                if isinstance(resolved, dict) else ""
+            ).upper().strip()
+            if tipo_empresa:
+                st.session_state["tipo_empresa"] = tipo_empresa
             if not isinstance(registro_compras, list):
                 registro_compras = []
             if not isinstance(registro_ventas, list):
@@ -2753,6 +2852,7 @@ if "monografia_json" in st.session_state and "asientos_contables" not in st.sess
             st.session_state["registro_compras"] = registro_compras
             st.session_state["registro_ventas"] = registro_ventas
             st.session_state["kardex"] = kardex
+            st.session_state["costos"] = costos
         except Exception as exc:
             st.error(f"No se pudieron desarrollar los asientos: {exc}")
             st.stop()
@@ -2767,6 +2867,9 @@ def _tana_contexto_tutor():
     return (
         "MONOGRAFÍA:\n" + mono[:14000]
         + "\n\nASIENTOS GENERADOS POR TANA:\n" + asientos_txt[:18000]
+        + "\n\nMODELO DE COSTOS:\n" + json.dumps(
+            st.session_state.get("costos", {}), ensure_ascii=False, indent=2
+        )[:12000]
     )
 
 def _preguntar_a_tana(pregunta):
@@ -2780,6 +2883,9 @@ No inventes información que no aparezca en el contexto.
  En los estados financieros respeta estrictamente estas reglas:
  ERF: 70 y 69 se detectan por prefijo; 94 y 95 son obligatorias; 78 se incluye solo si existe; 65 y 67 solo si existen sin destino a 94/95. No incluyas 79 ni agregues automáticamente otras cuentas del elemento 6 al ERF.
  ERN: presenta las cuentas por naturaleza y su resultado.
+ COSTOS: si el modelo es INDUSTRIAL, explica MP consumida, MOD, CIF, costo de producción,
+ costo de producción terminada y costo de ventas; si es SERVICIOS, explica costos
+ directos, indirectos y costo de servicios. Usa los importes del MODELO DE COSTOS.
  ESF: presenta activo, pasivo y patrimonio; resultados acumulados 59 con saldo deudor reducen el patrimonio. El resultado del ejercicio debe ser consistente con ERN y ERF y el ESF debe cumplir Activo = Pasivo + Patrimonio.
  Si falta un dato, dilo.
 
@@ -3586,6 +3692,189 @@ if kardex_data:
     autofit(ws_kx, [7, 12, 16, 28, 11, 12, 13, 11, 12, 13, 11, 12, 13])
 
 # ============================================================
+# HOJA: COSTO DE PRODUCCIÓN / COSTO DE SERVICIOS
+# ============================================================
+# Esta hoja amplía TANA para prácticas de ciclos avanzados. No se genera
+# para una empresa comercial si no existe información de costos de producción.
+costos_data = st.session_state.get("costos", {}) or {}
+tipo_costos = str(
+    costos_data.get("tipo")
+    or st.session_state.get("tipo_empresa")
+    or st.session_state.get("monografia_json", {}).get("tipo_empresa", "")
+    or ""
+).upper().strip()
+
+def _cost_list(data, key):
+    value = data.get(key, []) if isinstance(data, dict) else []
+    return value if isinstance(value, list) else []
+
+def _cost_num(value):
+    return _to_float(value, 0.0) or 0.0
+
+def _cost_total(items):
+    total = 0.0
+    for item in items:
+        if isinstance(item, dict):
+            total += _cost_num(item.get("total"))
+    return round(total, 2)
+
+crear_hoja_costos = (
+    tipo_costos in {"INDUSTRIAL", "SERVICIOS"}
+    or bool(_cost_list(costos_data, "materia_prima"))
+    or bool(_cost_list(costos_data, "mano_obra_directa"))
+    or bool(_cost_list(costos_data, "costos_indirectos_fabricacion"))
+    or bool(_cost_list(costos_data, "costos_directos_servicio"))
+    or bool(_cost_list(costos_data, "costos_indirectos_servicio"))
+)
+
+ws_costos = None
+if crear_hoja_costos:
+    ws_costos = wb.create_sheet("Costo_Produccion")
+    ws_costos["A1"] = (
+        "COSTO DE PRODUCCIÓN" if tipo_costos == "INDUSTRIAL"
+        else "COSTO DE SERVICIOS"
+    )
+    ws_costos["A1"].font = TITLE_FONT
+    ws_costos["A2"] = f"Modelo de costos: {tipo_costos or 'NO DETERMINADO'}"
+    ws_costos["A2"].font = SUBTITLE_FONT
+
+    r = 4
+
+    def _cost_section(title, headers, rows):
+        global r
+        ws_costos.cell(r, 1, title).font = BOLD
+        r += 1
+        for c, h in enumerate(headers, 1):
+            ws_costos.cell(r, c, h)
+        style_header(ws_costos, r, 1, len(headers))
+        r += 1
+        subtotal = 0.0
+        for item in rows:
+            if not isinstance(item, dict):
+                continue
+            concepto = str(item.get("concepto", "") or "")
+            cantidad = _cost_num(item.get("cantidad"))
+            unitario = _cost_num(item.get("costo_unitario"))
+            base = _cost_num(item.get("base"))
+            total = _cost_num(item.get("total"))
+            if not total:
+                if cantidad and unitario:
+                    total = round(cantidad * unitario, 2)
+                elif base:
+                    total = round(base, 2)
+            subtotal += total
+            vals = [concepto]
+            if len(headers) == 5:
+                vals += [cantidad, unitario, total, str(item.get("observacion", "") or "")]
+            else:
+                vals += [base, total, str(item.get("observacion", "") or "")]
+            for c, v in enumerate(vals, 1):
+                ws_costos.cell(r, c, v)
+                ws_costos.cell(r, c).font = BLACK
+                if isinstance(v, (int, float)):
+                    ws_costos.cell(r, c).number_format = '#,##0.00'
+            r += 1
+        ws_costos.cell(r, 1, "SUBTOTAL").font = BOLD
+        ws_costos.cell(r, len(headers)-1, round(subtotal, 2)).font = BOLD
+        ws_costos.cell(r, len(headers)-1).number_format = '#,##0.00'
+        r += 2
+        return round(subtotal, 2)
+
+    if tipo_costos == "INDUSTRIAL":
+        mp_rows = _cost_list(costos_data, "materia_prima")
+        mod_rows = _cost_list(costos_data, "mano_obra_directa")
+        cif_rows = _cost_list(costos_data, "costos_indirectos_fabricacion")
+
+        mp_total = _cost_section(
+            "1. MATERIA PRIMA CONSUMIDA",
+            ["Concepto", "Cantidad", "Costo unitario", "Total", "Observación"],
+            mp_rows,
+        )
+        mod_total = _cost_section(
+            "2. MANO DE OBRA DIRECTA",
+            ["Concepto", "Base", "Total", "Observación"],
+            mod_rows,
+        )
+        cif_total = _cost_section(
+            "3. COSTOS INDIRECTOS DE FABRICACIÓN",
+            ["Concepto", "Base", "Total", "Observación"],
+            cif_rows,
+        )
+
+        resumen = costos_data.get("resumen", {}) if isinstance(costos_data.get("resumen", {}), dict) else {}
+        costo_periodo = _cost_num(resumen.get("costo_produccion"))
+        costo_terminada = _cost_num(resumen.get("costo_produccion_terminada"))
+        costo_ventas = _cost_num(resumen.get("costo_de_ventas"))
+        unidades = _cost_num(costos_data.get("unidades_producidas"))
+        costo_unit = _cost_num(resumen.get("costo_unitario"))
+
+        ws_costos.cell(r, 1, "4. RESUMEN DEL COSTO").font = BOLD
+        r += 1
+        resumen_rows = [
+            ("Materia prima consumida", mp_total),
+            ("Mano de obra directa", mod_total),
+            ("Costos indirectos de fabricación", cif_total),
+            ("Costo de producción del período", costo_periodo or round(mp_total + mod_total + cif_total, 2)),
+            ("Inventario inicial de productos en proceso", _cost_num(costos_data.get("inventario_inicial_proceso"))),
+            ("Inventario final de productos en proceso", _cost_num(costos_data.get("inventario_final_proceso"))),
+            ("Costo de producción terminada", costo_terminada),
+            ("Inventario inicial de productos terminados", _cost_num(costos_data.get("inventario_inicial_terminados"))),
+            ("Inventario final de productos terminados", _cost_num(costos_data.get("inventario_final_terminados"))),
+            ("COSTO DE VENTAS", costo_ventas),
+            ("Unidades producidas", unidades),
+            ("Costo unitario", costo_unit),
+        ]
+        for label, amount in resumen_rows:
+            ws_costos.cell(r, 1, label).font = BOLD if label in {"COSTO DE VENTAS", "Costo de producción terminada"} else BLACK
+            ws_costos.cell(r, 3, amount)
+            ws_costos.cell(r, 3).number_format = '#,##0.00'
+            r += 1
+
+    elif tipo_costos == "SERVICIOS":
+        direct_rows = _cost_list(costos_data, "costos_directos_servicio")
+        indirect_rows = _cost_list(costos_data, "costos_indirectos_servicio")
+        direct_total = _cost_section(
+            "1. COSTOS DIRECTOS DEL SERVICIO",
+            ["Concepto", "Base", "Total", "Observación"],
+            direct_rows,
+        )
+        indirect_total = _cost_section(
+            "2. COSTOS INDIRECTOS DEL SERVICIO",
+            ["Concepto", "Base", "Total", "Observación"],
+            indirect_rows,
+        )
+        resumen = costos_data.get("resumen", {}) if isinstance(costos_data.get("resumen", {}), dict) else {}
+        costo_servicios = _cost_num(resumen.get("costo_de_servicios"))
+        unidades_servicio = _cost_num(costos_data.get("unidades_servicio"))
+        costo_unit = _cost_num(resumen.get("costo_unitario"))
+        ws_costos.cell(r, 1, "3. RESUMEN DEL COSTO DEL SERVICIO").font = BOLD
+        r += 1
+        for label, amount in [
+            ("Costos directos", direct_total),
+            ("Costos indirectos", indirect_total),
+            ("COSTO DE SERVICIOS DEL PERÍODO", costo_servicios or round(direct_total + indirect_total, 2)),
+            ("Unidades / servicios atendidos", unidades_servicio),
+            ("Costo unitario del servicio", costo_unit),
+        ]:
+            ws_costos.cell(r, 1, label).font = BOLD if "COSTO DE SERVICIOS" in label else BLACK
+            ws_costos.cell(r, 3, amount)
+            ws_costos.cell(r, 3).number_format = '#,##0.00'
+            r += 1
+
+    observacion_costos = str(costos_data.get("observacion", "") or "").strip()
+    if observacion_costos:
+        ws_costos.cell(r + 1, 1, "Observaciones").font = BOLD
+        ws_costos.cell(r + 2, 1, observacion_costos)
+        ws_costos.merge_cells(start_row=r + 2, start_column=1, end_row=r + 2, end_column=5)
+        ws_costos.cell(r + 2, 1).alignment = Alignment(wrap_text=True, vertical="top")
+
+    if costos_data.get("requiere_revision"):
+        ws_costos.cell(r + 4, 1, "⚠️ REQUIERE REVISIÓN").font = BOLD
+
+    ws_costos.freeze_panes = "A5"
+    autofit(ws_costos, [42, 16, 18, 18, 55])
+
+# ============================================================
 # HOJAS: ESTADOS FINANCIEROS
 # ============================================================
 # Los tres estados se alimentan de la misma HT:
@@ -4236,6 +4525,7 @@ HOJAS_PUBLICAS = [
     "Registro_Compras",
     "Registro_Ventas",
     "Kardex",
+    "Costo_Produccion",
     "LM",
     "HT",
     "ESF",
@@ -4279,6 +4569,8 @@ if _sig and st.session_state.get("tana_resuelto_signature") != _sig:
         _items_resueltos.append("Registro de Ventas")
     if kardex_data:
         _items_resueltos.append("Kardex")
+    if crear_hoja_costos:
+        _items_resueltos.append("Costo de producción/servicios")
     _lista_html = "<br>".join(f"&nbsp;&nbsp;• {x}" for x in _items_resueltos)
     _tana_chat_add(
         "assistant",
