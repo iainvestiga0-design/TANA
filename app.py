@@ -1531,6 +1531,7 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .t
 /* ---- Botón "+" para subir archivo (reemplaza el uploader por defecto) ---- */
 div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stFileUploader"] {
     width: 42px;
+    height: 40px !important; max-height: 40px !important; overflow: hidden !important;
 }
 div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stFileUploaderDropzone"] {
     background: transparent !important;
@@ -1999,7 +2000,7 @@ st.components.v1.html(
             const uploaderRoot = pill.querySelector('[data-testid="stFileUploader"]');
             const dropzone = pill.querySelector('[data-testid="stFileUploaderDropzone"]');
             if (uploaderRoot) {
-                set(uploaderRoot, { width: '40px', position: 'relative', overflow: 'visible' });
+                set(uploaderRoot, { width: '40px', height: '40px', 'max-height': '40px', position: 'relative', overflow: 'hidden' });
                 if (!uploaderRoot.querySelector('.tana-plus-fake')) {
                     const fake = doc.createElement('div');
                     fake.className = 'tana-plus-fake';
