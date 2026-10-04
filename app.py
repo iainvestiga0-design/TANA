@@ -95,6 +95,18 @@ def _tana_supabase_config():
     return url, key
 
 
+def _tana_app_url():
+    """URL pública de TANA (a donde vuelve la persona tras confirmar su correo).
+    Se puede cambiar con el Secret APP_URL; por defecto, la app actual."""
+    url = ""
+    try:
+        url = str(dict(st.secrets).get("APP_URL", "") or "").strip()
+    except Exception:
+        pass
+    url = url or os.getenv("APP_URL", "").strip() or "https://tanaia.streamlit.app"
+    return url.rstrip("/")
+
+
 def _tana_supabase_request(path, method="POST", payload=None, access_token=None):
     url, anon_key = _tana_supabase_config()
     if not url or not anon_key:
@@ -364,6 +376,53 @@ def _tana_auth_screen():
     # El formulario real queda debajo del encabezado visual.
     _, center, _ = st.columns([0.15, 0.70, 0.15])
     with center:
+        # --- Llegada desde el enlace del correo de confirmación ---
+        try:
+            _verif = st.query_params.get("verificado")
+        except Exception:
+            _verif = None
+        if isinstance(_verif, (list, tuple)):
+            _verif = _verif[0] if _verif else None
+        if _verif == "1":
+            # Si Supabase devolvió un error (enlace vencido o ya usado) lo manda en
+            # el "#hash" de la URL, que el servidor no ve; este mini-script lo detecta
+            # y cambia a la versión de error para no mostrar "verificado" por error.
+            st.components.v1.html(
+                """<script>
+                try {
+                    const h = window.parent.location.hash || '';
+                    if (/error/i.test(h)) {
+                        window.parent.location.replace(window.parent.location.pathname + '?verificado=error');
+                    }
+                } catch (e) {}
+                </script>""",
+                height=0,
+            )
+            st.markdown("""
+            <div style="background:#ECFDF3;border:1px solid #A7E3BF;border-left:6px solid #22C55E;
+                        border-radius:16px;padding:20px 22px;margin:4px 0 14px 0;color:#14532D;">
+              <div style="font-size:22px;font-weight:800;margin-bottom:6px;">✅ ¡Correo verificado!</div>
+              <div style="font-size:15px;line-height:1.5;">
+                Tu cuenta ya está activa. Ahora puedes disfrutar de todos los beneficios de
+                <b>TANA</b>: sube tu monografía y recibe los asientos, la HT y los estados
+                financieros, con tu historial guardado.<br>
+                <b>Inicia sesión</b> abajo con tu correo y tu contraseña para empezar.
+              </div>
+            </div>
+            """, unsafe_allow_html=True)
+        elif _verif == "error":
+            st.markdown("""
+            <div style="background:#FFF8E6;border:1px solid #F3D58A;border-left:6px solid #F59E0B;
+                        border-radius:16px;padding:18px 22px;margin:4px 0 14px 0;color:#7A4B00;">
+              <div style="font-size:19px;font-weight:800;margin-bottom:6px;">⚠️ El enlace ya no es válido</div>
+              <div style="font-size:15px;line-height:1.5;">
+                El enlace de confirmación venció o ya fue usado. Si ya confirmaste tu correo,
+                simplemente <b>inicia sesión</b>. Si no, ve a <b>Crear cuenta</b> y regístrate
+                otra vez con el mismo correo para recibir un enlace nuevo.
+              </div>
+            </div>
+            """, unsafe_allow_html=True)
+
         st.caption(
             "**¿Por qué usamos una cuenta?** Tu correo identifica tu espacio de trabajo para: "
             "**(1)** guardar tu historial de monografías y poder reabrirlas cuando quieras, "
@@ -413,7 +472,7 @@ def _tana_auth_screen():
                 else:
                     try:
                         data = _tana_supabase_request(
-                            "/auth/v1/signup",
+                            "/auth/v1/signup?redirect_to=" + quote(_tana_app_url() + "/?verificado=1", safe=""),
                             payload={"email": email_new.strip(), "password": password_new},
                         )
                         # Según la versión de Supabase, la sesión llega anidada o en la raíz.
