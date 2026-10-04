@@ -11,6 +11,23 @@ import hashlib
 import datetime as _dt
 from decimal import Decimal, InvalidOperation
 
+
+def _tana_nombre_descarga(nombre_original, extension=".xlsx"):
+    """Genera un nombre de descarga basado en el archivo que subió el usuario.
+
+    Ejemplo: "Practica Final 03.xlsx" -> "Practica Final 03 - TANA.xlsx".
+    Evita duplicar "- TANA" si ya aparece al final del nombre.
+    """
+    nombre = Path(str(nombre_original or "Practica")).stem.strip()
+    nombre = re.sub(r"[\\/:*?\"<>|]+", " ", nombre)
+    nombre = re.sub(r"\s+", " ", nombre).strip(" .")
+    if not nombre:
+        nombre = "Practica"
+    if not re.search(r"(?:[-_]\s*)TANA$", nombre, flags=re.IGNORECASE):
+        nombre = f"{nombre} - TANA"
+    extension = extension if str(extension).startswith(".") else f".{extension}"
+    return f"{nombre}{extension.lower()}"
+
 import streamlit as st
 try:
     import extra_streamlit_components as stx
@@ -1271,7 +1288,7 @@ def _excel_auditar_y_corregir(uploaded_file, question):
             result["puede_corregir"] = False
             result["mensaje_error"] = (result.get("mensaje_error") or "") + " Para corregir automáticamente, vuelve a subir el archivo en formato .xlsx."
 
-        return {"resultado": result, "buffer": corrected_buffer, "filename": f"TANA_Corregido_{Path(uploaded_file.name).stem}.xlsx" if corrected_buffer else None}
+        return {"resultado": result, "buffer": corrected_buffer, "filename": _tana_nombre_descarga(uploaded_file.name, ".xlsx") if corrected_buffer else None}
     finally:
         if temp_path:
             try: os.remove(temp_path)
@@ -4858,7 +4875,7 @@ if st.session_state.get("tana_excel_buffer"):
     st.download_button(
         label="⬇️  Descargar Excel",
         data=st.session_state["tana_excel_buffer"],
-        file_name="TANA_Contabilidad.xlsx",
+        file_name=_tana_nombre_descarga(uploaded_file.name if uploaded_file else "Practica", ".xlsx"),
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
     if "monografia_nombre" in st.session_state:
