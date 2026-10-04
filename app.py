@@ -2027,40 +2027,6 @@ st.components.v1.html(
                 set(el, { display: 'none' });
             });
 
-            // Feedback inmediato de la monografía cargada: el archivo vive
-            // dentro de un st.form, así que Python no se entera hasta
-            // enviar. El navegador sí conoce el archivo en cuanto se
-            // selecciona; lo leemos de la ficha oculta y lo mostramos en
-            // una ficha visible sobre la barra + un check verde en el "+".
-            let fileName = '';
-            if (fileEls.length) {
-                const f = fileEls[0];
-                const n = f.querySelector('[data-testid="stFileUploaderFileName"]');
-                fileName = ((n ? n.textContent : f.textContent) || '').trim();
-            }
-            const fakePlus = pill.querySelector('.tana-plus-fake');
-            if (fakePlus) {
-                const want = fileName ? '✓' : '+';
-                if (fakePlus.textContent !== want) fakePlus.textContent = want;
-                fakePlus.style.setProperty('background', fileName ? '#2ECC71' : 'var(--tana-bar-icon-bg)', 'important');
-                fakePlus.style.setProperty('color', fileName ? '#0B2A17' : 'var(--tana-bar-icon-color)', 'important');
-            }
-            let chip = doc.querySelector('.tana-file-chip');
-            if (fileName) {
-                if (!chip) {
-                    chip = doc.createElement('div');
-                    chip.className = 'tana-file-chip';
-                    chip.innerHTML = '<span class="tana-file-ok">✓</span>' +
-                        '<span class="tana-file-name"></span>' +
-                        '<span class="tana-file-hint">Monografía lista · pulsa ➤ para enviar</span>';
-                    doc.body.appendChild(chip);
-                }
-                const nameEl = chip.querySelector('.tana-file-name');
-                if (nameEl.textContent !== '📄 ' + fileName) nameEl.textContent = '📄 ' + fileName;
-            } else if (chip) {
-                chip.remove();
-            }
-
             // Campo de texto: sin borde ni fondo, como el buscador de
             // Google. Se limpia CADA div interno (no solo el primero) para
             // que no quede ninguna caja oscura anidada visible dentro de
@@ -2106,6 +2072,68 @@ st.components.v1.html(
                 'min-width': '40px', padding: '0',
             });
         }
+
+
+        // ---- Ficha de archivo cargado (independiente del resto) ----
+        // Detecta el nombre por 3 vías, de la más a la menos confiable:
+        // 1) el <input type=file> real del navegador, 2) la ficha interna
+        // de Streamlit (cualquier versión), 3) cualquier texto "hoja"
+        // dentro del uploader que termine en una extensión soportada.
+        function nombreArchivoSubido(doc) {
+            const root = doc.querySelector('.tana-inputbar-anchor');
+            const pill = root ? root.closest('div[data-testid="stVerticalBlock"]') : null;
+            if (!pill) return '';
+            const up = pill.querySelector('[data-testid="stFileUploader"]');
+            if (!up) return '';
+            const inp = up.querySelector('input[type="file"]');
+            if (inp && inp.files && inp.files.length) return inp.files[0].name;
+            const n = up.querySelector('[data-testid="stFileUploaderFileName"], [data-testid="stFileUploaderFile"]');
+            if (n && n.textContent.trim()) {
+                const t = n.textContent.trim();
+                const m = t.match(/^(.+?\\.(?:pdf|docx?|xlsx?|jpe?g|png))/i);
+                return m ? m[1] : t.split('\\n')[0];
+            }
+            const ext = /^.+\\.(pdf|docx?|xlsx?|jpe?g|png)$/i;
+            for (const el of up.querySelectorAll('*')) {
+                if (el.children.length === 0) {
+                    const t = (el.textContent || '').trim();
+                    if (t.length > 4 && ext.test(t)) return t;
+                }
+            }
+            return '';
+        }
+        function actualizarFichaArchivo() {
+            try {
+                const doc = window.parent.document;
+                const name = nombreArchivoSubido(doc);
+                const fake = doc.querySelector('.tana-plus-fake');
+                if (fake) {
+                    const want = name ? '✓' : '+';
+                    if (fake.textContent !== want) fake.textContent = want;
+                    fake.style.setProperty('background', name ? '#2ECC71' : 'var(--tana-bar-icon-bg)', 'important');
+                    fake.style.setProperty('color', name ? '#0B2A17' : 'var(--tana-bar-icon-color)', 'important');
+                }
+                let chip = doc.querySelector('.tana-file-chip');
+                if (name) {
+                    if (!chip) {
+                        chip = doc.createElement('div');
+                        chip.className = 'tana-file-chip';
+                        chip.innerHTML = '<span class="tana-file-ok">✓</span>' +
+                            '<span class="tana-file-name"></span>' +
+                            '<span class="tana-file-hint">Monografía lista · pulsa ➤ para enviar</span>';
+                        doc.body.appendChild(chip);
+                    }
+                    const el = chip.querySelector('.tana-file-name');
+                    if (el.textContent !== '📄 ' + name) el.textContent = '📄 ' + name;
+                } else if (chip) {
+                    chip.remove();
+                }
+            } catch (e) { /* nunca romper la barra */ }
+        }
+        actualizarFichaArchivo();
+        new MutationObserver(actualizarFichaArchivo).observe(window.parent.document.body, { childList: true, subtree: true });
+        window.parent.document.addEventListener('change', () => setTimeout(actualizarFichaArchivo, 150), true);
+        setInterval(actualizarFichaArchivo, 600);
 
         estilarBarraTana();
         const obs = new MutationObserver(estilarBarraTana);
