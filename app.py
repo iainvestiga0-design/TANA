@@ -1489,7 +1489,7 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .t
        fijo, como mucho se ve un rectángulo menos redondeado. */
     border-radius: 28px;
     padding: 6px 10px;
-    box-shadow: 0 2px 10px rgba(18,48,74,.10);
+    box-shadow: 0 4px 16px rgba(0,0,0,.35);
     margin-bottom: 18px;
     overflow: hidden;
     box-sizing: border-box;
@@ -1578,24 +1578,38 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .t
    repinta toda la barra sin JS extra (las variables CSS se heredan
    incluso dentro de estilos puestos por JS con !important). ---- */
 div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) {
-    --tana-bar-bg: #ffffff;
-    --tana-bar-border: #DFE1E5;
-    --tana-bar-text: #202124;
-    --tana-bar-placeholder: #5F6368;
-    --tana-bar-icon-bg: #F1F3F4;
-    --tana-bar-icon-color: #5F6368;
-    --tana-bar-icon-bg-hover: #E8EAED;
+    /* Barra SIEMPRE negro claro, tanto en modo claro como oscuro del
+       dispositivo: así resalta sobre el fondo oscuro (#0E1117) y también
+       sobre el blanco. Ya no hay variante por prefers-color-scheme. */
+    --tana-bar-bg: #2B2E34;
+    --tana-bar-border: #5A5E66;
+    --tana-bar-text: #F1F3F4;
+    --tana-bar-placeholder: #B4B8BF;
+    --tana-bar-icon-bg: #41454C;
+    --tana-bar-icon-color: #F1F3F4;
+    --tana-bar-icon-bg-hover: #50555D;
 }
-@media (prefers-color-scheme: dark) {
-    div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) {
-        --tana-bar-bg: #2A2B2E;
-        --tana-bar-border: #4A4C50;
-        --tana-bar-text: #E8EAED;
-        --tana-bar-placeholder: #9AA0A6;
-        --tana-bar-icon-bg: #3C3D40;
-        --tana-bar-icon-color: #E8EAED;
-        --tana-bar-icon-bg-hover: #4A4C50;
-    }
+
+/* ---- Ficha "archivo cargado": aparece justo encima de la barra apenas
+   se selecciona la monografía (sin esperar a pulsar enviar). La crea el
+   JS de más abajo. ---- */
+.tana-file-chip {
+    position: fixed; left: 50%; transform: translateX(-50%);
+    bottom: 92px; z-index: 1000;
+    width: min(740px, 92vw); box-sizing: border-box;
+    display: flex; align-items: center; gap: 8px;
+    background: #2B2E34; color: #F1F3F4;
+    border: 1px solid #5A5E66; border-left: 4px solid #2ECC71;
+    border-radius: 14px; padding: 8px 14px;
+    font-size: 14px; font-weight: 600;
+    box-shadow: 0 4px 14px rgba(0,0,0,.35);
+}
+.tana-file-chip .tana-file-ok { color:#2ECC71; font-size:16px; }
+.tana-file-chip .tana-file-name { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.tana-file-chip .tana-file-hint { color:#B4B8BF; font-weight:400; font-size:12.5px; white-space:nowrap; }
+@media (max-width: 768px) {
+    .tana-file-chip { bottom: 78px; width: calc(100vw - 24px); }
+    .tana-file-chip .tana-file-hint { display:none; }
 }
 
 /* ---- Campo de texto: sin borde, transparente, tipo Google ---- */
@@ -1945,7 +1959,7 @@ st.components.v1.html(
                 'max-height': '64px', overflow: 'hidden', 'box-sizing': 'border-box',
                 'z-index': '999', background: 'var(--tana-bar-bg)',
                 border: '1px solid var(--tana-bar-border)', 'border-radius': '28px',
-                padding: '6px 10px', 'box-shadow': '0 2px 10px rgba(18,48,74,.10)',
+                padding: '6px 10px', 'box-shadow': '0 4px 16px rgba(0,0,0,.35)',
                 'margin-bottom': '18px',
             });
 
@@ -2008,9 +2022,44 @@ st.components.v1.html(
             // Si ya hay un archivo cargado, Streamlit muestra una ficha con
             // el nombre dentro del propio uploader; se oculta porque el
             // nombre ya se muestra aparte, debajo de la barra (st.caption).
-            pill.querySelectorAll('[data-testid="stFileUploaderFile"]').forEach(el => {
+            const fileEls = pill.querySelectorAll('[data-testid="stFileUploaderFile"]');
+            fileEls.forEach(el => {
                 set(el, { display: 'none' });
             });
+
+            // Feedback inmediato de la monografía cargada: el archivo vive
+            // dentro de un st.form, así que Python no se entera hasta
+            // enviar. El navegador sí conoce el archivo en cuanto se
+            // selecciona; lo leemos de la ficha oculta y lo mostramos en
+            // una ficha visible sobre la barra + un check verde en el "+".
+            let fileName = '';
+            if (fileEls.length) {
+                const f = fileEls[0];
+                const n = f.querySelector('[data-testid="stFileUploaderFileName"]');
+                fileName = ((n ? n.textContent : f.textContent) || '').trim();
+            }
+            const fakePlus = pill.querySelector('.tana-plus-fake');
+            if (fakePlus) {
+                const want = fileName ? '✓' : '+';
+                if (fakePlus.textContent !== want) fakePlus.textContent = want;
+                fakePlus.style.setProperty('background', fileName ? '#2ECC71' : 'var(--tana-bar-icon-bg)', 'important');
+                fakePlus.style.setProperty('color', fileName ? '#0B2A17' : 'var(--tana-bar-icon-color)', 'important');
+            }
+            let chip = doc.querySelector('.tana-file-chip');
+            if (fileName) {
+                if (!chip) {
+                    chip = doc.createElement('div');
+                    chip.className = 'tana-file-chip';
+                    chip.innerHTML = '<span class="tana-file-ok">✓</span>' +
+                        '<span class="tana-file-name"></span>' +
+                        '<span class="tana-file-hint">Monografía lista · pulsa ➤ para enviar</span>';
+                    doc.body.appendChild(chip);
+                }
+                const nameEl = chip.querySelector('.tana-file-name');
+                if (nameEl.textContent !== '📄 ' + fileName) nameEl.textContent = '📄 ' + fileName;
+            } else if (chip) {
+                chip.remove();
+            }
 
             // Campo de texto: sin borde ni fondo, como el buscador de
             // Google. Se limpia CADA div interno (no solo el primero) para
