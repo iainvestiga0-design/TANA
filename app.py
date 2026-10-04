@@ -1704,6 +1704,20 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .t
     }
 }
 
+
+/* ---- Celular: la barra superior de Streamlit (transparente) quedaba
+   ENCIMA de la cabecera de TANA y se quedaba con los toques, por eso el ☰
+   "no hacía nada". Se le quita la captura de toques para que lleguen a
+   la cabecera de TANA y al panel del historial. ---- */
+@media (max-width: 768px) {
+    header[data-testid="stHeader"],
+    header[data-testid="stHeader"] * { pointer-events: none !important; }
+    #tana-mobile-header, #tana-mobile-header * { pointer-events: auto !important; }
+    body.tana-side-open #tana-side-close { z-index: 1000002 !important; }
+    body.tana-side-open #tana-side-backdrop { z-index: 1000000 !important; }
+    body.tana-side-open section[data-testid="stSidebar"] { z-index: 1000001 !important; }
+}
+
 /* ---- Campo de texto: sin borde, transparente, tipo Google ---- */
 div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) [data-testid="stTextInput"] {
     width: 100%;
@@ -1889,9 +1903,9 @@ st.components.v1.html(
             if (old) return;
             const h = d.createElement('div');
             h.id = ID;
-            h.innerHTML = '<div style="font-weight:800;font-size:18px;color:#12304A;">TANA</div>' +
-                          '<button type="button" aria-label="Abrir menú" style="border:1px solid #DDE5EA;background:#fff;color:#12304A;width:40px;height:40px;border-radius:12px;font-size:22px;line-height:1;box-shadow:0 1px 4px rgba(18,48,74,.08);">☰</button>';
-            h.style.cssText = 'position:fixed;top:0;left:0;right:0;height:48px;z-index:1100;display:flex;align-items:center;justify-content:space-between;padding:0 12px;background:rgba(255,255,255,.96);backdrop-filter:blur(8px);border-bottom:1px solid #E7EBEF;box-sizing:border-box;';
+            h.innerHTML = '<button type="button" aria-label="Abrir menú" style="border:1px solid #DDE5EA;background:#fff;color:#12304A;width:40px;height:40px;border-radius:12px;font-size:22px;line-height:1;box-shadow:0 1px 4px rgba(18,48,74,.08);">☰</button>' +
+                          '<div style="font-weight:800;font-size:18px;color:#12304A;">TANA</div>';
+            h.style.cssText = 'position:fixed;top:0;left:0;right:0;height:48px;z-index:999999;pointer-events:auto;display:flex;align-items:center;justify-content:space-between;padding:0 12px;background:rgba(255,255,255,.96);backdrop-filter:blur(8px);border-bottom:1px solid #E7EBEF;box-sizing:border-box;';
             d.body.appendChild(h);
             // (El ☰ y el historial se manejan con el delegado de clics de abajo.)
         }
