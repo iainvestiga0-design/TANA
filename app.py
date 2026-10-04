@@ -1085,10 +1085,61 @@ EXCEL_TARGET_ALIASES = {
 }
 
 
+def _excel_normalize_text(text):
+    """Normaliza tildes, espacios y mayúsculas para reconocer pedidos naturales."""
+    import unicodedata
+    value = unicodedata.normalize("NFD", str(text or "").lower())
+    value = "".join(ch for ch in value if unicodedata.category(ch) != "Mn")
+    value = re.sub(r"\s+", " ", value).strip()
+    return value
+
+
 def _excel_target_from_question(question):
-    q = str(question or "").lower()
-    for target, aliases in EXCEL_TARGET_ALIASES.items():
-        if any(alias in q for alias in aliases):
+    # El usuario no tiene que usar una frase técnica como "¿cuadra...?".
+    # Frases naturales como "ayúdame con el estado de situación financiera",
+    # "revisa el balance" o "corrige mi ESF" también deben activar el trabajo.
+    q = _excel_normalize_text(question)
+
+    patrones = {
+        "ern": [
+            r"\bestado de resultados por naturaleza\b",
+            r"\bresultados por naturaleza\b",
+            r"\bresultado por naturaleza\b",
+            r"\bern\b",
+        ],
+        "erf": [
+            r"\bestado de resultados por funcion\b",
+            r"\bresultados por funcion\b",
+            r"\bresultado por funcion\b",
+            r"\berf\b",
+        ],
+        "esf": [
+            r"\bestado de situacion financiera\b",
+            r"\bestado de situacion\b",
+            r"\bsituacion financiera\b",
+            r"\bbalance general\b",
+            r"\bbalance\b",
+            r"\besf\b",
+        ],
+        "ht": [
+            r"\bhoja de trabajo\b",
+            r"\bhoja trabajo\b",
+            r"\bht\b",
+        ],
+        "asientos": [
+            r"\basientos? contables?\b",
+            r"\blibro diario\b",
+            r"\bdiario contable\b",
+        ],
+        "kardex": [
+            r"\bkardex\b",
+            r"\binventario\b",
+            r"\bpromedio ponderado\b",
+        ],
+    }
+
+    for target, regexes in patrones.items():
+        if any(re.search(pattern, q) for pattern in regexes):
             return target
     return "otro"
 
@@ -1151,10 +1202,12 @@ REGLA PRINCIPAL:
 Trabaja ÚNICAMENTE sobre el objetivo solicitado. NO desarrolles asientos, Kardex,
 compras, ventas, costos ni otros estados si el usuario no los pidió.
 
-Si el usuario pregunta si un estado "cuadra", valida sus totales y su coherencia
-contable usando SOLO la información existente en el archivo. Si encuentra un error,
-identifica la hoja y celda que debe corregirse cuando pueda determinarlo con seguridad.
-No inventes datos.
+Si el usuario usa expresiones naturales como "ayúdame con", "revisa", "verifica",
+"corrige", "analiza" o "¿cuadra?", entiende que quiere que TRABAJES sobre ese
+objetivo. No le pidas que reformule la pregunta si ya se puede identificar el estado
+o sección. Valida sus totales y su coherencia contable usando SOLO la información
+existente en el archivo. Si encuentra un error, identifica la hoja y celda que debe
+corregirse cuando pueda determinarlo con seguridad. No inventes datos.
 
 REGLAS POR OBJETIVO:
 - ERN: ingresos/naturaleza menos gastos por naturaleza debe producir el resultado
@@ -1201,9 +1254,9 @@ def _excel_auditar_y_corregir(uploaded_file, question):
         return {
             "resultado": {
                 "objetivo": "OTRO", "cuadra": False, "puede_corregir": False,
-                "resumen": "Necesito que indiques exactamente qué parte del Excel quieres revisar.",
+                "resumen": "Puedo trabajar sobre tu Excel. Solo necesito que menciones qué hoja o estado quieres que revise, por ejemplo: Estado de Situación Financiera, Estado de Resultados por Naturaleza, Hoja de Trabajo, Asientos o Kardex.",
                 "hallazgos": [], "correcciones": [],
-                "mensaje_error": "Ejemplo: 'TANA, ¿cuadra el Estado de Resultados por Naturaleza?'"
+                "mensaje_error": "Ejemplo: TANA, ayúdame con el Estado de Situación Financiera."
             },
             "buffer": None,
             "filename": None,
