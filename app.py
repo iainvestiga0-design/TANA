@@ -3858,43 +3858,176 @@ for col in ("I", "J", "K", "L", "M"):
 print("Hoja LD (Libro Diario) lista:", LD_LAST_ROW-1, "filas físicas")
 
 # ============================================================
-# HOJA: LM - Libro Mayor (generado, por cuenta usada en el motor)
+# HOJA: LM - Libro Mayor General
+# Se arma desde los asientos contables validados por TANA (los mismos del
+# Libro Diario / hoja Asientos_Contables). Cada cuenta de 5 dígitos que
+# aparece en el Diario sale UNA sola vez, con sus movimientos, el
+# TOTAL PERIODO y el TOTAL GENERAL (formato de Libro Mayor General).
 # ============================================================
-ws5 = wb.create_sheet("LM")
-headers = ["Código", "Denominación", "Naturaleza", "Total Debe S/", "Total Haber S/", "Saldo S/"]
-for i, h in enumerate(headers, start=1):
-    ws5.cell(row=1, column=i, value=h)
-style_header(ws5, 1, 1, 6)
-
-NATURALEZA = {
-    "10111": "Deudora", "12121": "Deudora", "20111": "Deudora", "40111": "Acreedora",
-    "42121": "Acreedora", "60111": "Deudora", "61111": "Acreedora", "62111": "Deudora",
-    "68415": "Deudora", "69121": "Deudora", "70121": "Acreedora", "39527": "Acreedora",
-    "41111": "Acreedora",
+_LM_MESES = ["ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO", "JULIO",
+             "AGOSTO", "SETIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"]
+_LM_MESES_TXT = {
+    "enero": 1, "febrero": 2, "marzo": 3, "abril": 4, "mayo": 5, "junio": 6,
+    "julio": 7, "agosto": 8, "setiembre": 9, "septiembre": 9, "octubre": 10,
+    "noviembre": 11, "diciembre": 12,
 }
-cuentas_usadas = sorted(set(x[3] for x in reglas))
 
-r = 2
-for cod in cuentas_usadas:
-    ws5.cell(row=r, column=1, value=cod)
-    ws5.cell(row=r, column=2, value=f'=VLOOKUP($A{r},PCGE,2,0)')
-    ws5.cell(row=r, column=3, value=NATURALEZA[cod])
-    ws5.cell(row=r, column=4, value=f'=SUMIFS(LD!$G:$G,LD!$E:$E,$A{r})')
-    ws5.cell(row=r, column=5, value=f'=SUMIFS(LD!$H:$H,LD!$E:$E,$A{r})')
-    ws5.cell(row=r, column=6, value=f'=IF($C{r}="Deudora",$D{r}-$E{r},$E{r}-$D{r})')
-    for col in range(1, 7):
-        ws5.cell(row=r, column=col).font = BLACK
-    for col in (4, 5, 6):
-        ws5.cell(row=r, column=col).number_format = '#,##0.00;(#,##0.00);"-"'
-    r += 1
-LM_LAST_ROW = r - 1
-ws5.freeze_panes = "A2"
-autofit(ws5, [10, 45, 14, 15, 15, 15])
-ws5.cell(row=1, column=1).comment = Comment(
-    "Nota: reemplacé el FILTER() de tu plantilla original por SUMIFS — FILTER es una función matricial "
-    "moderna que LibreOffice/algunas versiones no evalúan de forma confiable en archivos generados por script. "
-    "El resultado es el mismo saldo por cuenta, más robusto.", "Sistema")
-print("Hoja LM (Libro Mayor) lista:", LM_LAST_ROW-1, "cuentas")
+def _lm_parse_fecha(valor):
+    """Devuelve (año, mes) a partir de la fecha de un asiento, o None si no se puede leer."""
+    s = str(valor or "").strip().lower()
+    if not s:
+        return None
+    m = re.match(r"^(\d{4})[-/.](\d{1,2})(?:[-/.](\d{1,2}))?", s)          # 2026-02-15
+    if m and 1 <= int(m.group(2)) <= 12:
+        return int(m.group(1)), int(m.group(2))
+    m = re.match(r"^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})", s)              # 15/02/2026
+    if m and 1 <= int(m.group(2)) <= 12:
+        anio = int(m.group(3))
+        return (anio + 2000 if anio < 100 else anio), int(m.group(2))
+    for nombre, num in _LM_MESES_TXT.items():                                # 15 de febrero de 2026
+        if nombre in s:
+            a = re.search(r"(\d{4})", s)
+            return (int(a.group(1)) if a else 0), num
+    return None
+
+def _lm_num(valor):
+    try:
+        return round(float(valor or 0), 2)
+    except Exception:
+        return 0.0
+
+def construir_libro_mayor(ws, asientos, pcge_map):
+    """Escribe el Libro Mayor General en `ws`. Devuelve la cantidad de cuentas (bloques)."""
+    NUM = '#,##0.00;-#,##0.00;0.00'
+    thin = Side(style="thin", color="808080")
+    fill_cta = PatternFill("solid", fgColor="EAF0FA")
+
+    # 1) Recolectar movimientos por cuenta (cada cuenta una sola vez)
+    movs = {}                 # codigo -> [(orden_fecha, idx, periodo_txt, detalle, debe, haber)]
+    periodos = []
+    for idx, asiento in enumerate(asientos or [], start=1):
+        if not isinstance(asiento, dict):
+            continue
+        ym = _lm_parse_fecha(asiento.get("fecha"))
+        if ym:
+            periodos.append(ym)
+        numero = asiento.get("numero", idx)
+        glosa = str(asiento.get("glosa", "") or "").strip()
+        detalle = f"Asto. {numero}  -  {glosa}" if glosa else f"Asto. {numero}"
+        periodo_txt = _LM_MESES[ym[1] - 1] if ym else ""
+        orden = (ym[0] * 100 + ym[1]) if ym else 0
+        for line in asiento.get("lineas", []) or []:
+            code = str(line.get("codigo", "")).strip()
+            if not re.fullmatch(r"\d{5}", code):
+                continue
+            movs.setdefault(code, []).append(
+                (orden, idx, periodo_txt, detalle, _lm_num(line.get("debe")), _lm_num(line.get("haber"))))
+
+    # 2) Título según los meses que tengan los asientos
+    if periodos:
+        p_min, p_max = min(periodos), max(periodos)
+        if p_min == p_max:
+            periodo_titulo = f"{_LM_MESES[p_min[1]-1]} - {p_min[0]}" if p_min[0] else _LM_MESES[p_min[1]-1]
+        elif p_min[0] == p_max[0]:
+            periodo_titulo = f"{_LM_MESES[p_min[1]-1]} A {_LM_MESES[p_max[1]-1]} - {p_min[0]}"
+        else:
+            periodo_titulo = (f"{_LM_MESES[p_min[1]-1]} {p_min[0]} A {_LM_MESES[p_max[1]-1]} {p_max[0]}")
+    else:
+        periodo_titulo = ""
+    titulo = "LIBRO MAYOR GENERAL  *  SOLES"
+    if periodo_titulo:
+        titulo += f"  *  {periodo_titulo}"
+
+    ws.merge_cells("A1:E1")
+    ws["A1"] = titulo
+    ws["A1"].font = Font(name=FONT, size=12, bold=True)
+    ws["A1"].alignment = Alignment(horizontal="center")
+    for i, h in enumerate(["PERIODO", "D E T A L L E", "DEBE", "HABER", "SALDO"], start=1):
+        ws.cell(row=3, column=i, value=h)
+    style_header(ws, 3, 1, 5)
+    autofit(ws, [14, 64, 16, 16, 16])
+    ws.freeze_panes = "A4"
+    ws.sheet_view.showGridLines = False
+    ws.page_setup.orientation = "portrait"
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+
+    if not movs:
+        ws["A5"] = "Aún no hay asientos contables para mayorizar."
+        ws["A5"].font = GRAY
+        return 0
+
+    # 3) Un bloque por cuenta, ordenadas por código
+    r = 5
+    totales_debe, totales_haber = [], []
+    for code in sorted(movs.keys(), key=lambda x: (int(x), x)):
+        ws.cell(row=r, column=1, value="Cuenta...:").font = BOLD
+        nombre = str(pcge_map.get(code, "")).upper()
+        ws.cell(row=r, column=2, value=f"{code}   {nombre}").font = BOLD
+        for col in range(1, 6):
+            ws.cell(row=r, column=col).fill = fill_cta
+            ws.cell(row=r, column=col).border = Border(top=thin, bottom=thin)
+        r += 1
+
+        r_ini = r
+        for (_orden, _idx, periodo_txt, detalle, debe, haber) in sorted(movs[code], key=lambda m: (m[0], m[1])):
+            ws.cell(row=r, column=1, value=periodo_txt).font = BLACK
+            ws.cell(row=r, column=2, value=detalle).font = BLACK
+            ws.cell(row=r, column=3, value=debe).font = BLACK
+            ws.cell(row=r, column=4, value=haber).font = BLACK
+            if r == r_ini:
+                ws.cell(row=r, column=5, value=f"=C{r}-D{r}")
+            else:
+                ws.cell(row=r, column=5, value=f"=E{r-1}+C{r}-D{r}")
+            ws.cell(row=r, column=5).font = BLACK
+            for col in (3, 4, 5):
+                ws.cell(row=r, column=col).number_format = NUM
+            r += 1
+        r_fin = r - 1
+
+        ws.cell(row=r, column=2, value="*** TOTAL PERIODO ***").font = BOLD
+        ws.cell(row=r, column=2).alignment = Alignment(horizontal="center")
+        ws.cell(row=r, column=3, value=f"=SUM(C{r_ini}:C{r_fin})")
+        ws.cell(row=r, column=4, value=f"=SUM(D{r_ini}:D{r_fin})")
+        ws.cell(row=r, column=5, value=f"=C{r}-D{r}")
+        for col in (3, 4, 5):
+            ws.cell(row=r, column=col).font = BOLD
+            ws.cell(row=r, column=col).number_format = NUM
+            ws.cell(row=r, column=col).border = Border(top=thin)
+        r_per = r
+        r += 1
+
+        ws.cell(row=r, column=2, value="*** TOTAL GENERAL ***").font = BOLD
+        ws.cell(row=r, column=2).alignment = Alignment(horizontal="center")
+        ws.cell(row=r, column=3, value=f"=C{r_per}")
+        ws.cell(row=r, column=4, value=f"=D{r_per}")
+        ws.cell(row=r, column=5, value=f"=C{r}-D{r}")
+        for col in (3, 4, 5):
+            ws.cell(row=r, column=col).font = BOLD
+            ws.cell(row=r, column=col).number_format = NUM
+            ws.cell(row=r, column=col).border = Border(top=thin, bottom=Side(style="double", color="808080"))
+        totales_debe.append(f"C{r}")
+        totales_haber.append(f"D{r}")
+        r += 2
+
+    # 4) Cuadre del Mayor (suma de todas las cuentas: Debe debe ser igual a Haber)
+    ws.cell(row=r, column=2, value="SUMAS DEL LIBRO MAYOR").font = BOLD
+    ws.cell(row=r, column=2).alignment = Alignment(horizontal="center")
+    ws.cell(row=r, column=3, value="=" + "+".join(totales_debe))
+    ws.cell(row=r, column=4, value="=" + "+".join(totales_haber))
+    ws.cell(row=r, column=5, value=f'=IF(ABS(C{r}-D{r})<0.005,"CUADRADO","REVISAR")')
+    for col in (3, 4, 5):
+        ws.cell(row=r, column=col).font = BOLD
+        ws.cell(row=r, column=col).number_format = NUM
+        ws.cell(row=r, column=col).border = Border(top=thin, bottom=Side(style="double", color="808080"))
+    ws.cell(row=r, column=5).alignment = Alignment(horizontal="center")
+    return len(movs)
+
+ws5 = wb.create_sheet("LM")
+_pcge_lm = {str(cod).strip(): str(desc) for cod, desc in PCGE_DATA}
+_n_cuentas_lm = construir_libro_mayor(ws5, st.session_state.get("asientos_contables", []), _pcge_lm)
+print("Hoja LM (Libro Mayor) lista:", _n_cuentas_lm, "cuentas")
 
 # ============================================================
 # ============================================================
