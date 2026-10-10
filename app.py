@@ -1144,6 +1144,376 @@ EXCEL_TARGET_ALIASES = {
 }
 
 
+# ============================================================
+# LIBRO MAYOR GENERAL (helpers)
+# Se definen ANTES del flujo de Excel porque el flujo de revisión de Excel
+# los usa para agregar la hoja LM a una práctica que no la tiene, y la hoja
+# LM del Excel que genera TANA se arma con la misma función.
+# Cada cuenta que aparece en el Diario sale UNA sola vez, con sus
+# movimientos y su TOTAL GENERAL.
+# ============================================================
+_LM_MESES = ["ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO", "JULIO",
+             "AGOSTO", "SETIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"]
+_LM_MESES_TXT = {
+    "enero": 1, "febrero": 2, "marzo": 3, "abril": 4, "mayo": 5, "junio": 6,
+    "julio": 7, "agosto": 8, "setiembre": 9, "septiembre": 9, "octubre": 10,
+    "noviembre": 11, "diciembre": 12,
+}
+
+
+def _lm_parse_fecha(valor):
+    """Devuelve (año, mes) a partir de la fecha de un asiento, o None si no se puede leer."""
+    s = str(valor or "").strip().lower()
+    if not s:
+        return None
+    m = re.match(r"^(\d{4})[-/.](\d{1,2})(?:[-/.](\d{1,2}))?", s)          # 2026-02-15
+    if m and 1 <= int(m.group(2)) <= 12:
+        return int(m.group(1)), int(m.group(2))
+    m = re.match(r"^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})", s)              # 15/02/2026
+    if m and 1 <= int(m.group(2)) <= 12:
+        anio = int(m.group(3))
+        return (anio + 2000 if anio < 100 else anio), int(m.group(2))
+    for nombre, num in _LM_MESES_TXT.items():                                # 15 de febrero de 2026
+        if nombre in s:
+            a = re.search(r"(\d{4})", s)
+            return (int(a.group(1)) if a else 0), num
+    return None
+
+
+def _lm_num(valor):
+    try:
+        return round(float(valor or 0), 2)
+    except Exception:
+        return 0.0
+
+
+def construir_libro_mayor(ws, asientos, pcge_map, solo_5_digitos=True, nombres=None):
+    """Escribe el Libro Mayor General en `ws`. Devuelve la cantidad de cuentas (bloques).
+
+    asientos: lista de dicts {numero, fecha, glosa, lineas:[{codigo, debe, haber, ref?}]}.
+    Si una línea trae `ref` = (hoja, celda_debe, celda_haber), el Mayor queda ENLAZADO
+    con fórmulas a esas celdas del Libro Diario (se actualiza si el Diario cambia).
+    """
+    fuente = "Arial"
+    f_bold = Font(name=fuente, bold=True, size=10)
+    f_norm = Font(name=fuente, size=10, color="000000")
+    f_link = Font(name=fuente, size=10, color="008000")
+    NUM = '#,##0.00;-#,##0.00;0.00'
+    thin = Side(style="thin", color="808080")
+    fill_cta = PatternFill("solid", fgColor="EAF0FA")
+    nombres = nombres or {}
+    patron_cod = r"\d{5}" if solo_5_digitos else r"\d{2,7}"
+
+    # 1) Recolectar movimientos por cuenta (cada cuenta una sola vez)
+    movs = {}                 # codigo -> [(orden_fecha, idx, periodo_txt, detalle, debe, haber, ref)]
+    periodos = []
+    for idx, asiento in enumerate(asientos or [], start=1):
+        if not isinstance(asiento, dict):
+            continue
+        ym = _lm_parse_fecha(asiento.get("fecha"))
+        if ym:
+            periodos.append(ym)
+        numero = asiento.get("numero", idx)
+        glosa = str(asiento.get("glosa", "") or "").strip()
+        detalle = f"Asto. {numero}  -  {glosa}" if glosa else f"Asto. {numero}"
+        periodo_txt = _LM_MESES[ym[1] - 1] if ym else ""
+        orden = (ym[0] * 100 + ym[1]) if ym else 0
+        for line in asiento.get("lineas", []) or []:
+            code = str(line.get("codigo", "")).strip()
+            if not re.fullmatch(patron_cod, code):
+                continue
+            if line.get("denominacion") and code not in nombres:
+                nombres[code] = str(line.get("denominacion"))
+            movs.setdefault(code, []).append(
+                (orden, idx, periodo_txt, detalle, _lm_num(line.get("debe")), _lm_num(line.get("haber")), line.get("ref")))
+
+    # 2) Título según los meses que tengan los asientos
+    if periodos:
+        p_min, p_max = min(periodos), max(periodos)
+        if p_min == p_max:
+            periodo_titulo = f"{_LM_MESES[p_min[1]-1]} - {p_min[0]}" if p_min[0] else _LM_MESES[p_min[1]-1]
+        elif p_min[0] == p_max[0]:
+            periodo_titulo = f"{_LM_MESES[p_min[1]-1]} A {_LM_MESES[p_max[1]-1]} - {p_min[0]}"
+        else:
+            periodo_titulo = f"{_LM_MESES[p_min[1]-1]} {p_min[0]} A {_LM_MESES[p_max[1]-1]} {p_max[0]}"
+    else:
+        periodo_titulo = ""
+    titulo = "LIBRO MAYOR GENERAL  *  SOLES"
+    if periodo_titulo:
+        titulo += f"  *  {periodo_titulo}"
+
+    ws.merge_cells("A1:E1")
+    ws["A1"] = titulo
+    ws["A1"].font = Font(name=fuente, size=12, bold=True)
+    ws["A1"].alignment = Alignment(horizontal="center")
+    for i, h in enumerate(["PERIODO", "D E T A L L E", "DEBE", "HABER", "SALDO"], start=1):
+        c = ws.cell(row=3, column=i, value=h)
+        c.font = Font(name=fuente, bold=True, color="FFFFFF", size=10)
+        c.fill = PatternFill("solid", fgColor="1F4E78")
+        c.alignment = Alignment(horizontal="center", vertical="center")
+        c.border = Border(bottom=Side(style="thin"))
+    for i, w in enumerate([14, 64, 16, 16, 16], start=1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+    ws.freeze_panes = "A4"
+    ws.sheet_view.showGridLines = False
+    ws.page_setup.orientation = "portrait"
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+
+    if not movs:
+        ws["A5"] = "Aún no hay asientos contables para mayorizar."
+        ws["A5"].font = Font(name=fuente, size=9, color="808080")
+        return 0
+
+    def _ref(hoja, celda):
+        return "='" + str(hoja).replace("'", "''") + "'!" + celda
+
+    # 3) Un bloque por cuenta, ordenadas por código
+    r = 5
+    totales_debe, totales_haber = [], []
+    for code in sorted(movs.keys(), key=lambda x: (x.ljust(7, "0"), x)):
+        ws.cell(row=r, column=1, value="Cuenta...:").font = f_bold
+        nombre = str(pcge_map.get(code) or nombres.get(code) or "").upper()
+        ws.cell(row=r, column=2, value=f"{code}   {nombre}").font = f_bold
+        for col in range(1, 6):
+            ws.cell(row=r, column=col).fill = fill_cta
+            ws.cell(row=r, column=col).border = Border(top=thin, bottom=thin)
+        r += 1
+
+        r_ini = r
+        for (_orden, _idx, periodo_txt, detalle, debe, haber, ref) in sorted(movs[code], key=lambda m: (m[0], m[1])):
+            ws.cell(row=r, column=1, value=periodo_txt).font = f_norm
+            ws.cell(row=r, column=2, value=detalle).font = f_norm
+            if ref:
+                ws.cell(row=r, column=3, value=_ref(ref[0], ref[1])).font = f_link
+                ws.cell(row=r, column=4, value=_ref(ref[0], ref[2])).font = f_link
+            else:
+                ws.cell(row=r, column=3, value=debe).font = f_norm
+                ws.cell(row=r, column=4, value=haber).font = f_norm
+            if r == r_ini:
+                ws.cell(row=r, column=5, value=f"=C{r}-D{r}")
+            else:
+                ws.cell(row=r, column=5, value=f"=E{r-1}+C{r}-D{r}")
+            ws.cell(row=r, column=5).font = f_norm
+            for col in (3, 4, 5):
+                ws.cell(row=r, column=col).number_format = NUM
+            r += 1
+        r_fin = r - 1
+
+        ws.cell(row=r, column=2, value="*** TOTAL GENERAL ***").font = f_bold
+        ws.cell(row=r, column=2).alignment = Alignment(horizontal="center")
+        ws.cell(row=r, column=3, value=f"=SUM(C{r_ini}:C{r_fin})")
+        ws.cell(row=r, column=4, value=f"=SUM(D{r_ini}:D{r_fin})")
+        ws.cell(row=r, column=5, value=f"=C{r}-D{r}")
+        for col in (3, 4, 5):
+            ws.cell(row=r, column=col).font = f_bold
+            ws.cell(row=r, column=col).number_format = NUM
+            ws.cell(row=r, column=col).border = Border(top=thin, bottom=Side(style="double", color="808080"))
+        totales_debe.append(f"C{r}")
+        totales_haber.append(f"D{r}")
+        r += 2
+
+    # 4) Cuadre del Mayor (suma de todas las cuentas: Debe debe ser igual a Haber)
+    ws.cell(row=r, column=2, value="SUMAS DEL LIBRO MAYOR").font = f_bold
+    ws.cell(row=r, column=2).alignment = Alignment(horizontal="center")
+    ws.cell(row=r, column=3, value="=" + "+".join(totales_debe))
+    ws.cell(row=r, column=4, value="=" + "+".join(totales_haber))
+    ws.cell(row=r, column=5, value=f'=IF(ABS(C{r}-D{r})<0.005,"CUADRADO","REVISAR")')
+    for col in (3, 4, 5):
+        ws.cell(row=r, column=col).font = f_bold
+        ws.cell(row=r, column=col).number_format = NUM
+        ws.cell(row=r, column=col).border = Border(top=thin, bottom=Side(style="double", color="808080"))
+    ws.cell(row=r, column=5).alignment = Alignment(horizontal="center")
+    return len(movs)
+
+
+# ------------------------------------------------------------
+# Leer el Libro Diario de un Excel que subió el usuario
+# (formatos distintos: busca los encabezados Debe / Haber / Código).
+# ------------------------------------------------------------
+def _excel_codigo(v):
+    if v is None:
+        return None
+    if isinstance(v, float) and v.is_integer():
+        v = int(v)
+    s = re.sub(r"\.0$", "", str(v).strip())
+    return s if re.fullmatch(r"\d{2,7}", s) else None
+
+
+def _excel_fecha_txt(v):
+    if v is None or v == "":
+        return ""
+    if hasattr(v, "strftime"):
+        try:
+            return v.strftime("%Y-%m-%d")
+        except Exception:
+            return str(v)
+    return str(v)
+
+
+def _excel_leer_diario_hoja(ws, wsv):
+    """Devuelve (asientos, nombres) si la hoja parece un Libro Diario; si no, None."""
+    max_row = min(ws.max_row or 0, 6000)
+    max_col = min(ws.max_column or 0, 40)
+    if max_row < 3 or max_col < 3:
+        return None
+
+    def valor(r, c):
+        v = wsv.cell(r, c).value
+        return ws.cell(r, c).value if v is None else v
+
+    hdr = debe_c = haber_c = None
+    textos = {}
+    for r in range(1, min(max_row, 40) + 1):
+        t = {}
+        for c in range(1, max_col + 1):
+            v = valor(r, c)
+            if isinstance(v, str):
+                t[c] = _excel_normalize_text(v)
+        dcols = [c for c, x in t.items() if x.startswith("debe") and "haber" not in x]
+        hcols = [c for c, x in t.items() if x.startswith("haber") and "debe" not in x]
+        if dcols and hcols:
+            d = min(dcols)
+            hs = [c for c in hcols if c > d]
+            if hs:
+                hdr, debe_c, haber_c, textos = r, d, min(hs), t
+                break
+    if hdr is None:
+        return None
+
+    def hallar(patron, excluir=()):
+        for c, x in textos.items():
+            if c not in excluir and re.search(patron, x):
+                return c
+        return None
+
+    fecha_c = hallar(r"\bfecha\b")
+    num_c = hallar(r"asiento|correlativo|^n[°º]|^nro|^numero|^num\b")
+    glosa_c = hallar(r"glosa") or hallar(r"concepto|descripcion de la operacion|operacion")
+
+    muestra = range(hdr + 1, min(max_row, hdr + 80) + 1)
+
+    def fraccion_codigos(c):
+        vals = [valor(r, c) for r in muestra if valor(r, c) not in (None, "")]
+        if not vals:
+            return 0.0
+        return sum(1 for v in vals if _excel_codigo(v)) / len(vals)
+
+    cands = [c for c, x in textos.items() if re.search(r"codigo|cuenta|\bcta\b|\bcod\b", x)]
+    cands += [c for c in range(1, debe_c) if c not in cands and c not in (fecha_c, num_c)]
+    cod_c, mejor = None, 0.5
+    for c in cands:
+        fr = fraccion_codigos(c)
+        if fr > mejor:
+            cod_c, mejor = c, fr
+    if cod_c is None:
+        return None
+    nom_c = hallar(r"denominacion|nombre|cuenta|descripcion|detalle", excluir=(cod_c, glosa_c, fecha_c, num_c))
+    if nom_c is not None and fraccion_codigos(nom_c) > 0.5:
+        nom_c = None
+
+    asientos, nombres = [], {}
+    ctx, actual, ultimo_num = {}, None, None
+    for rr in range(hdr + 1, max_row + 1):
+        code = _excel_codigo(valor(rr, cod_c))
+        num_v = valor(rr, num_c) if num_c else None
+        fecha_v = valor(rr, fecha_c) if fecha_c else None
+        glosa_v = valor(rr, glosa_c) if glosa_c else None
+        nuevo = False
+        if num_c:
+            if num_v not in (None, "") and num_v != ultimo_num:
+                nuevo, ultimo_num = True, num_v
+        elif fecha_c or glosa_c:
+            par = (_excel_fecha_txt(fecha_v), str(glosa_v or ""))
+            if par != ("", "") and par != (ctx.get("fecha"), ctx.get("glosa")):
+                nuevo = True
+        if nuevo:
+            numero = num_v if num_c else len(asientos) + 1
+            if isinstance(numero, float) and numero.is_integer():
+                numero = int(numero)
+            ctx = {"numero": numero, "fecha": _excel_fecha_txt(fecha_v), "glosa": str(glosa_v or "")}
+            actual = None
+        if code is None:
+            continue
+        dcell, hcell = ws.cell(rr, debe_c), ws.cell(rr, haber_c)
+        if dcell.value in (None, "") and hcell.value in (None, ""):
+            continue
+        if actual is None:
+            actual = {"numero": ctx.get("numero", len(asientos) + 1), "fecha": ctx.get("fecha", ""),
+                      "glosa": ctx.get("glosa", ""), "lineas": []}
+            asientos.append(actual)
+        nombre = valor(rr, nom_c) if nom_c else None
+        if nombre and code not in nombres:
+            nombres[code] = str(nombre).strip()
+        actual["lineas"].append({
+            "codigo": code,
+            "debe": valor(rr, debe_c) if isinstance(valor(rr, debe_c), (int, float)) else 0,
+            "haber": valor(rr, haber_c) if isinstance(valor(rr, haber_c), (int, float)) else 0,
+            "ref": (ws.title, dcell.coordinate, hcell.coordinate),
+        })
+    total_lineas = sum(len(a["lineas"]) for a in asientos)
+    if total_lineas < 2:
+        return None
+    return asientos, nombres
+
+
+def _excel_agregar_libro_mayor(uploaded_bytes, suffix):
+    """Agrega la hoja LM (Libro Mayor) a un Excel que no la tiene, leyendo su Libro Diario."""
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    path = tmp.name
+    try:
+        tmp.write(uploaded_bytes)
+        tmp.close()
+        wb_f = openpyxl.load_workbook(path, keep_vba=(suffix == ".xlsm"))
+        wb_v = openpyxl.load_workbook(path, data_only=True)
+
+        for ws in wb_f.worksheets:
+            if re.search(r"\bmayor\b|^lm$", _excel_normalize_text(ws.title)):
+                return {"creado": False, "existente": ws.title,
+                        "mensaje": f"El archivo ya tiene la hoja «{ws.title}» (Libro Mayor); no la modifiqué."}
+
+        prioridad, otros = [], []
+        for ws in wb_f.worksheets:
+            n = _excel_normalize_text(ws.title)
+            if re.search(r"ht\b|hoja de trabajo|esf|erf|ern|kardex|situacion|resultado|compra|venta|costo|monograf|balance", n):
+                continue
+            (prioridad if re.search(r"asiento|diario|^ld$", n) else otros).append(ws)
+        encontrado = None
+        for ws in prioridad + otros:
+            res = _excel_leer_diario_hoja(ws, wb_v[ws.title])
+            if res:
+                encontrado = (ws, res)
+                break
+        if not encontrado:
+            return {"creado": False,
+                    "mensaje": "No encontré un Libro Diario (hoja de asientos con columnas Código, Debe y Haber) "
+                               "para armar el Libro Mayor."}
+        ws_diario, (asientos, nombres) = encontrado
+        pcge_map = {str(c).strip(): str(d) for c, d in PCGE_DATA}
+        ws_lm = wb_f.create_sheet("LM", index=wb_f.worksheets.index(ws_diario) + 1)
+        n_cuentas = construir_libro_mayor(ws_lm, asientos, pcge_map, solo_5_digitos=False, nombres=nombres)
+        wb_f.calculation.fullCalcOnLoad = True
+        out = io.BytesIO()
+        wb_f.save(out)
+        n_asientos = len(asientos)
+        n_lineas = sum(len(a["lineas"]) for a in asientos)
+        msg = (f"Agregué la hoja «LM» con el Libro Mayor: {n_cuentas} cuentas (cada una una sola vez), "
+               f"armado desde «{ws_diario.title}» ({n_asientos} asientos, {n_lineas} líneas). "
+               "Está enlazado con fórmulas al Libro Diario.")
+        return {
+            "creado": True, "buffer": out.getvalue(), "mensaje": msg, "cuentas": n_cuentas,
+            "correccion": {"hoja": "LM", "celda": "A1", "anterior": "(hoja nueva)",
+                           "valor": f"Libro Mayor creado ({n_cuentas} cuentas)",
+                           "motivo": f"La práctica no tenía Libro Mayor; se armó desde «{ws_diario.title}»."},
+        }
+    finally:
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+
+
 def _excel_normalize_text(text):
     """Normaliza tildes, espacios y mayúsculas para reconocer pedidos naturales."""
     import unicodedata
@@ -1196,6 +1566,10 @@ def _excel_target_from_question(question):
             r"\bpromedio ponderado\b",
         ],
     }
+
+    general = r"\b(todo|toda|practica|trabajo|revis\w*|complet\w*|corrig\w*|verific\w*)\b"
+    if re.search(r"\b(libro mayor|mayor|mayoriz\w*|lm)\b", q):
+        return "completo" if re.search(general, q) else "mayor"
 
     for target, regexes in patrones.items():
         if any(re.search(pattern, q) for pattern in regexes):
@@ -1298,7 +1672,7 @@ corregirse cuando pueda determinarlo con seguridad. No inventes datos.
 """
 
 
-def _excel_auditoria_prompt(question, filename, snapshot, target):
+def _excel_auditoria_prompt(question, filename, snapshot, target, nota_extra=""):
     bloque_regla = _EXCEL_REGLA_COMPLETO if target == "completo" else _EXCEL_REGLA_ESPECIFICA
     limite = 150000 if target == "completo" else 50000
     return f"""
@@ -1309,6 +1683,7 @@ PEDIDO DEL USUARIO: {question}
 OBJETIVO DETECTADO: {target}
 
 {bloque_regla}
+{nota_extra}
 REGLAS POR OBJETIVO:
 - ERN: ingresos/naturaleza menos gastos por naturaleza debe producir el resultado
   presentado; revisa subtotales y total final. No revises ERF ni ESF salvo que sea
@@ -1348,7 +1723,8 @@ VISTA ESTRUCTURAL DEL ARCHIVO:
 
 
 def _excel_auditar_y_corregir(uploaded_file, question):
-    """Audita un Excel exclusivamente según la pregunta y, si es seguro, genera una copia corregida."""
+    """Revisa un Excel según el pedido. Si el pedido es general, revisa todo el libro y
+    agrega lo que falta y se puede armar con certeza (por ejemplo el Libro Mayor)."""
     target = _excel_target_from_question(question)
     if target == "otro":
         return {
@@ -1363,106 +1739,155 @@ def _excel_auditar_y_corregir(uploaded_file, question):
         }
 
     uploaded_bytes = uploaded_file.getvalue()
+    suffix = "." + uploaded_file.name.rsplit(".", 1)[-1].lower()
+    es_xlsx = suffix in {".xlsx", ".xlsm", ".xltx", ".xltm"}
+    filename = _tana_nombre_descarga(uploaded_file.name, ".xlsx")
+
+    # 1) Libro Mayor: se arma directamente desde el Libro Diario del archivo (sin depender de Gemini).
+    lm = None
+    if target in ("completo", "mayor"):
+        if es_xlsx:
+            try:
+                lm = _excel_agregar_libro_mayor(uploaded_bytes, suffix)
+            except Exception as exc:
+                lm = {"creado": False, "mensaje": f"No pude armar el Libro Mayor: {exc}"}
+        else:
+            lm = {"creado": False, "mensaje": "Para agregar el Libro Mayor necesito el archivo en formato .xlsx; guárdalo como .xlsx y vuelve a subirlo."}
+    lm_creado = bool(lm and lm.get("creado"))
+    base_bytes = lm["buffer"] if lm_creado else uploaded_bytes
+
+    if target == "mayor":
+        resultado = {
+            "objetivo": "MAYOR", "cuadra": True if lm_creado else None, "puede_corregir": lm_creado,
+            "resumen": lm["mensaje"], "hallazgos": [], "correcciones": [], "mensaje_error": "",
+            "excel_descargable": True,
+        }
+        if lm_creado:
+            resultado["correcciones_aplicadas"] = [lm["correccion"]]
+        return {"resultado": resultado, "buffer": base_bytes, "filename": filename}
+
+    # 2) Revisión con Gemini (todo el libro si el pedido es general; si no, solo lo pedido).
+    nota_extra = ""
+    if lm_creado:
+        nota_extra = ("NOTA: TANA acaba de agregar automáticamente la hoja «LM» con el Libro Mayor, armada desde el "
+                      "Libro Diario de este archivo (enlazada con fórmulas). No la reportes como faltante.")
     snapshot = _excel_workbook_snapshot(uploaded_bytes, uploaded_file.name, compacto=(target == "completo"))
-    prompt = _excel_auditoria_prompt(question, uploaded_file.name, snapshot, target)
+    prompt = _excel_auditoria_prompt(question, uploaded_file.name, snapshot, target, nota_extra)
 
     profiles = get_gemini_profiles()
-    if not profiles:
-        raise RuntimeError("No está configurada ninguna GEMINI_API_KEY en Streamlit Secrets.")
-
-    suffix = "." + uploaded_file.name.rsplit(".", 1)[-1].lower()
     temp_path = None
     errors = []
+    result = None
+    gemini_error = None
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
-            tmp.write(uploaded_bytes)
-            temp_path = tmp.name
-        for profile in profiles:
-            client = get_gemini_client(profile["api_key"])
-            try:
-                gemini_file = client.files.upload(file=temp_path)
-                response = client.models.generate_content(
-                    model=profile["model"],
-                    contents=[gemini_file, prompt],
-                    config=types.GenerateContentConfig(response_mime_type="application/json"),
-                )
-                result = json.loads(response.text or "{}")
-                result["_ruta"] = profile["label"]
-                break
-            except Exception as exc:
-                errors.append((profile["label"], profile["model"], exc))
-                if not _is_gemini_fallback_error(exc):
-                    raise RuntimeError(_gemini_error_message(exc)) from exc
+        if not profiles:
+            gemini_error = "No está configurada ninguna GEMINI_API_KEY en Streamlit Secrets."
         else:
-            raise RuntimeError(_fallback_error_message(errors))
-
-        corrections = result.get("correcciones", []) if isinstance(result, dict) else []
-        corrected_buffer = None
-        can_correct = bool(result.get("puede_corregir")) and bool(corrections)
-        if can_correct and suffix in {".xlsx", ".xlsm", ".xltx", ".xltm"}:
-            tmp_in = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-            in_path = tmp_in.name
-            try:
-                tmp_in.write(uploaded_bytes)
-                tmp_in.close()
-                wb = openpyxl.load_workbook(in_path, keep_vba=(suffix == ".xlsm"))
-                applied = []
-                for corr in corrections:
-                    sheet = str(corr.get("hoja", "") or "")
-                    cell = str(corr.get("celda", "") or "")
-                    if sheet not in wb.sheetnames or not re.fullmatch(r"[A-Z]{1,3}[1-9][0-9]*", cell, re.I):
-                        continue
-                    # Seguridad: solo se modifica la hoja/objetivo que el usuario pidió.
-                    if target == "ern" and "ern" not in sheet.lower(): continue
-                    if target == "erf" and "erf" not in sheet.lower(): continue
-                    if target == "esf" and not any(x in sheet.lower() for x in ("esf", "situación", "situacion")): continue
-                    if target == "ht" and "ht" not in sheet.lower() and "hoja" not in sheet.lower(): continue
-                    if target == "kardex" and "kardex" not in sheet.lower(): continue
-                    value = corr.get("formula") if str(corr.get("formula", "") or "").strip() else corr.get("valor")
-                    if value is None:
-                        continue
-                    corr = dict(corr)
-                    corr["anterior"] = wb[sheet][cell].value
-                    wb[sheet][cell] = value
-                    applied.append(corr)
-                if applied:
-                    out = io.BytesIO()
-                    wb.calculation.fullCalcOnLoad = True
-                    wb.calculation.forceFullCalc = True
-                    wb.calculation.calcMode = "auto"
-                    wb.save(out)
-                    out.seek(0)
-                    corrected_buffer = out.getvalue()
-                    result["correcciones_aplicadas"] = applied
-                else:
-                    result["puede_corregir"] = False
-            finally:
-                try: os.remove(in_path)
-                except Exception: pass
-        elif can_correct:
-            result["puede_corregir"] = False
-            result["mensaje_error"] = (result.get("mensaje_error") or "") + " Para corregir automáticamente, vuelve a subir el archivo en formato .xlsx."
-
-        # Siempre ofrecemos un Excel descargable después de revisar un Excel.
-        # Si hubo correcciones seguras, contiene esas correcciones; si no, conserva
-        # el archivo original para que el usuario pueda guardarlo/revisarlo.
-        if corrected_buffer is None:
-            download_buffer = io.BytesIO(uploaded_bytes)
-            download_buffer.seek(0)
-            corrected_buffer = download_buffer.getvalue()
-            result["excel_descargable"] = True
-        else:
-            result["excel_descargable"] = True
-
-        return {
-            "resultado": result,
-            "buffer": corrected_buffer,
-            "filename": _tana_nombre_descarga(uploaded_file.name, ".xlsx"),
-        }
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                tmp.write(uploaded_bytes)
+                temp_path = tmp.name
+            for profile in profiles:
+                client = get_gemini_client(profile["api_key"])
+                try:
+                    gemini_file = client.files.upload(file=temp_path)
+                    response = client.models.generate_content(
+                        model=profile["model"],
+                        contents=[gemini_file, prompt],
+                        config=types.GenerateContentConfig(response_mime_type="application/json"),
+                    )
+                    parsed = json.loads(response.text or "{}")
+                    if isinstance(parsed, list) and parsed and isinstance(parsed[0], dict):
+                        parsed = parsed[0]
+                    if not isinstance(parsed, dict):
+                        raise ValueError("La respuesta de Gemini no tuvo el formato esperado.")
+                    result = parsed
+                    result["_ruta"] = profile["label"]
+                    break
+                except Exception as exc:
+                    errors.append((profile["label"], profile["model"], exc))
+                    if not _is_gemini_fallback_error(exc):
+                        gemini_error = _gemini_error_message(exc)
+                        break
+            else:
+                gemini_error = _fallback_error_message(errors)
     finally:
         if temp_path:
             try: os.remove(temp_path)
             except Exception: pass
+
+    if result is None:
+        if not lm_creado:
+            raise RuntimeError(gemini_error or "No se pudo revisar el Excel.")
+        # Gemini falló, pero el Libro Mayor sí se pudo agregar: se entrega eso.
+        resultado = {
+            "objetivo": "COMPLETO", "cuadra": None, "puede_corregir": True,
+            "resumen": lm["mensaje"] + " No pude completar el resto de la revisión en este momento; intenta de nuevo en unos minutos.",
+            "hallazgos": [], "correcciones": [], "mensaje_error": str(gemini_error or ""),
+            "correcciones_aplicadas": [lm["correccion"]], "excel_descargable": True,
+        }
+        return {"resultado": resultado, "buffer": base_bytes, "filename": filename}
+
+    # 3) Correcciones seguras propuestas por Gemini (se aplican sobre el libro ya con la hoja LM).
+    corrections = result.get("correcciones", []) if isinstance(result, dict) else []
+    corrected_buffer = None
+    applied = []
+    can_correct = bool(result.get("puede_corregir")) and bool(corrections)
+    if can_correct and es_xlsx:
+        tmp_in = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+        in_path = tmp_in.name
+        try:
+            tmp_in.write(base_bytes)
+            tmp_in.close()
+            wb = openpyxl.load_workbook(in_path, keep_vba=(suffix == ".xlsm"))
+            for corr in corrections:
+                sheet = str(corr.get("hoja", "") or "")
+                cell = str(corr.get("celda", "") or "")
+                if sheet not in wb.sheetnames or not re.fullmatch(r"[A-Z]{1,3}[1-9][0-9]*", cell, re.I):
+                    continue
+                # Seguridad: con un pedido específico solo se modifica la hoja/objetivo pedido.
+                if target == "ern" and "ern" not in sheet.lower(): continue
+                if target == "erf" and "erf" not in sheet.lower(): continue
+                if target == "esf" and not any(x in sheet.lower() for x in ("esf", "situación", "situacion")): continue
+                if target == "ht" and "ht" not in sheet.lower() and "hoja" not in sheet.lower(): continue
+                if target == "kardex" and "kardex" not in sheet.lower(): continue
+                value = corr.get("formula") if str(corr.get("formula", "") or "").strip() else corr.get("valor")
+                if value is None:
+                    continue
+                corr = dict(corr)
+                corr["anterior"] = wb[sheet][cell].value
+                wb[sheet][cell] = value
+                applied.append(corr)
+            if applied:
+                out = io.BytesIO()
+                wb.calculation.fullCalcOnLoad = True
+                wb.calculation.forceFullCalc = True
+                wb.calculation.calcMode = "auto"
+                wb.save(out)
+                out.seek(0)
+                corrected_buffer = out.getvalue()
+        finally:
+            try: os.remove(in_path)
+            except Exception: pass
+    elif can_correct:
+        result["mensaje_error"] = (result.get("mensaje_error") or "") + " Para corregir automáticamente, vuelve a subir el archivo en formato .xlsx."
+
+    todas = ([lm["correccion"]] if lm_creado else []) + applied
+    result["puede_corregir"] = bool(todas)
+    if todas:
+        result["correcciones_aplicadas"] = todas
+    if lm_creado:
+        result["resumen"] = lm["mensaje"] + " " + str(result.get("resumen") or "")
+    elif lm is not None and lm.get("mensaje"):
+        result.setdefault("hallazgos", [])
+        result["hallazgos"] = list(result["hallazgos"] or []) + [{
+            "hoja": "LM", "celda": "", "tipo": "ok" if lm.get("existente") else "advertencia", "detalle": lm["mensaje"]}]
+
+    # Siempre se ofrece un Excel descargable: con las correcciones si las hubo; si no, el original.
+    if corrected_buffer is None:
+        corrected_buffer = base_bytes
+    result["excel_descargable"] = True
+    return {"resultado": result, "buffer": corrected_buffer, "filename": filename}
+
 
 def _gemini_error_message(exc):
     msg = str(exc)
@@ -2056,6 +2481,7 @@ with st.sidebar:
             "asientos_contables", "asientos_validos", "errores_asientos", "alertas_asientos",
             "respuesta_tana", "respuesta_tana_ruta", "audio_tana_processed",
             "registro_compras", "registro_ventas", "kardex", "costos", "tipo_empresa",
+            "excel_auditoria", "excel_auditoria_buffer", "excel_auditoria_filename", "excel_auditoria_signature",
         ):
             st.session_state.pop(_key, None)
         st.rerun()
@@ -2458,54 +2884,60 @@ if "monografia_json" in st.session_state and not st.session_state.get("monografi
     )
 
 # EXCEL: flujo independiente. No se convierte en monografía ni dispara el motor contable.
-if uploaded_file and Path(uploaded_file.name).suffix.lower() in {".xls", ".xlsx", ".xlsm", ".xltx", ".xltm"}:
-    _excel_sig = f"excel|{uploaded_file.name}|{getattr(uploaded_file, 'size', 0)}|{pregunta_top.strip()}"
-    if enviar_top and pregunta_top.strip() and st.session_state.get("excel_auditoria_signature") != _excel_sig:
-        with st.spinner("TANA está revisando únicamente lo que pediste del Excel…"):
+_EXT_EXCEL = {".xls", ".xlsx", ".xlsm", ".xltx", ".xltm"}
+_es_excel_subido = bool(uploaded_file) and Path(uploaded_file.name).suffix.lower() in _EXT_EXCEL
+if _es_excel_subido:
+    if enviar_top and pregunta_top.strip():
+        _q_excel = pregunta_top.strip()
+        # Se muestra de inmediato lo que escribió el usuario y que TANA está trabajando.
+        st.markdown(
+            f'<div class="tana-bubble-user">{__import__("html").escape(_q_excel)}</div>',
+            unsafe_allow_html=True,
+        )
+        with st.spinner("TANA está revisando tu Excel… puede tardar uno o dos minutos."):
             try:
-                _excel_result = _excel_auditar_y_corregir(uploaded_file, pregunta_top.strip())
+                _excel_result = _excel_auditar_y_corregir(uploaded_file, _q_excel)
                 st.session_state["excel_auditoria"] = _excel_result["resultado"]
                 st.session_state["excel_auditoria_buffer"] = _excel_result["buffer"]
                 st.session_state["excel_auditoria_filename"] = _excel_result["filename"]
-                if str(_excel_result["resultado"].get("objetivo", "")).upper() != "OTRO":
-                    st.session_state["excel_auditoria_signature"] = _excel_sig
-                _tana_chat_add("user", pregunta_top.strip())
+                _tana_chat_add("user", __import__("html").escape(_q_excel))
                 _r = _excel_result["resultado"]
                 _tana_chat_add("assistant", _r.get("resumen", "Revisión de Excel realizada."))
                 st.rerun()
             except Exception as exc:
                 st.error(f"No se pudo revisar el Excel: {_gemini_error_message(exc)}")
                 st.stop()
-    elif uploaded_file and not pregunta_top.strip():
-        st.warning("📊 Para archivos Excel, indícale a TANA qué quieres. Ejemplos: «Revisa toda la práctica» o «¿Cuadra el Estado de Resultados por Naturaleza?»")
+    elif not pregunta_top.strip() and not st.session_state.get("excel_auditoria"):
+        st.warning("📊 Para archivos Excel, indícale a TANA qué quieres. Ejemplos: «Revisa toda la práctica y agrega lo que falte» o «¿Cuadra el Estado de Resultados por Naturaleza?»")
 
-    if st.session_state.get("excel_auditoria"):
-        _r = st.session_state["excel_auditoria"]
-        if _r.get("cuadra") is True:
-            st.success("✅ " + str(_r.get("resumen", "El estado solicitado cuadra.")))
-        elif _r.get("cuadra") is False:
-            st.error("❌ " + str(_r.get("resumen", "El estado solicitado no cuadra.")))
-        for _h in _r.get("hallazgos", []) or []:
-            _detalle = str(_h.get("detalle", "") or "")
-            if _detalle:
-                st.write(f"**{_h.get('hoja','')} { _h.get('celda','') }**: {_detalle}")
-        if _r.get("mensaje_error"):
-            st.info(str(_r.get("mensaje_error")))
-        if st.session_state.get("excel_auditoria_buffer"):
-            if _r.get("correcciones_aplicadas"):
-                st.success("📊 TANA realizó las correcciones seguras encontradas y preparó el Excel.")
-                for _c in _r.get("correcciones_aplicadas", []) or []:
-                    _nuevo = _c.get("formula") or _c.get("valor")
-                    st.caption(f"✏️ {_c.get('hoja','')} {_c.get('celda','')}: {_c.get('anterior','(vacío)')} → {_nuevo}  —  {_c.get('motivo','')}")
-            else:
-                st.info("📊 TANA revisó el Excel. No se aplicaron cambios automáticos; se entrega una copia del archivo revisado.")
-            st.download_button(
-                "⬇️ Descargar Excel revisado por TANA",
-                data=st.session_state["excel_auditoria_buffer"],
-                file_name=st.session_state.get("excel_auditoria_filename", "Excel - TANA.xlsx"),
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key="download_excel_corregido",
-            )
+# Resultado de la revisión del Excel: se muestra aunque el cuadro de carga ya se haya limpiado.
+if st.session_state.get("excel_auditoria") and (not uploaded_file or _es_excel_subido):
+    _r = st.session_state["excel_auditoria"]
+    if _r.get("cuadra") is True:
+        st.success("✅ Revisión terminada: todo cuadra.")
+    elif _r.get("cuadra") is False:
+        st.error("❌ Se encontraron errores en la práctica; el detalle está abajo.")
+    for _h in _r.get("hallazgos", []) or []:
+        _detalle = str(_h.get("detalle", "") or "")
+        if _detalle:
+            st.write(f"**{_h.get('hoja','')} { _h.get('celda','') }**: {_detalle}")
+    if _r.get("mensaje_error"):
+        st.info(str(_r.get("mensaje_error")))
+    if st.session_state.get("excel_auditoria_buffer"):
+        if _r.get("correcciones_aplicadas"):
+            st.success("📊 TANA realizó los cambios seguros y preparó el Excel.")
+            for _c in _r.get("correcciones_aplicadas", []) or []:
+                _nuevo = _c.get("formula") or _c.get("valor")
+                st.caption(f"✏️ {_c.get('hoja','')} {_c.get('celda','')}: {_c.get('anterior','(vacío)')} → {_nuevo}  —  {_c.get('motivo','')}")
+        else:
+            st.info("📊 TANA revisó el Excel. No se aplicaron cambios automáticos; se entrega una copia del archivo revisado.")
+        st.download_button(
+            "⬇️ Descargar Excel revisado por TANA",
+            data=st.session_state["excel_auditoria_buffer"],
+            file_name=st.session_state.get("excel_auditoria_filename", "Excel - TANA.xlsx"),
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="download_excel_corregido",
+        )
 
 # El archivo NO Excel sigue el flujo normal de monografías.
 if uploaded_file and Path(uploaded_file.name).suffix.lower() not in {".xls", ".xlsx", ".xlsm", ".xltx", ".xltm"}:
@@ -3905,160 +4337,8 @@ for col in ("I", "J", "K", "L", "M"):
 print("Hoja LD (Libro Diario) lista:", LD_LAST_ROW-1, "filas físicas")
 
 # ============================================================
-# HOJA: LM - Libro Mayor General
-# Se arma desde los asientos contables validados por TANA (los mismos del
-# Libro Diario / hoja Asientos_Contables). Cada cuenta de 5 dígitos que
-# aparece en el Diario sale UNA sola vez, con sus movimientos, el
-# TOTAL GENERAL (formato de Libro Mayor General).
+# HOJA: LM - Libro Mayor General (ver construir_libro_mayor, definida arriba)
 # ============================================================
-_LM_MESES = ["ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO", "JULIO",
-             "AGOSTO", "SETIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"]
-_LM_MESES_TXT = {
-    "enero": 1, "febrero": 2, "marzo": 3, "abril": 4, "mayo": 5, "junio": 6,
-    "julio": 7, "agosto": 8, "setiembre": 9, "septiembre": 9, "octubre": 10,
-    "noviembre": 11, "diciembre": 12,
-}
-
-def _lm_parse_fecha(valor):
-    """Devuelve (año, mes) a partir de la fecha de un asiento, o None si no se puede leer."""
-    s = str(valor or "").strip().lower()
-    if not s:
-        return None
-    m = re.match(r"^(\d{4})[-/.](\d{1,2})(?:[-/.](\d{1,2}))?", s)          # 2026-02-15
-    if m and 1 <= int(m.group(2)) <= 12:
-        return int(m.group(1)), int(m.group(2))
-    m = re.match(r"^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})", s)              # 15/02/2026
-    if m and 1 <= int(m.group(2)) <= 12:
-        anio = int(m.group(3))
-        return (anio + 2000 if anio < 100 else anio), int(m.group(2))
-    for nombre, num in _LM_MESES_TXT.items():                                # 15 de febrero de 2026
-        if nombre in s:
-            a = re.search(r"(\d{4})", s)
-            return (int(a.group(1)) if a else 0), num
-    return None
-
-def _lm_num(valor):
-    try:
-        return round(float(valor or 0), 2)
-    except Exception:
-        return 0.0
-
-def construir_libro_mayor(ws, asientos, pcge_map):
-    """Escribe el Libro Mayor General en `ws`. Devuelve la cantidad de cuentas (bloques)."""
-    NUM = '#,##0.00;-#,##0.00;0.00'
-    thin = Side(style="thin", color="808080")
-    fill_cta = PatternFill("solid", fgColor="EAF0FA")
-
-    # 1) Recolectar movimientos por cuenta (cada cuenta una sola vez)
-    movs = {}                 # codigo -> [(orden_fecha, idx, periodo_txt, detalle, debe, haber)]
-    periodos = []
-    for idx, asiento in enumerate(asientos or [], start=1):
-        if not isinstance(asiento, dict):
-            continue
-        ym = _lm_parse_fecha(asiento.get("fecha"))
-        if ym:
-            periodos.append(ym)
-        numero = asiento.get("numero", idx)
-        glosa = str(asiento.get("glosa", "") or "").strip()
-        detalle = f"Asto. {numero}  -  {glosa}" if glosa else f"Asto. {numero}"
-        periodo_txt = _LM_MESES[ym[1] - 1] if ym else ""
-        orden = (ym[0] * 100 + ym[1]) if ym else 0
-        for line in asiento.get("lineas", []) or []:
-            code = str(line.get("codigo", "")).strip()
-            if not re.fullmatch(r"\d{5}", code):
-                continue
-            movs.setdefault(code, []).append(
-                (orden, idx, periodo_txt, detalle, _lm_num(line.get("debe")), _lm_num(line.get("haber"))))
-
-    # 2) Título según los meses que tengan los asientos
-    if periodos:
-        p_min, p_max = min(periodos), max(periodos)
-        if p_min == p_max:
-            periodo_titulo = f"{_LM_MESES[p_min[1]-1]} - {p_min[0]}" if p_min[0] else _LM_MESES[p_min[1]-1]
-        elif p_min[0] == p_max[0]:
-            periodo_titulo = f"{_LM_MESES[p_min[1]-1]} A {_LM_MESES[p_max[1]-1]} - {p_min[0]}"
-        else:
-            periodo_titulo = (f"{_LM_MESES[p_min[1]-1]} {p_min[0]} A {_LM_MESES[p_max[1]-1]} {p_max[0]}")
-    else:
-        periodo_titulo = ""
-    titulo = "LIBRO MAYOR GENERAL  *  SOLES"
-    if periodo_titulo:
-        titulo += f"  *  {periodo_titulo}"
-
-    ws.merge_cells("A1:E1")
-    ws["A1"] = titulo
-    ws["A1"].font = Font(name=FONT, size=12, bold=True)
-    ws["A1"].alignment = Alignment(horizontal="center")
-    for i, h in enumerate(["PERIODO", "D E T A L L E", "DEBE", "HABER", "SALDO"], start=1):
-        ws.cell(row=3, column=i, value=h)
-    style_header(ws, 3, 1, 5)
-    autofit(ws, [14, 64, 16, 16, 16])
-    ws.freeze_panes = "A4"
-    ws.sheet_view.showGridLines = False
-    ws.page_setup.orientation = "portrait"
-    ws.page_setup.fitToWidth = 1
-    ws.page_setup.fitToHeight = 0
-    ws.sheet_properties.pageSetUpPr.fitToPage = True
-
-    if not movs:
-        ws["A5"] = "Aún no hay asientos contables para mayorizar."
-        ws["A5"].font = GRAY
-        return 0
-
-    # 3) Un bloque por cuenta, ordenadas por código
-    r = 5
-    totales_debe, totales_haber = [], []
-    for code in sorted(movs.keys(), key=lambda x: (int(x), x)):
-        ws.cell(row=r, column=1, value="Cuenta...:").font = BOLD
-        nombre = str(pcge_map.get(code, "")).upper()
-        ws.cell(row=r, column=2, value=f"{code}   {nombre}").font = BOLD
-        for col in range(1, 6):
-            ws.cell(row=r, column=col).fill = fill_cta
-            ws.cell(row=r, column=col).border = Border(top=thin, bottom=thin)
-        r += 1
-
-        r_ini = r
-        for (_orden, _idx, periodo_txt, detalle, debe, haber) in sorted(movs[code], key=lambda m: (m[0], m[1])):
-            ws.cell(row=r, column=1, value=periodo_txt).font = BLACK
-            ws.cell(row=r, column=2, value=detalle).font = BLACK
-            ws.cell(row=r, column=3, value=debe).font = BLACK
-            ws.cell(row=r, column=4, value=haber).font = BLACK
-            if r == r_ini:
-                ws.cell(row=r, column=5, value=f"=C{r}-D{r}")
-            else:
-                ws.cell(row=r, column=5, value=f"=E{r-1}+C{r}-D{r}")
-            ws.cell(row=r, column=5).font = BLACK
-            for col in (3, 4, 5):
-                ws.cell(row=r, column=col).number_format = NUM
-            r += 1
-        r_fin = r - 1
-
-        ws.cell(row=r, column=2, value="*** TOTAL GENERAL ***").font = BOLD
-        ws.cell(row=r, column=2).alignment = Alignment(horizontal="center")
-        ws.cell(row=r, column=3, value=f"=SUM(C{r_ini}:C{r_fin})")
-        ws.cell(row=r, column=4, value=f"=SUM(D{r_ini}:D{r_fin})")
-        ws.cell(row=r, column=5, value=f"=C{r}-D{r}")
-        for col in (3, 4, 5):
-            ws.cell(row=r, column=col).font = BOLD
-            ws.cell(row=r, column=col).number_format = NUM
-            ws.cell(row=r, column=col).border = Border(top=thin, bottom=Side(style="double", color="808080"))
-        totales_debe.append(f"C{r}")
-        totales_haber.append(f"D{r}")
-        r += 2
-
-    # 4) Cuadre del Mayor (suma de todas las cuentas: Debe debe ser igual a Haber)
-    ws.cell(row=r, column=2, value="SUMAS DEL LIBRO MAYOR").font = BOLD
-    ws.cell(row=r, column=2).alignment = Alignment(horizontal="center")
-    ws.cell(row=r, column=3, value="=" + "+".join(totales_debe))
-    ws.cell(row=r, column=4, value="=" + "+".join(totales_haber))
-    ws.cell(row=r, column=5, value=f'=IF(ABS(C{r}-D{r})<0.005,"CUADRADO","REVISAR")')
-    for col in (3, 4, 5):
-        ws.cell(row=r, column=col).font = BOLD
-        ws.cell(row=r, column=col).number_format = NUM
-        ws.cell(row=r, column=col).border = Border(top=thin, bottom=Side(style="double", color="808080"))
-    ws.cell(row=r, column=5).alignment = Alignment(horizontal="center")
-    return len(movs)
-
 ws5 = wb.create_sheet("LM")
 _pcge_lm = {str(cod).strip(): str(desc) for cod, desc in PCGE_DATA}
 _n_cuentas_lm = construir_libro_mayor(ws5, st.session_state.get("asientos_contables", []), _pcge_lm)
