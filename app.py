@@ -1343,7 +1343,7 @@ Devuelve ÚNICAMENTE JSON válido:
 No agregues texto fuera del JSON.
 
 VISTA ESTRUCTURAL DEL ARCHIVO:
-{json.dumps(snapshot, ensure_ascii=False)[:limite]}
+{json.dumps(snapshot, ensure_ascii=False, default=str)[:limite]}
 """
 
 
