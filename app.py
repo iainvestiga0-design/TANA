@@ -1200,10 +1200,22 @@ def _excel_target_from_question(question):
     for target, regexes in patrones.items():
         if any(re.search(pattern, q) for pattern in regexes):
             return target
+
+    # Pedido general ("revisa si está bien esta práctica", "complétalo", "corrige todo"):
+    # sin una hoja concreta, se revisa el libro completo en vez de pedirle al usuario
+    # que elija una hoja.
+    generales = [
+        r"\brevis\w*", r"\bverific\w*", r"\bcorrig\w*", r"\bcomplet\w*",
+        r"\banaliz\w*", r"\bayud\w*", r"\bpractica\b", r"\btrabajo\b",
+        r"\b(esta|estan) bien\b", r"\bcuadr\w*", r"\btodo\b", r"\btoda\b",
+        r"\btodos\b", r"\bterminar?\b", r"\bfinaliz\w*", r"\bhaz\w*",
+    ]
+    if any(re.search(pattern, q) for pattern in generales):
+        return "completo"
     return "otro"
 
 
-def _excel_workbook_snapshot(uploaded_bytes, filename):
+def _excel_workbook_snapshot(uploaded_bytes, filename, compacto=False):
     """Extrae una vista estructural del Excel para ayudar a validar sin alterar el original."""
     suffix = Path(filename).suffix.lower()
     if suffix not in {".xlsx", ".xlsm", ".xltx", ".xltm"}:
@@ -1232,7 +1244,11 @@ def _excel_workbook_snapshot(uploaded_bytes, filename):
                     cached = wsv.cell(r, c).value
                     if formula not in (None, "") or cached not in (None, ""):
                         nonempty = True
-                    vals.append({"cell": ws.cell(r, c).coordinate, "formula": formula, "valor": cached})
+                    if compacto:
+                        if formula not in (None, "") or cached not in (None, ""):
+                            vals.append({"cell": ws.cell(r, c).coordinate, "formula": formula, "valor": cached})
+                    else:
+                        vals.append({"cell": ws.cell(r, c).coordinate, "formula": formula, "valor": cached})
                 if nonempty:
                     rows.append(vals)
             sheets.append({
@@ -1249,15 +1265,27 @@ def _excel_workbook_snapshot(uploaded_bytes, filename):
             pass
 
 
-def _excel_auditoria_prompt(question, filename, snapshot, target):
-    return f"""
-Eres TANA, auditor contable de un archivo Excel peruano.
+_EXCEL_REGLA_COMPLETO = """REGLA PRINCIPAL (REVISIÓN COMPLETA):
+El usuario pidió revisar la práctica completa y que el trabajo quede completo.
+Revisa TODAS las hojas del archivo, una por una, y valida con SOLO la información
+que existe en el archivo:
+- Asientos / Libro Diario: cada asiento debe cumplir Debe = Haber; cuentas del PCGE coherentes con la glosa.
+- Libro Mayor: cada cuenta una sola vez; sus totales deben coincidir con el Diario.
+- Hoja de Trabajo: sumas, igualdad Debe/Haber y correcto traslado de saldos.
+- Estado de Situación Financiera: Activo = Pasivo + Patrimonio; subtotales y total.
+- Estados de Resultados (Naturaleza y Función): subtotales y resultado final; el resultado
+  debe ser el mismo en ERN, ERF, y el que entra al patrimonio del ESF.
+- Kardex / Registros: cantidades, costos y saldos consistentes con los asientos.
+- Coherencia entre hojas: los mismos importes deben coincidir entre HT, estados y asientos.
+Si falta una parte que una práctica completa debería tener (por ejemplo una hoja o un
+estado), repórtala como hallazgo de tipo "advertencia" indicando qué falta. NO inventes
+datos ni importes: solo completa lo que puede calcularse con certeza a partir de los datos
+del propio archivo (por ejemplo un total o una fórmula faltante o rota).
+En "resumen" indica claramente si la práctica está bien, qué errores encontraste, qué
+corregiste y qué le falta al estudiante. Usa "cuadra": true solo si no hay errores.
+"""
 
-ARCHIVO: {filename}
-OBJETIVO EXCLUSIVO DEL USUARIO: {question}
-OBJETIVO DETECTADO: {target}
-
-REGLA PRINCIPAL:
+_EXCEL_REGLA_ESPECIFICA = """REGLA PRINCIPAL:
 Trabaja ÚNICAMENTE sobre el objetivo solicitado. NO desarrolles asientos, Kardex,
 compras, ventas, costos ni otros estados si el usuario no los pidió.
 
@@ -1267,7 +1295,20 @@ objetivo. No le pidas que reformule la pregunta si ya se puede identificar el es
 o sección. Valida sus totales y su coherencia contable usando SOLO la información
 existente en el archivo. Si encuentra un error, identifica la hoja y celda que debe
 corregirse cuando pueda determinarlo con seguridad. No inventes datos.
+"""
 
+
+def _excel_auditoria_prompt(question, filename, snapshot, target):
+    bloque_regla = _EXCEL_REGLA_COMPLETO if target == "completo" else _EXCEL_REGLA_ESPECIFICA
+    limite = 150000 if target == "completo" else 50000
+    return f"""
+Eres TANA, auditor contable de un archivo Excel peruano.
+
+ARCHIVO: {filename}
+PEDIDO DEL USUARIO: {question}
+OBJETIVO DETECTADO: {target}
+
+{bloque_regla}
 REGLAS POR OBJETIVO:
 - ERN: ingresos/naturaleza menos gastos por naturaleza debe producir el resultado
   presentado; revisa subtotales y total final. No revises ERF ni ESF salvo que sea
@@ -1286,7 +1327,7 @@ el error y qué debe revisar el estudiante.
 
 Devuelve ÚNICAMENTE JSON válido:
 {{
-  "objetivo": "ERN|ERF|ESF|HT|ASIENTOS|KARDEX|OTRO",
+  "objetivo": "ERN|ERF|ESF|HT|ASIENTOS|KARDEX|COMPLETO|OTRO",
   "cuadra": true,
   "puede_corregir": true,
   "resumen": "respuesta breve y clara",
@@ -1302,7 +1343,7 @@ Devuelve ÚNICAMENTE JSON válido:
 No agregues texto fuera del JSON.
 
 VISTA ESTRUCTURAL DEL ARCHIVO:
-{json.dumps(snapshot, ensure_ascii=False)[:50000]}
+{json.dumps(snapshot, ensure_ascii=False)[:limite]}
 """
 
 
@@ -1312,17 +1353,17 @@ def _excel_auditar_y_corregir(uploaded_file, question):
     if target == "otro":
         return {
             "resultado": {
-                "objetivo": "OTRO", "cuadra": False, "puede_corregir": False,
-                "resumen": "Puedo trabajar sobre tu Excel. Solo necesito que menciones qué hoja o estado quieres que revise, por ejemplo: Estado de Situación Financiera, Estado de Resultados por Naturaleza, Hoja de Trabajo, Asientos o Kardex.",
+                "objetivo": "OTRO", "cuadra": None, "puede_corregir": False,
+                "resumen": "Puedo revisar toda tu práctica o solo una parte. Dime, por ejemplo: «revisa toda la práctica» o indícame qué hoja o estado quieres que revise: Estado de Situación Financiera, Estado de Resultados por Naturaleza, Hoja de Trabajo, Asientos o Kardex.",
                 "hallazgos": [], "correcciones": [],
-                "mensaje_error": "Ejemplo: TANA, ayúdame con el Estado de Situación Financiera."
+                "mensaje_error": "Ejemplo: TANA, revisa si está bien esta práctica y completa lo que falte."
             },
             "buffer": None,
             "filename": None,
         }
 
     uploaded_bytes = uploaded_file.getvalue()
-    snapshot = _excel_workbook_snapshot(uploaded_bytes, uploaded_file.name)
+    snapshot = _excel_workbook_snapshot(uploaded_bytes, uploaded_file.name, compacto=(target == "completo"))
     prompt = _excel_auditoria_prompt(question, uploaded_file.name, snapshot, target)
 
     profiles = get_gemini_profiles()
@@ -1380,6 +1421,8 @@ def _excel_auditar_y_corregir(uploaded_file, question):
                     value = corr.get("formula") if str(corr.get("formula", "") or "").strip() else corr.get("valor")
                     if value is None:
                         continue
+                    corr = dict(corr)
+                    corr["anterior"] = wb[sheet][cell].value
                     wb[sheet][cell] = value
                     applied.append(corr)
                 if applied:
@@ -2424,7 +2467,8 @@ if uploaded_file and Path(uploaded_file.name).suffix.lower() in {".xls", ".xlsx"
                 st.session_state["excel_auditoria"] = _excel_result["resultado"]
                 st.session_state["excel_auditoria_buffer"] = _excel_result["buffer"]
                 st.session_state["excel_auditoria_filename"] = _excel_result["filename"]
-                st.session_state["excel_auditoria_signature"] = _excel_sig
+                if str(_excel_result["resultado"].get("objetivo", "")).upper() != "OTRO":
+                    st.session_state["excel_auditoria_signature"] = _excel_sig
                 _tana_chat_add("user", pregunta_top.strip())
                 _r = _excel_result["resultado"]
                 _tana_chat_add("assistant", _r.get("resumen", "Revisión de Excel realizada."))
@@ -2433,7 +2477,7 @@ if uploaded_file and Path(uploaded_file.name).suffix.lower() in {".xls", ".xlsx"
                 st.error(f"No se pudo revisar el Excel: {_gemini_error_message(exc)}")
                 st.stop()
     elif uploaded_file and not pregunta_top.strip():
-        st.warning("📊 Para archivos Excel, TANA necesita que le indiques exactamente qué quieres revisar. Ejemplo: «¿Cuadra el Estado de Resultados por Naturaleza?»")
+        st.warning("📊 Para archivos Excel, indícale a TANA qué quieres. Ejemplos: «Revisa toda la práctica» o «¿Cuadra el Estado de Resultados por Naturaleza?»")
 
     if st.session_state.get("excel_auditoria"):
         _r = st.session_state["excel_auditoria"]
@@ -2450,6 +2494,9 @@ if uploaded_file and Path(uploaded_file.name).suffix.lower() in {".xls", ".xlsx"
         if st.session_state.get("excel_auditoria_buffer"):
             if _r.get("correcciones_aplicadas"):
                 st.success("📊 TANA realizó las correcciones seguras encontradas y preparó el Excel.")
+                for _c in _r.get("correcciones_aplicadas", []) or []:
+                    _nuevo = _c.get("formula") or _c.get("valor")
+                    st.caption(f"✏️ {_c.get('hoja','')} {_c.get('celda','')}: {_c.get('anterior','(vacío)')} → {_nuevo}  —  {_c.get('motivo','')}")
             else:
                 st.info("📊 TANA revisó el Excel. No se aplicaron cambios automáticos; se entrega una copia del archivo revisado.")
             st.download_button(
