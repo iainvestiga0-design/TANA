@@ -3862,7 +3862,7 @@ print("Hoja LD (Libro Diario) lista:", LD_LAST_ROW-1, "filas físicas")
 # Se arma desde los asientos contables validados por TANA (los mismos del
 # Libro Diario / hoja Asientos_Contables). Cada cuenta de 5 dígitos que
 # aparece en el Diario sale UNA sola vez, con sus movimientos, el
-# TOTAL PERIODO y el TOTAL GENERAL (formato de Libro Mayor General).
+# TOTAL GENERAL (formato de Libro Mayor General).
 # ============================================================
 _LM_MESES = ["ENERO", "FEBRERO", "MARZO", "ABRIL", "MAYO", "JUNIO", "JULIO",
              "AGOSTO", "SETIEMBRE", "OCTUBRE", "NOVIEMBRE", "DICIEMBRE"]
@@ -3986,22 +3986,10 @@ def construir_libro_mayor(ws, asientos, pcge_map):
             r += 1
         r_fin = r - 1
 
-        ws.cell(row=r, column=2, value="*** TOTAL PERIODO ***").font = BOLD
+        ws.cell(row=r, column=2, value="*** TOTAL GENERAL ***").font = BOLD
         ws.cell(row=r, column=2).alignment = Alignment(horizontal="center")
         ws.cell(row=r, column=3, value=f"=SUM(C{r_ini}:C{r_fin})")
         ws.cell(row=r, column=4, value=f"=SUM(D{r_ini}:D{r_fin})")
-        ws.cell(row=r, column=5, value=f"=C{r}-D{r}")
-        for col in (3, 4, 5):
-            ws.cell(row=r, column=col).font = BOLD
-            ws.cell(row=r, column=col).number_format = NUM
-            ws.cell(row=r, column=col).border = Border(top=thin)
-        r_per = r
-        r += 1
-
-        ws.cell(row=r, column=2, value="*** TOTAL GENERAL ***").font = BOLD
-        ws.cell(row=r, column=2).alignment = Alignment(horizontal="center")
-        ws.cell(row=r, column=3, value=f"=C{r_per}")
-        ws.cell(row=r, column=4, value=f"=D{r_per}")
         ws.cell(row=r, column=5, value=f"=C{r}-D{r}")
         for col in (3, 4, 5):
             ws.cell(row=r, column=col).font = BOLD
