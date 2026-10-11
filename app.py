@@ -629,6 +629,7 @@ def _tana_load_persistent_history(force=False):
     query = urlencode({
         "select": "id,title,created_at,monografia_json",
         "user_id": f"eq.{user_id}",
+        "title": f"not.like.{_EXCEL_HIST_PREFIJO}*",
         "order": "created_at.desc",
         "limit": "50",
     })
@@ -636,7 +637,8 @@ def _tana_load_persistent_history(force=False):
 
     items = []
     if isinstance(rows, list):
-        items = [_tana_history_item_from_row(r) for r in rows if str(r.get("title") or "").strip()]
+        items = [_tana_history_item_from_row(r) for r in rows
+                 if str(r.get("title") or "").strip() and not str(r.get("title")).startswith(_EXCEL_HIST_PREFIJO)]
         if not local_items:
             st.session_state.pop("tana_history_last_error", None)
 
@@ -700,7 +702,7 @@ def _tana_history_update(item_id, monografia_json):
 
 def _excel_estado_historial(nombre, chat_log, resultado=None, asientos_tana=None):
     """Estado de una revisión de Excel para guardarlo en el historial (JSON seguro)."""
-    estado = {"tipo": "excel_revision", "archivo": str(nombre), "chat": list(chat_log or [])[-30:]}
+    estado = {"tipo": "excel_revision", "archivo": str(nombre), "tiene_excel": True, "chat": list(chat_log or [])[-30:]}
     if isinstance(resultado, dict):
         r = {k: resultado.get(k) for k in ("objetivo", "cuadra", "resumen", "mensaje_error", "_archivo") if k in resultado}
         r["hallazgos"] = list(resultado.get("hallazgos") or [])[:60]
@@ -728,6 +730,51 @@ def _tana_save_history_excel(title, estado):
     existente["monografia_json"] = estado
     if not _tana_history_is_local(existente):
         _tana_history_update(existente.get("id"), estado)
+
+
+_EXCEL_HIST_PREFIJO = "tana-excel-archivo|"
+
+
+def _tana_excel_guardar_bytes(nombre, data):
+    """Guarda (mejor esfuerzo) una copia del Excel en una fila oculta del historial, para poder
+    seguir trabajando al reabrir el trabajo sin volver a subir el archivo."""
+    uid = _tana_history_user_id()
+    if not data or not uid or len(data) > 2_500_000:
+        return False
+    guardados = st.session_state.setdefault("excel_bytes_guardados", {})
+    huella = str(len(data))
+    if guardados.get(nombre) == huella:
+        return True
+    import base64
+    payload = {"tipo": "excel_archivo", "archivo": nombre, "b64": base64.b64encode(data).decode("ascii")}
+    titulo = _EXCEL_HIST_PREFIJO + nombre
+    q = urlencode({"select": "id", "user_id": f"eq.{uid}", "title": f"eq.{titulo}", "limit": "1"})
+    filas = _tana_history_request(f"tana_historial?{q}")
+    if isinstance(filas, list) and filas:
+        ok = _tana_history_update(filas[0].get("id"), payload) is not None
+    else:
+        ok = _tana_history_insert(titulo, payload) is not None
+    if ok:
+        guardados[nombre] = huella
+    return ok
+
+
+def _tana_excel_cargar_bytes(nombre):
+    uid = _tana_history_user_id()
+    if not uid:
+        return None
+    q = urlencode({"select": "monografia_json", "user_id": f"eq.{uid}",
+                   "title": f"eq.{_EXCEL_HIST_PREFIJO}{nombre}", "limit": "1"})
+    filas = _tana_history_request(f"tana_historial?{q}")
+    if isinstance(filas, list) and filas:
+        mj = filas[0].get("monografia_json")
+        if isinstance(mj, dict) and mj.get("b64"):
+            import base64
+            try:
+                return base64.b64decode(mj["b64"])
+            except Exception:
+                return None
+    return None
 
 
 def _tana_retry_history_sync():
@@ -762,6 +809,11 @@ def _tana_open_history(item):
         st.session_state["tana_chat"] = [{"role": "user", "content": f"📂 Abrí del historial: <b>{title}</b>"}] + chat_guardado
         st.session_state["excel_chat_log"] = chat_guardado
         st.session_state["excel_chat_archivo"] = data.get("archivo") or title
+        st.session_state.pop("excel_trabajo", None)
+        if data.get("tiene_excel"):
+            _bytes_x = _tana_excel_cargar_bytes(data.get("archivo") or title)
+            if _bytes_x:
+                st.session_state["excel_trabajo"] = {"name": data.get("archivo") or title, "bytes": _bytes_x}
         if isinstance(data.get("resultado"), dict):
             resultado = dict(data["resultado"])
             resultado["_archivo"] = data.get("archivo") or title
@@ -1679,13 +1731,14 @@ def _excel_asientos_tana(uploaded_bytes, suffix, aplicadas):
             d = round(sum(x["debe"] for x in lineas), 2)
             h = round(sum(x["haber"] for x in lineas), 2)
             if abs(d - h) > 0.005:
-                descuadres.append(f"asiento {a['numero']} (Debe {d:,.2f} / Haber {h:,.2f})")
+                descuadres.append({"asiento": a["numero"], "debe": d, "haber": h, "diferencia": round(d - h, 2)})
             out.append({"numero": a["numero"], "fecha": a["fecha"], "glosa": a["glosa"],
                         "documento": "", "operacion_numero": "", "lineas": lineas})
         if sin_cuenta:
             return {"ok": False, "motivo": "Hay cuentas del Diario que no encontré en el PCGE: " + ", ".join(sorted(set(sin_cuenta))) + "."}
         if descuadres:
-            return {"ok": False, "motivo": "Aún hay asientos que no cuadran: " + "; ".join(descuadres[:8]) + "."}
+            txt = "; ".join(f"asiento {x['asiento']} (Debe {x['debe']:,.2f} / Haber {x['haber']:,.2f})" for x in descuadres[:8])
+            return {"ok": False, "descuadres": descuadres, "motivo": "Aún hay asientos que no cuadran: " + txt + "."}
         return {"ok": True, "asientos": out, "notas": notas, "hoja": hoja, "no_reflejadas": no_reflejadas}
     finally:
         try:
@@ -1914,6 +1967,13 @@ El usuario te pidió que CORRIJAS. Por cada error que encuentres devuelve la cor
   la más coherente con el resto de la práctica y dilo en el motivo.
 - Si una hoja (LM, HT, ERN, ERF, ESF) no cuadra o no coincide con las demás, corrige la
   fórmula o celda que origina la diferencia; prefiere fórmulas a valores fijos.
+- MODIFICACIÓN MÍNIMA: cambia únicamente las celdas (montos o cuentas) estrictamente necesarias
+  para que todo cuadre. No reescribas glosas, formatos ni otras celdas.
+- Si el usuario pide cuadrar o saber qué montos deben ir: entrega SIEMPRE una corrección concreta
+  (hoja, celda y monto nuevo) por cada asiento que no cuadra. Si hay más de una causa posible,
+  elige la más probable según la glosa, el IGV (18% = 16% IGV + 2% IPM), los demás asientos y las
+  demás hojas, y escríbelo en el motivo como supuesto, con su sustento (PCGE, Ley del IGV, NIC/NIIF
+  o la norma que corresponda).
 - Solo deja de corregir si realmente falta información para decidirlo (no inventes importes);
   en ese caso explica qué dato falta.
 """
@@ -1992,86 +2052,10 @@ VISTA ESTRUCTURAL DEL ARCHIVO:
 """
 
 
-def _excel_auditar_y_corregir(uploaded_file, question, previos=None):
-    """Revisa un Excel según el pedido. Si el pedido es general, revisa todo el libro y
-    agrega lo que falta y se puede armar con certeza (por ejemplo el Libro Mayor)."""
-    target = _excel_target_from_question(question)
-    if target == "otro":
-        return {
-            "resultado": {
-                "objetivo": "OTRO", "cuadra": None, "puede_corregir": False,
-                "resumen": "Puedo revisar toda tu práctica o solo una parte. Dime, por ejemplo: «revisa toda la práctica» o indícame qué hoja o estado quieres que revise: Estado de Situación Financiera, Estado de Resultados por Naturaleza, Hoja de Trabajo, Asientos o Kardex.",
-                "hallazgos": [], "correcciones": [],
-                "mensaje_error": "Ejemplo: TANA, revisa si está bien esta práctica y completa lo que falte."
-            },
-            "buffer": None,
-            "filename": None,
-        }
-
-    uploaded_bytes = uploaded_file.getvalue()
-    suffix = "." + uploaded_file.name.rsplit(".", 1)[-1].lower()
-    es_xlsx = suffix in {".xlsx", ".xlsm", ".xltx", ".xltm"}
-    filename = _tana_nombre_descarga(uploaded_file.name, ".xlsx")
-
-    # 1) Libro Mayor: se arma directamente desde el Libro Diario del archivo (sin depender de Gemini).
-    lm = None
-    if target in ("completo", "mayor"):
-        if es_xlsx:
-            try:
-                lm = _excel_agregar_libro_mayor(uploaded_bytes, suffix)
-            except Exception as exc:
-                lm = {"creado": False, "mensaje": f"No pude armar el Libro Mayor: {exc}"}
-        else:
-            lm = {"creado": False, "mensaje": "Para agregar el Libro Mayor necesito el archivo en formato .xlsx; guárdalo como .xlsx y vuelve a subirlo."}
-    lm_creado = bool(lm and lm.get("creado"))
-    base_bytes = lm["buffer"] if lm_creado else uploaded_bytes
-
-    if target == "mayor":
-        resultado = {
-            "objetivo": "MAYOR", "cuadra": True if lm_creado else None, "puede_corregir": lm_creado,
-            "resumen": lm["mensaje"], "hallazgos": [], "correcciones": [], "mensaje_error": "",
-            "excel_descargable": True,
-        }
-        if lm_creado:
-            resultado["correcciones_aplicadas"] = [lm["correccion"]]
-        return {"resultado": resultado, "buffer": base_bytes, "filename": filename}
-
-    # 2) Revisión con Gemini (todo el libro si el pedido es general; si no, solo lo pedido).
-    nota_extra = ""
-    if lm_creado:
-        nota_extra = ("NOTA: TANA acaba de agregar automáticamente la hoja «LM» con el Libro Mayor, armada desde el "
-                      "Libro Diario de este archivo (enlazada con fórmulas). No la reportes como faltante.\n")
-    # Verificación matemática (sin IA) del Libro Diario: asientos que no cuadran y balance de comprobación.
-    chequeo = None
-    if es_xlsx and target in ("completo", "asientos"):
-        try:
-            chequeo = _excel_chequeo_diario(uploaded_bytes, suffix)
-        except Exception:
-            chequeo = None
-    if chequeo and chequeo.get("confiable"):
-        nota_extra += (
-            f"VERIFICACIÓN MATEMÁTICA DE TANA (calculada con Python sobre la hoja «{chequeo['hoja']}»; es confiable): "
-            f"{chequeo['n_asientos']} asientos, total Debe {chequeo['total_debe']:,.2f}, total Haber {chequeo['total_haber']:,.2f}.\n")
-        if chequeo["descuadres"]:
-            nota_extra += ("Asientos que NO cuadran (inclúyelos en hallazgos, explica la causa y corrígelos): "
-                           + json.dumps(chequeo["descuadres"], ensure_ascii=False) + "\n")
-        else:
-            nota_extra += "Todos los asientos del Diario cuadran (Debe = Haber).\n"
-        nota_extra += ("BALANCE DE COMPROBACIÓN calculado desde el Diario (úsalo para validar HT, LM, ERN, ERF y ESF): "
-                       + json.dumps(chequeo["balance"], ensure_ascii=False) + "\n")
-    if isinstance(previos, dict) and (previos.get("hallazgos") or previos.get("resumen")):
-        lineas_prev = [f"- {h.get('hoja','')} {h.get('celda','')}: {h.get('detalle','')}"
-                       for h in (previos.get("hallazgos") or [])[:40] if h.get("detalle")]
-        nota_extra += ("REVISIÓN ANTERIOR de este mismo archivo (el usuario te pide corregir esos errores):\n"
-                       + str(previos.get("resumen") or "") + "\n" + "\n".join(lineas_prev) + "\n")
-    snapshot = _excel_workbook_snapshot(uploaded_bytes, uploaded_file.name, compacto=(target == "completo"))
-    prompt = _excel_auditoria_prompt(question, uploaded_file.name, snapshot, target, nota_extra)
-
+def _excel_gemini_json(uploaded_bytes, suffix, prompt):
+    """Envía el Excel y el prompt a Gemini. Devuelve (resultado_json, mensaje_de_error)."""
     profiles = get_gemini_profiles()
-    temp_path = None
-    errors = []
-    result = None
-    gemini_error = None
+    temp_path, errors, result, gemini_error = None, [], None, None
     try:
         if not profiles:
             gemini_error = "No está configurada ninguna GEMINI_API_KEY en Streamlit Secrets."
@@ -2107,11 +2091,124 @@ def _excel_auditar_y_corregir(uploaded_file, question, previos=None):
         if temp_path:
             try: os.remove(temp_path)
             except Exception: pass
+    return result, gemini_error
+
+
+def _excel_aplicar_correcciones(base_bytes, suffix, target, corrections, hojas_nuevas):
+    """Aplica las correcciones (celda por celda) y las hojas nuevas. Devuelve (buffer|None, aplicadas)."""
+    applied = []
+    tmp_in = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    in_path = tmp_in.name
+    try:
+        tmp_in.write(base_bytes)
+        tmp_in.close()
+        wb = openpyxl.load_workbook(in_path, keep_vba=(suffix == ".xlsm"))
+        for corr in corrections or []:
+            if not isinstance(corr, dict):
+                continue
+            sheet = str(corr.get("hoja", "") or "")
+            cell = str(corr.get("celda", "") or "")
+            if sheet not in wb.sheetnames or not re.fullmatch(r"[A-Z]{1,3}[1-9][0-9]*", cell, re.I):
+                continue
+            # Seguridad: con un pedido específico solo se modifica la hoja/objetivo pedido.
+            if target == "ern" and "ern" not in sheet.lower(): continue
+            if target == "erf" and "erf" not in sheet.lower(): continue
+            if target == "esf" and not any(x in sheet.lower() for x in ("esf", "situación", "situacion")): continue
+            if target == "ht" and "ht" not in sheet.lower() and "hoja" not in sheet.lower(): continue
+            if target == "kardex" and "kardex" not in sheet.lower(): continue
+            value = corr.get("formula") if str(corr.get("formula", "") or "").strip() else corr.get("valor")
+            if value is None:
+                continue
+            corr = dict(corr)
+            corr["anterior"] = wb[sheet][cell].value
+            wb[sheet][cell] = value
+            applied.append(corr)
+        for _h in hojas_nuevas or []:
+            _rec = _excel_aplicar_hoja_nueva(wb, _h)
+            if _rec:
+                applied.append(_rec)
+        if not applied:
+            return None, applied
+        out = io.BytesIO()
+        wb.calculation.fullCalcOnLoad = True
+        wb.calculation.forceFullCalc = True
+        wb.calculation.calcMode = "auto"
+        wb.save(out)
+        return out.getvalue(), applied
+    finally:
+        try: os.remove(in_path)
+        except Exception: pass
+
+
+def _excel_auditar_y_corregir(uploaded_file, question, previos=None):
+    """Revisa un Excel según el pedido. Si el pedido es general, revisa todo el libro, corrige
+    solo los montos o cuentas que están mal (con su sustento) y arma el Excel en formato TANA."""
+    target = _excel_target_from_question(question)
+    if target == "otro":
+        target = "completo"      # con un Excel cargado, un pedido sin hoja concreta = revisión completa
+
+    uploaded_bytes = uploaded_file.getvalue()
+    suffix = "." + uploaded_file.name.rsplit(".", 1)[-1].lower()
+    es_xlsx = suffix in {".xlsx", ".xlsm", ".xltx", ".xltm"}
+    filename = _tana_nombre_descarga(uploaded_file.name, ".xlsx")
+
+    # 1) Libro Mayor: se arma directamente desde el Libro Diario del archivo (sin depender de Gemini).
+    lm = None
+    if target in ("completo", "mayor"):
+        if es_xlsx:
+            try:
+                lm = _excel_agregar_libro_mayor(uploaded_bytes, suffix)
+            except Exception as exc:
+                lm = {"creado": False, "mensaje": f"No pude armar el Libro Mayor: {exc}"}
+        else:
+            lm = {"creado": False, "mensaje": "Para agregar el Libro Mayor necesito el archivo en formato .xlsx; guárdalo como .xlsx y vuelve a subirlo."}
+    lm_creado = bool(lm and lm.get("creado"))
+    base_bytes = lm["buffer"] if lm_creado else uploaded_bytes
+
+    if target == "mayor":
+        resultado = {
+            "objetivo": "MAYOR", "cuadra": True if lm_creado else None, "puede_corregir": lm_creado,
+            "resumen": lm["mensaje"], "hallazgos": [], "correcciones": [], "mensaje_error": "",
+            "excel_descargable": True,
+        }
+        if lm_creado:
+            resultado["correcciones_aplicadas"] = [lm["correccion"]]
+        return {"resultado": resultado, "buffer": base_bytes, "filename": filename}
+
+    # 2) Revisión con Gemini (todo el libro si el pedido es general; si no, solo lo pedido).
+    nota_extra = ""
+    if lm_creado:
+        nota_extra = ("NOTA: TANA acaba de agregar automáticamente la hoja «LM» con el Libro Mayor, armada desde el "
+                      "Libro Diario de este archivo (enlazada con fórmulas). No la reportes como faltante.\n")
+    chequeo = None
+    if es_xlsx and target in ("completo", "asientos"):
+        try:
+            chequeo = _excel_chequeo_diario(uploaded_bytes, suffix)
+        except Exception:
+            chequeo = None
+    if chequeo and chequeo.get("confiable"):
+        nota_extra += (
+            f"VERIFICACIÓN MATEMÁTICA DE TANA (calculada con Python sobre la hoja «{chequeo['hoja']}»; es confiable): "
+            f"{chequeo['n_asientos']} asientos, total Debe {chequeo['total_debe']:,.2f}, total Haber {chequeo['total_haber']:,.2f}.\n")
+        if chequeo["descuadres"]:
+            nota_extra += ("Asientos que NO cuadran (inclúyelos en hallazgos, explica la causa y corrígelos): "
+                           + json.dumps(chequeo["descuadres"], ensure_ascii=False) + "\n")
+        else:
+            nota_extra += "Todos los asientos del Diario cuadran (Debe = Haber).\n"
+        nota_extra += ("BALANCE DE COMPROBACIÓN calculado desde el Diario (úsalo para validar HT, LM, ERN, ERF y ESF): "
+                       + json.dumps(chequeo["balance"], ensure_ascii=False) + "\n")
+    if isinstance(previos, dict) and (previos.get("hallazgos") or previos.get("resumen")):
+        lineas_prev = [f"- {h.get('hoja','')} {h.get('celda','')}: {h.get('detalle','')}"
+                       for h in (previos.get("hallazgos") or [])[:40] if h.get("detalle")]
+        nota_extra += ("REVISIÓN ANTERIOR de este mismo archivo (el usuario te pide corregir esos errores):\n"
+                       + str(previos.get("resumen") or "") + "\n" + "\n".join(lineas_prev) + "\n")
+    snapshot = _excel_workbook_snapshot(uploaded_bytes, uploaded_file.name, compacto=(target == "completo"))
+    prompt = _excel_auditoria_prompt(question, uploaded_file.name, snapshot, target, nota_extra)
+    result, gemini_error = _excel_gemini_json(uploaded_bytes, suffix, prompt)
 
     if result is None:
         if not lm_creado:
             raise RuntimeError(gemini_error or "No se pudo revisar el Excel.")
-        # Gemini falló, pero el Libro Mayor sí se pudo agregar: se entrega eso.
         resultado = {
             "objetivo": "COMPLETO", "cuadra": None, "puede_corregir": True,
             "resumen": lm["mensaje"] + " No pude completar el resto de la revisión en este momento; intenta de nuevo en unos minutos.",
@@ -2120,61 +2217,60 @@ def _excel_auditar_y_corregir(uploaded_file, question, previos=None):
         }
         return {"resultado": resultado, "buffer": base_bytes, "filename": filename}
 
-    # 3) Correcciones seguras propuestas por Gemini (se aplican sobre el libro ya con la hoja LM).
-    corrections = result.get("correcciones", []) if isinstance(result, dict) else []
-    corrected_buffer = None
-    applied = []
+    # 3) Correcciones propuestas (se aplican sobre el libro ya con la hoja LM).
+    corrections = result.get("correcciones") if isinstance(result.get("correcciones"), list) else []
     hojas_nuevas = result.get("hojas_nuevas") if isinstance(result.get("hojas_nuevas"), list) else []
-    if not isinstance(corrections, list):
-        corrections = []
-    can_correct = bool(corrections) or bool(hojas_nuevas)
-    if can_correct and es_xlsx:
-        tmp_in = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-        in_path = tmp_in.name
-        try:
-            tmp_in.write(base_bytes)
-            tmp_in.close()
-            wb = openpyxl.load_workbook(in_path, keep_vba=(suffix == ".xlsm"))
-            for corr in corrections:
-                sheet = str(corr.get("hoja", "") or "")
-                cell = str(corr.get("celda", "") or "")
-                if sheet not in wb.sheetnames or not re.fullmatch(r"[A-Z]{1,3}[1-9][0-9]*", cell, re.I):
-                    continue
-                # Seguridad: con un pedido específico solo se modifica la hoja/objetivo pedido.
-                if target == "ern" and "ern" not in sheet.lower(): continue
-                if target == "erf" and "erf" not in sheet.lower(): continue
-                if target == "esf" and not any(x in sheet.lower() for x in ("esf", "situación", "situacion")): continue
-                if target == "ht" and "ht" not in sheet.lower() and "hoja" not in sheet.lower(): continue
-                if target == "kardex" and "kardex" not in sheet.lower(): continue
-                value = corr.get("formula") if str(corr.get("formula", "") or "").strip() else corr.get("valor")
-                if value is None:
-                    continue
-                corr = dict(corr)
-                corr["anterior"] = wb[sheet][cell].value
-                wb[sheet][cell] = value
-                applied.append(corr)
-            for _h in hojas_nuevas:
-                _rec = _excel_aplicar_hoja_nueva(wb, _h)
-                if _rec:
-                    applied.append(_rec)
-            if applied:
-                out = io.BytesIO()
-                wb.calculation.fullCalcOnLoad = True
-                wb.calculation.forceFullCalc = True
-                wb.calculation.calcMode = "auto"
-                wb.save(out)
-                out.seek(0)
-                corrected_buffer = out.getvalue()
-        finally:
-            try: os.remove(in_path)
-            except Exception: pass
-    elif can_correct:
+    corrected_buffer, applied = None, []
+    if (corrections or hojas_nuevas) and es_xlsx:
+        corrected_buffer, applied = _excel_aplicar_correcciones(base_bytes, suffix, target, corrections, hojas_nuevas)
+    elif corrections or hojas_nuevas:
         result["mensaje_error"] = (result.get("mensaje_error") or "") + " Para corregir automáticamente, vuelve a subir el archivo en formato .xlsx."
+
+    # 4) Formato TANA (solo con revisión completa): se verifica que TODOS los asientos cuadren.
+    #    Si tras las correcciones aún hay descuadres, se hace una segunda pasada con ese dato.
+    tana, segunda_pasada = None, False
+    if target == "completo" and es_xlsx:
+        try:
+            tana = _excel_asientos_tana(uploaded_bytes, suffix, applied)
+        except Exception as exc:
+            tana = {"ok": False, "motivo": f"No pude convertir el Diario al formato TANA: {exc}"}
+        if not tana.get("ok") and tana.get("descuadres"):
+            segunda_pasada = True
+            actual = corrected_buffer or base_bytes
+            nota2 = (
+                "SEGUNDA PASADA: ya se aplicaron estas correcciones: "
+                + json.dumps([{"hoja": c.get("hoja"), "celda": c.get("celda"), "valor": c.get("valor"), "formula": c.get("formula")}
+                              for c in applied if c.get("celda")], ensure_ascii=False, default=str)
+                + ". Aun así estos asientos siguen sin cuadrar (cálculo matemático de TANA): "
+                + json.dumps(tana["descuadres"], ensure_ascii=False)
+                + ". Entrega correcciones adicionales concretas (hoja, celda y monto nuevo) para que Debe = Haber en cada uno, "
+                  "modificando solo lo estrictamente necesario y explicando el sustento de cada monto.\n")
+            try:
+                snap2 = _excel_workbook_snapshot(actual, uploaded_file.name, compacto=True)
+                prompt2 = _excel_auditoria_prompt(question + " (cuadra los asientos que siguen descuadrados)",
+                                                  uploaded_file.name, snap2, "completo", nota_extra + nota2)
+                result2, _err2 = _excel_gemini_json(actual, suffix, prompt2)
+            except Exception:
+                result2 = None
+            if isinstance(result2, dict):
+                c2 = result2.get("correcciones") if isinstance(result2.get("correcciones"), list) else []
+                buf2, applied2 = _excel_aplicar_correcciones(actual, suffix, "completo", c2, [])
+                if applied2:
+                    applied += applied2
+                    corrected_buffer = buf2 or corrected_buffer
+                result["hallazgos"] = list(result.get("hallazgos") or []) + list(result2.get("hallazgos") or [])
+                if result2.get("resumen"):
+                    result["resumen"] = str(result.get("resumen") or "") + " " + str(result2.get("resumen"))
+                try:
+                    tana = _excel_asientos_tana(uploaded_bytes, suffix, applied)
+                except Exception as exc:
+                    tana = {"ok": False, "motivo": f"No pude convertir el Diario al formato TANA: {exc}"}
 
     todas = ([lm["correccion"]] if lm_creado else []) + applied
     result["puede_corregir"] = bool(todas)
     if todas:
         result["correcciones_aplicadas"] = todas
+
     # Descuadres comprobados por TANA que la revisión no haya mencionado: se agregan como hallazgos.
     if chequeo and chequeo.get("confiable") and chequeo.get("descuadres"):
         result["hallazgos"] = list(result.get("hallazgos") or [])
@@ -2185,43 +2281,102 @@ def _excel_auditar_y_corregir(uploaded_file, question, previos=None):
                     "hoja": _d["hoja"], "celda": _d["rango"], "tipo": "error",
                     "detalle": (f"El asiento {_d['asiento']} no cuadra: Debe {_d['debe']:,.2f} y Haber {_d['haber']:,.2f} "
                                 f"(diferencia {_d['debe'] - _d['haber']:,.2f}). Verificado por TANA.")})
-        if not applied:
-            result["cuadra"] = False
     if lm_creado:
         result["resumen"] = lm["mensaje"] + " " + str(result.get("resumen") or "")
     elif lm is not None and lm.get("mensaje"):
-        result.setdefault("hallazgos", [])
-        result["hallazgos"] = list(result["hallazgos"] or []) + [{
+        result["hallazgos"] = list(result.get("hallazgos") or []) + [{
             "hoja": "LM", "celda": "", "tipo": "ok" if lm.get("existente") else "advertencia", "detalle": lm["mensaje"]}]
 
-    # Siempre se ofrece un Excel descargable: con las correcciones si las hubo; si no, el original.
     if corrected_buffer is None:
         corrected_buffer = base_bytes
     result["excel_descargable"] = True
 
-    # Formato TANA: HT, ERN, ERF, ESF y LM los genera el motor de TANA (siempre en el mismo formato
-    # y cuadrados) a partir de los asientos ya corregidos. Solo si todos los asientos cuadran.
-    asientos_tana, notas_tana = None, []
-    if target == "completo" and es_xlsx:
-        try:
-            tana = _excel_asientos_tana(uploaded_bytes, suffix, applied)
-        except Exception as exc:
-            tana = {"ok": False, "motivo": f"No pude convertir el Diario al formato TANA: {exc}"}
+    asientos_tana = None
+    if tana is not None:
         if tana.get("ok"):
-            asientos_tana, notas_tana = tana["asientos"], tana.get("notas", [])
-            extra = (" Armé tu práctica en formato TANA (Asientos, LM, HT, ERF, ERN y ESF) a partir de los asientos "
-                     "corregidos: descárgala con el botón «Descargar Excel».")
-            if notas_tana:
-                extra += " Cuentas llevadas al PCGE de 5 dígitos: " + ", ".join(notas_tana[:12]) + "."
+            asientos_tana = tana["asientos"]
+            result["cuadra"] = True
+            extra = (" Cuadré los asientos modificando solo los montos indicados (con su sustento) y armé tu práctica en formato "
+                     "TANA (Asientos, LM, HT, ERF, ERN y ESF): descárgala con el botón «Descargar Excel».")
+            if tana.get("notas"):
+                extra += " Cuentas llevadas al PCGE de 5 dígitos: " + ", ".join(tana["notas"][:12]) + "."
             if tana.get("no_reflejadas"):
                 extra += " Ojo: hubo correcciones con fórmulas que no pude reflejar en el formato TANA; revísalas."
             result["resumen"] = str(result.get("resumen") or "") + extra
         else:
-            result["resumen"] = (str(result.get("resumen") or "") +
-                                 " No generé el Excel en formato TANA: " + str(tana.get("motivo") or "") +
-                                 " Corrígelo y vuelve a pedirme la revisión completa.")
-    return {"resultado": result, "buffer": corrected_buffer, "filename": filename,
-            "asientos_tana": asientos_tana}
+            if tana.get("descuadres"):
+                result["cuadra"] = False
+            result["resumen"] = (str(result.get("resumen") or "") + " No generé el Excel en formato TANA: " +
+                                 str(tana.get("motivo") or "") +
+                                 " Puedes pedirme de nuevo «cuádralo y genera el Excel» o indicarme los montos correctos.")
+    return {"resultado": result, "buffer": corrected_buffer, "filename": filename, "asientos_tana": asientos_tana}
+
+
+class _ExcelGuardado:
+    """Archivo Excel guardado en la sesión: se comporta como el archivo subido (name, getvalue)."""
+    def __init__(self, name, data):
+        self.name = name
+        self._data = data
+        self.size = len(data or b"")
+
+    def getvalue(self):
+        return self._data
+
+
+def _excel_es_consulta(question):
+    """True si el mensaje es una pregunta/explicación (y no un pedido de revisar, corregir o generar)."""
+    q = _excel_normalize_text(question)
+    accion = re.search(r"corrig|correg|cuadr|complet|genera|generame|arregl|repar|agreg|\bhaz\b|hazme|descarg|nuevo excel|"
+                       r"revis|verific|mayoriz|libro mayor|que montos|montos? (correct|que deb|deben)|monto correcto", q)
+    if accion:
+        return False
+    return bool(re.search(r"^(hola|buenas|buenos|gracias|ok\b|por que|porque|como|que |cual|cuales|cuando|donde|para que|explic|dime|me puedes|puedes explicar|"
+                          r"segun|que norma|en que|quien)", q) or "?" in str(question))
+
+
+def _excel_preguntar(archivo, question, previo=None):
+    """Responde una pregunta sobre el Excel cargado y su revisión, con sustento normativo."""
+    suffix = "." + archivo.name.rsplit(".", 1)[-1].lower()
+    contexto = ""
+    if isinstance(previo, dict):
+        ctx = {k: previo.get(k) for k in ("resumen", "hallazgos", "correcciones_aplicadas")}
+        contexto = json.dumps(ctx, ensure_ascii=False, default=str)[:20000]
+    asientos = st.session_state.get("asientos_contables")
+    if asientos:
+        contexto += "\n\nASIENTOS EN FORMATO TANA:\n" + json.dumps(asientos, ensure_ascii=False, default=str)[:18000]
+    prompt = f"""Eres TANA, tutora y asistente contable para el Perú. Te apoyas en el Excel adjunto y en la revisión previa.
+
+REGLAS DE RESPUESTA:
+- Responde de forma clara y paso a paso, para que un estudiante o un empresario lo entienda.
+- Sustenta SIEMPRE con la norma o criterio aplicable: PCGE (cuenta y su dinámica), NIC/NIIF (o NIIF para Pymes)
+  que corresponda, Ley del IGV (18% = 16% IGV + 2% IPM), Ley del Impuesto a la Renta, normas de SUNAT y la Ley
+  General de Sociedades (capital, reparto del haber social, disolución, liquidación, fusión). Cita la norma por
+  su nombre; si no estás seguro del artículo exacto, no lo inventes.
+- Usa solo datos del archivo y de la revisión; no inventes importes. Si falta información, dilo y pide el dato.
+- Si te piden cuadrar o corregir, indica qué monto debe ir en cada celda y por qué, y recuérdale que escriba
+  «cuádralo y genera el Excel» para que TANA aplique los cambios y entregue el archivo.
+- Responsabilidad: si hay implicancias tributarias, legales o de negocio que dependan de hechos que no están en
+  el archivo, indícalo y recomienda validar con un contador público colegiado. Este apoyo es de orientación y educativo.
+
+REVISIÓN PREVIA Y CONTEXTO:
+{contexto or '(aún no hay revisión previa)'}
+
+PREGUNTA:
+{question}"""
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    path = tmp.name
+    try:
+        tmp.write(archivo.getvalue())
+        tmp.close()
+
+        def contenido(client):
+            return [client.files.upload(file=path), prompt]
+
+        response, _perfil = _generate_with_fallback(contenido, types.GenerateContentConfig())
+        return response.text or "No pude generar una respuesta."
+    finally:
+        try: os.remove(path)
+        except Exception: pass
 
 
 def _gemini_error_message(exc):
@@ -2818,7 +2973,7 @@ with st.sidebar:
             "registro_compras", "registro_ventas", "kardex", "costos", "tipo_empresa",
             "excel_auditoria", "excel_auditoria_buffer", "excel_auditoria_filename", "excel_auditoria_signature",
             "tana_desde_excel", "tana_excel_buffer", "tana_resuelto_signature",
-            "excel_chat_log", "excel_chat_archivo",
+            "excel_chat_log", "excel_chat_archivo", "excel_trabajo", "excel_bytes_guardados",
         ):
             st.session_state.pop(_key, None)
         st.rerun()
@@ -3221,30 +3376,55 @@ if "monografia_json" in st.session_state and not st.session_state.get("monografi
     )
 
 # EXCEL: flujo independiente. No se convierte en monografía ni dispara el motor contable.
+# El Excel queda guardado en la sesión: se puede seguir preguntando, pedir que lo cuadre y
+# generar el Excel corregido sin volver a subir el archivo.
 _EXT_EXCEL = {".xls", ".xlsx", ".xlsm", ".xltx", ".xltm"}
 _es_excel_subido = bool(uploaded_file) and Path(uploaded_file.name).suffix.lower() in _EXT_EXCEL
-if _es_excel_subido:
+_excel_guardado = st.session_state.get("excel_trabajo")
+_hay_excel_guardado = isinstance(_excel_guardado, dict) and bool(_excel_guardado.get("bytes"))
+_modo_excel = _es_excel_subido or (not uploaded_file and _hay_excel_guardado)
+if _modo_excel:
+    if _es_excel_subido:
+        _archivo_excel = _ExcelGuardado(uploaded_file.name, uploaded_file.getvalue())
+    else:
+        _archivo_excel = _ExcelGuardado(_excel_guardado["name"], _excel_guardado["bytes"])
+        st.caption(f"📎 Trabajando con **{_archivo_excel.name}**. Puedes seguir preguntando o pedir «cuádralo y genera el Excel» sin volver a subirlo.")
     if enviar_top and pregunta_top.strip():
         _q_excel = pregunta_top.strip()
+        _nombre_x = _archivo_excel.name
+        st.session_state["excel_trabajo"] = {"name": _nombre_x, "bytes": _archivo_excel.getvalue()}
         # Historial: se guarda el trabajo apenas se envía cualquier pregunta con este Excel.
-        if st.session_state.get("excel_chat_archivo") != uploaded_file.name:
+        if st.session_state.get("excel_chat_archivo") != _nombre_x:
             st.session_state["excel_chat_log"] = []
-            st.session_state["excel_chat_archivo"] = uploaded_file.name
+            st.session_state["excel_chat_archivo"] = _nombre_x
         _log_excel = st.session_state["excel_chat_log"]
         _log_excel.append({"role": "user", "content": __import__("html").escape(_q_excel)})
-        _tana_save_history_excel(uploaded_file.name, _excel_estado_historial(uploaded_file.name, _log_excel))
+        _tana_save_history_excel(_nombre_x, _excel_estado_historial(_nombre_x, _log_excel))
         # Se muestra de inmediato lo que escribió el usuario y que TANA está trabajando.
         st.markdown(
             f'<div class="tana-bubble-user">{__import__("html").escape(_q_excel)}</div>',
             unsafe_allow_html=True,
         )
-        with st.spinner("TANA está revisando tu Excel… puede tardar uno o dos minutos."):
+        _es_consulta = _excel_es_consulta(_q_excel)
+        with st.spinner("TANA está preparando la respuesta…" if _es_consulta
+                        else "TANA está revisando tu Excel… puede tardar uno o dos minutos."):
             try:
+                try:   # copia en el historial para poder seguir trabajando al reabrir el trabajo
+                    _tana_excel_guardar_bytes(_nombre_x, _archivo_excel.getvalue())
+                except Exception:
+                    pass
                 _prev = st.session_state.get("excel_auditoria")
-                if not (isinstance(_prev, dict) and _prev.get("_archivo") == uploaded_file.name):
+                if not (isinstance(_prev, dict) and _prev.get("_archivo") == _nombre_x):
                     _prev = None
-                _excel_result = _excel_auditar_y_corregir(uploaded_file, _q_excel, previos=_prev)
-                _excel_result["resultado"]["_archivo"] = uploaded_file.name
+                if _es_consulta:
+                    _resp_x = _excel_preguntar(_archivo_excel, _q_excel, _prev)
+                    _tana_chat_add("user", __import__("html").escape(_q_excel))
+                    _tana_chat_add("assistant", _resp_x)
+                    _log_excel.append({"role": "assistant", "content": _resp_x})
+                    _tana_save_history_excel(_nombre_x, _excel_estado_historial(_nombre_x, _log_excel, _prev, st.session_state.get("asientos_contables") if st.session_state.get("tana_desde_excel") else None))
+                    st.rerun()
+                _excel_result = _excel_auditar_y_corregir(_archivo_excel, _q_excel, previos=_prev)
+                _excel_result["resultado"]["_archivo"] = _nombre_x
                 st.session_state["excel_auditoria"] = _excel_result["resultado"]
                 st.session_state["excel_auditoria_buffer"] = _excel_result["buffer"]
                 st.session_state["excel_auditoria_filename"] = _excel_result["filename"]
@@ -3253,7 +3433,7 @@ if _es_excel_subido:
                 _tana_chat_add("assistant", _r.get("resumen", "Revisión de Excel realizada."))
                 _log_excel.append({"role": "assistant", "content": _r.get("resumen", "Revisión de Excel realizada.")})
                 _at = _excel_result.get("asientos_tana")
-                _tana_save_history_excel(uploaded_file.name, _excel_estado_historial(uploaded_file.name, _log_excel, _r, _at))
+                _tana_save_history_excel(_nombre_x, _excel_estado_historial(_nombre_x, _log_excel, _r, _at))
                 if _at:
                     # El motor de TANA genera LM, HT, ERF, ERN y ESF en su formato estándar.
                     for _k in ("monografia_json", "monografia_texto", "monografia_nombre", "registro_compras",
@@ -3262,14 +3442,15 @@ if _es_excel_subido:
                         st.session_state.pop(_k, None)
                     st.session_state["asientos_contables"] = _at
                     st.session_state["tana_desde_excel"] = True
-                    st.session_state["tana_file_signature"] = f"excel-tana|{uploaded_file.name}|{time.time()}"
+                    st.session_state["tana_file_signature"] = f"excel-tana|{_nombre_x}|{time.time()}"
                 st.rerun()
             except Exception as exc:
-                _log_excel.append({"role": "assistant", "content": f"No se pudo revisar el Excel: {_gemini_error_message(exc)}"})
-                _tana_save_history_excel(uploaded_file.name, _excel_estado_historial(uploaded_file.name, _log_excel))
-                st.error(f"No se pudo revisar el Excel: {_gemini_error_message(exc)}")
+                _msg_err = f"No se pudo completar la solicitud: {_gemini_error_message(exc)}"
+                _log_excel.append({"role": "assistant", "content": _msg_err})
+                _tana_save_history_excel(_nombre_x, _excel_estado_historial(_nombre_x, _log_excel))
+                st.error(_msg_err)
                 st.stop()
-    elif not pregunta_top.strip() and not st.session_state.get("excel_auditoria"):
+    elif _es_excel_subido and not pregunta_top.strip() and not st.session_state.get("excel_auditoria"):
         st.warning("📊 Para archivos Excel, indícale a TANA qué quieres. Ejemplos: «Revisa toda la práctica y agrega lo que falte» o «¿Cuadra el Estado de Resultados por Naturaleza?»")
 
 # Resultado de la revisión del Excel: se muestra aunque el cuadro de carga ya se haya limpiado.
@@ -3304,7 +3485,7 @@ if st.session_state.get("excel_auditoria") and (not uploaded_file or _es_excel_s
             key="download_excel_corregido",
         )
     elif _r.get("correcciones_aplicadas") or _r.get("hallazgos"):
-        st.caption("Este trabajo viene del historial. Para volver a descargar tu archivo con las correcciones, súbelo de nuevo y pide la revisión.")
+        st.caption("Este trabajo viene del historial y su archivo no está disponible. Súbelo de nuevo para volver a generar el Excel corregido.")
 
 # El archivo NO Excel sigue el flujo normal de monografías.
 if uploaded_file and Path(uploaded_file.name).suffix.lower() not in {".xls", ".xlsx", ".xlsm", ".xltx", ".xltm"}:
@@ -4376,6 +4557,7 @@ def _tana_contexto_tutor():
     return (
         "MONOGRAFÍA:\n" + mono[:14000]
         + "\n\nASIENTOS GENERADOS POR TANA:\n" + asientos_txt[:18000]
+        + "\n\nREVISIÓN DEL EXCEL:\n" + json.dumps(st.session_state.get("excel_auditoria") or {}, ensure_ascii=False, default=str)[:12000]
         + "\n\nMODELO DE COSTOS:\n" + json.dumps(
             st.session_state.get("costos", {}), ensure_ascii=False, indent=2
         )[:12000]
@@ -4388,6 +4570,10 @@ Responde la pregunta del estudiante usando únicamente el contexto proporcionado
 Explica con claridad por qué se hizo el asiento, cómo se obtuvo el importe, por qué
 una cuenta va al Debe o Haber y, cuando corresponda, cómo se relaciona con la HT,
 la distribución y ajustes, ERN, ERF o ESF.
+Sustenta cada respuesta con la norma o criterio aplicable (PCGE, NIC/NIIF, Ley del IGV, Ley del
+Impuesto a la Renta, normas de SUNAT, Ley General de Sociedades). Cita la norma por su nombre y no
+inventes artículos. Si hay implicancias tributarias o legales que dependan de datos que no están
+en el contexto, indícalo y recomienda validar con un contador público colegiado.
 No inventes información que no aparezca en el contexto.
  En los estados financieros respeta estrictamente estas reglas:
  ERF: 70 y 69 se detectan por prefijo; 94 y 95 son obligatorias; 78 se incluye solo si existe; 65 y 67 solo si existen sin destino a 94/95. No incluyas 79 ni agregues automáticamente otras cuentas del elemento 6 al ERF.
