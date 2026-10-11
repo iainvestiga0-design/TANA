@@ -6120,6 +6120,304 @@ ws9.freeze_panes='B5'
 # FIN DE ESTADOS FINANCIEROS
 # ============================================================
 
+# ============================================================
+# HOJA: LIBRO_CAJA_BANCOS — Formatos SUNAT 1.1 y 1.2
+# Solo LEE los asientos ya validados (asientos_contables) y la HT.
+# No modifica asientos, HT, estados ni ningún motor contable.
+#   Formato 1.1: movimientos del efectivo (cuentas 101, 102 y 103).
+#   Formato 1.2: movimientos de cuentas corrientes y demás cuentas 10
+#                (104 en adelante), agrupados por cuenta bancaria.
+# ============================================================
+_CB_MEDIOS = {
+    "001": "Depósito en cuenta",
+    "003": "Transferencia de fondos",
+    "005": "Tarjeta de débito",
+    "006": "Tarjeta de crédito emitida en el país",
+    "007": "Cheque (cláusula no negociable)",
+    "009": "Efectivo (demás casos)",
+    "999": "Otros medios de pago",
+}
+
+
+def _cb_orden_fecha(valor):
+    """Clave ordenable (año, mes, día) a partir de la fecha de un asiento."""
+    s = str(valor or "").strip().lower()
+    m = re.match(r"^(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})", s)
+    if m:
+        return (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+    m = re.match(r"^(\d{1,2})[-/.](\d{1,2})[-/.](\d{2,4})", s)
+    if m:
+        anio = int(m.group(3))
+        anio = anio + 2000 if anio < 100 else anio
+        return (anio, int(m.group(2)), int(m.group(1)))
+    ym = _lm_parse_fecha(s)
+    if ym:
+        d = re.search(r"\b(\d{1,2})\b", s)
+        return (ym[0], ym[1], int(d.group(1)) if d else 0)
+    return (0, 0, 0)
+
+
+def _cb_medio_pago(texto):
+    """Código de medio de pago (Tabla 1 SUNAT) deducido del texto; None si no hay pista."""
+    t = _excel_normalize_text(texto)
+    if not t:
+        return None
+    if re.search(r"transferencia|interbancari", t):
+        return "003"
+    if "cheque" in t:
+        return "007"
+    if "tarjeta" in t:
+        return "005" if "debito" in t else ("006" if "credito" in t else None)
+    if re.search(r"deposito|abono en cuenta", t):
+        return "001"
+    if "efectivo" in t:
+        return "009"
+    return None
+
+
+def _cb_recolectar(asientos, ops):
+    """Líneas de asiento que tocan cuentas 10 (efectivo y equivalentes), en orden cronológico."""
+    movs = []
+    for idx, a in enumerate(asientos or [], start=1):
+        if not isinstance(a, dict):
+            continue
+        glosa = str(a.get("glosa", "") or "").strip()
+        doc = str(a.get("documento", "") or "").strip()
+        op = ops.get(str(a.get("operacion_numero", "")), {}) or {}
+        medio = _cb_medio_pago(op.get("medio_pago")) or _cb_medio_pago(
+            " ".join([glosa, doc, str(op.get("descripcion", "") or ""), str(op.get("forma_pago", "") or "")])
+        ) or "999"
+        for line in a.get("lineas", []) or []:
+            if not isinstance(line, dict):
+                continue
+            code = str(line.get("codigo", "")).strip()
+            if not re.fullmatch(r"10\d{3}", code):
+                continue
+            debe, haber = _lm_num(line.get("debe")), _lm_num(line.get("haber"))
+            if debe == 0 and haber == 0:
+                continue
+            movs.append({
+                "orden": _cb_orden_fecha(a.get("fecha")), "idx": idx,
+                "fecha": str(a.get("fecha", "") or ""), "glosa": glosa, "doc": doc,
+                "codigo": code, "debe": debe, "haber": haber, "medio": medio,
+                "tercero": str(op.get("tercero", "") or ""),
+                "cuenta_bancaria": str(op.get("cuenta_bancaria", "") or ""),
+            })
+    movs.sort(key=lambda m: (m["orden"], m["idx"]))
+    return movs
+
+
+def construir_libro_caja_bancos(ws, asientos, pcge_map, ops, empresa, ht_last_row):
+    """Escribe el Libro Caja y Bancos (formatos SUNAT 1.1 y 1.2) en `ws`.
+    Devuelve la cantidad de movimientos; 0 si no hay cuentas 10 en los asientos."""
+    movs = _cb_recolectar(asientos, ops)
+    if not movs:
+        return 0
+
+    NUM = '#,##0.00;(#,##0.00);"-"'
+    azul = PatternFill("solid", fgColor="D9E1F2")
+    gris = PatternFill("solid", fgColor="EAF0FA")
+    borde = Border(top=Side(style="thin", color="808080"), bottom=Side(style="thin", color="808080"))
+    doble = Border(top=Side(style="thin", color="808080"), bottom=Side(style="double", color="808080"))
+
+    # --- Encabezado general (período, RUC, razón social) ---
+    ordenes = [m["orden"] for m in movs if m["orden"] != (0, 0, 0)]
+    periodo = ""
+    if ordenes:
+        p0, p1 = min(ordenes), max(ordenes)
+        if (p0[0], p0[1]) == (p1[0], p1[1]):
+            periodo = f"{_LM_MESES[p0[1]-1]} - {p0[0]}"
+        elif p0[0] == p1[0]:
+            periodo = f"{_LM_MESES[p0[1]-1]} A {_LM_MESES[p1[1]-1]} - {p0[0]}"
+        else:
+            periodo = f"{_LM_MESES[p0[1]-1]} {p0[0]} A {_LM_MESES[p1[1]-1]} {p1[0]}"
+
+    ws.merge_cells("A1:K1")
+    ws["A1"] = "LIBRO CAJA Y BANCOS"
+    ws["A1"].font = TITLE_FONT
+    ws["A1"].alignment = Alignment(horizontal="center")
+    datos = [
+        ("PERÍODO", periodo, False),
+        ("RUC", "", True),
+        ("APELLIDOS Y NOMBRES, DENOMINACIÓN O RAZÓN SOCIAL", empresa, False),
+    ]
+    r = 3
+    for etiqueta, valor, editable in datos:
+        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=2)
+        ws.cell(r, 1, etiqueta).font = BOLD
+        ws.cell(r, 1).alignment = Alignment(wrap_text=True, vertical="center")
+        ws.merge_cells(start_row=r, start_column=3, end_row=r, end_column=6)
+        c = ws.cell(r, 3, valor)
+        c.font = BLACK
+        if editable:
+            c.fill = INPUT_FILL
+        ws.row_dimensions[r].height = 30 if len(etiqueta) > 20 else 16
+        r += 1
+    ws.cell(r, 3, "El RUC (celda amarilla) debe completarse; TANA no lo obtiene de la monografía.").font = GRAY
+    r += 2
+
+    grupos_ht = f"HT!$A$4:$A${ht_last_row}"
+
+    def bloque(r, formato, titulo, es_12, lista):
+        ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=11)
+        ws.cell(r, 1, f"FORMATO {formato}: {titulo}").font = Font(name=FONT, bold=True, size=11)
+        for c in range(1, 12):
+            ws.cell(r, c).fill = azul
+        r += 1
+        # Fila de grupos de encabezado
+        ws.merge_cells(start_row=r, start_column=7, end_row=r, end_column=8)
+        ws.cell(r, 7, "CUENTA CONTABLE ASOCIADA A LA OPERACIÓN")
+        ws.merge_cells(start_row=r, start_column=9, end_row=r, end_column=11)
+        ws.cell(r, 9, "SALDOS Y MOVIMIENTOS")
+        style_header(ws, r, 1, 11)
+        r += 1
+        if es_12:
+            hdr = ["Número correlativo del registro o código único de la operación", "Fecha de la operación",
+                   "Descripción de la operación", "Medio de pago",
+                   "Girador o beneficiario (apellidos y nombres, denominación o razón social)",
+                   "Número de transacción bancaria / documento sustentatorio",
+                   "Código", "Denominación", "Deudores", "Acreedores", "Saldo (referencial)"]
+        else:
+            hdr = ["Número correlativo del registro o código único de la operación", "Fecha de la operación",
+                   "Descripción de la operación", "", "", "",
+                   "Código", "Denominación", "Deudores", "Acreedores", "Saldo (referencial)"]
+        for i, h in enumerate(hdr, start=1):
+            ws.cell(r, i, h)
+        if not es_12:
+            ws.merge_cells(start_row=r, start_column=3, end_row=r, end_column=6)
+        style_header(ws, r, 1, 11)
+        ws.row_dimensions[r].height = 54
+        r += 1
+
+        if not lista:
+            ws.cell(r, 1, "Sin movimientos en este formato.").font = GRAY
+            return r + 2, []
+
+        cuentas = sorted({m["codigo"] for m in lista})
+        correl = 1
+        totales = []
+        for code in cuentas:
+            propios = [m for m in lista if m["codigo"] == code]
+            nombre = str(pcge_map.get(code, "") or "").upper()
+            ws.cell(r, 1, "Cuenta:").font = BOLD
+            ws.cell(r, 3, f"{code}  {nombre}").font = BOLD
+            cta_banc = next((m["cuenta_bancaria"] for m in propios if m["cuenta_bancaria"]), "")
+            if es_12 and cta_banc:
+                ws.cell(r, 5, f"N° de cuenta bancaria: {cta_banc}").font = BOLD
+            for c in range(1, 12):
+                ws.cell(r, c).fill = gris
+                ws.cell(r, c).border = borde
+            r += 1
+            r_ini = r
+            for m in propios:
+                ws.cell(r, 1, correl).alignment = Alignment(horizontal="center")
+                ws.cell(r, 2, m["fecha"])
+                if es_12:
+                    ws.cell(r, 3, m["glosa"])
+                    medio = m["medio"]
+                    ws.cell(r, 4, f"{medio} - {_CB_MEDIOS.get(medio, '')}")
+                    ws.cell(r, 5, m["tercero"])
+                    ws.cell(r, 6, m["doc"])
+                else:
+                    ws.merge_cells(start_row=r, start_column=3, end_row=r, end_column=6)
+                    ws.cell(r, 3, m["glosa"] + (f"  (Doc.: {m['doc']})" if m["doc"] else ""))
+                ws.cell(r, 7, code)
+                ws.cell(r, 8, nombre)
+                ws.cell(r, 9, m["debe"])
+                ws.cell(r, 10, m["haber"])
+                ws.cell(r, 11, f"=I{r}-J{r}" if r == r_ini else f"=K{r-1}+I{r}-J{r}")
+                for c in range(1, 12):
+                    ws.cell(r, c).font = BLACK
+                    ws.cell(r, c).alignment = Alignment(
+                        wrap_text=c in (3, 5, 8), vertical="top",
+                        horizontal="center" if c == 1 else None)
+                for c in (9, 10, 11):
+                    ws.cell(r, c).number_format = NUM
+                correl += 1
+                r += 1
+            r_fin = r - 1
+            ws.cell(r, 3, f"TOTAL CUENTA {code}").font = BOLD
+            ws.cell(r, 9, f"=SUM(I{r_ini}:I{r_fin})")
+            ws.cell(r, 10, f"=SUM(J{r_ini}:J{r_fin})")
+            ws.cell(r, 11, f"=I{r}-J{r}")
+            for c in (9, 10, 11):
+                ws.cell(r, c).font = BOLD
+                ws.cell(r, c).number_format = NUM
+            for c in range(1, 12):
+                ws.cell(r, c).border = doble
+            fila_total = r
+            totales.append(fila_total)
+            r += 1
+            # Control: el saldo del libro debe coincidir con el saldo de la HT para esa cuenta.
+            ws.cell(r, 8, "Saldo según Hoja de Trabajo (HT)").font = GRAY
+            ws.cell(r, 11, f'=SUMIF({grupos_ht},"{code}",HT!$E$4:$E${ht_last_row})'
+                           f'-SUMIF({grupos_ht},"{code}",HT!$F$4:$F${ht_last_row})')
+            ws.cell(r, 11).number_format = NUM
+            ws.cell(r, 11).font = GRAY
+            ws.cell(r, 10, f'=IF(ABS(K{fila_total}-K{r})<0.01,"CUADRADO","REVISAR")').font = BOLD
+            ws.cell(r, 10).alignment = Alignment(horizontal="center")
+            r += 2
+
+        ws.cell(r, 3, f"TOTAL FORMATO {formato}").font = BOLD
+        ws.cell(r, 9, "=" + "+".join(f"I{x}" for x in totales))
+        ws.cell(r, 10, "=" + "+".join(f"J{x}" for x in totales))
+        ws.cell(r, 11, f"=I{r}-J{r}")
+        for c in (9, 10, 11):
+            ws.cell(r, c).font = BOLD
+            ws.cell(r, c).number_format = NUM
+        for c in range(1, 12):
+            ws.cell(r, c).border = doble
+        return r + 3, totales
+
+    efectivo = [m for m in movs if m["codigo"][:3] in ("101", "102", "103")]
+    bancos = [m for m in movs if m["codigo"][:3] not in ("101", "102", "103")]
+    r, _ = bloque(r, "1.1", "LIBRO CAJA Y BANCOS - DETALLE DE LOS MOVIMIENTOS DEL EFECTIVO", False, efectivo)
+    r, _ = bloque(r, "1.2", "LIBRO CAJA Y BANCOS - DETALLE DE LOS MOVIMIENTOS DE LA CUENTA CORRIENTE", True, bancos)
+
+    ws.cell(r, 1, "Notas").font = BOLD
+    notas = [
+        "Fuente: asientos del Libro Diario de TANA (cuentas 10). Deudores = ingresos de efectivo; Acreedores = salidas.",
+        "Formato 1.1: cuentas 101, 102 y 103. Formato 1.2: cuenta 104 y demás cuentas 10 (por cuenta bancaria).",
+        "Medio de pago (Tabla 1 SUNAT): TANA lo deduce de la glosa o del medio de pago de la monografía; si no hay pista usa 999. Verifícalo antes de presentarlo.",
+        "Medios usados: " + "; ".join(f"{k} {v}" for k, v in _CB_MEDIOS.items()) + ".",
+        "La columna Saldo es referencial (no figura en el formato oficial). La fila «Saldo según HT» valida el libro contra la Hoja de Trabajo.",
+    ]
+    for t in notas:
+        r += 1
+        ws.cell(r, 1, t).font = GRAY
+
+    for i, w in enumerate([13, 13, 44, 26, 30, 20, 9, 34, 14, 14, 16], start=1):
+        ws.column_dimensions[get_column_letter(i)].width = w
+    ws.sheet_view.showGridLines = False
+    ws.page_setup.orientation = "landscape"
+    ws.page_setup.fitToWidth = 1
+    ws.page_setup.fitToHeight = 0
+    ws.sheet_properties.pageSetUpPr.fitToPage = True
+    return len(movs)
+
+
+cb_hay_movs = False
+try:
+    _cb_mj = st.session_state.get("monografia_json")
+    _cb_ops = {}
+    if isinstance(_cb_mj, dict):
+        for _cb_op in _cb_mj.get("operaciones", []) or []:
+            if isinstance(_cb_op, dict):
+                _cb_ops[str(_cb_op.get("numero"))] = _cb_op
+    _cb_empresa = str(_cb_mj.get("empresa", "") or "") if isinstance(_cb_mj, dict) else ""
+    ws_cb = wb.create_sheet("Libro_Caja_Bancos")
+    cb_hay_movs = construir_libro_caja_bancos(
+        ws_cb, st.session_state.get("asientos_contables", []), pcge_map,
+        _cb_ops, _cb_empresa, HT_LAST_ROW,
+    ) > 0
+    if not cb_hay_movs:
+        wb.remove(ws_cb)
+except Exception as _cb_exc:
+    cb_hay_movs = False
+    if "Libro_Caja_Bancos" in wb.sheetnames:
+        wb.remove(wb["Libro_Caja_Bancos"])
+    st.warning(f"No se pudo generar el Libro Caja y Bancos: {_cb_exc}. El resto del Excel no se vio afectado.")
+
 # HOJA: ASIENTOS_CONTABLES (resueltos y validados por TANA)
 # ============================================================
 if "asientos_contables" in st.session_state:
@@ -6190,6 +6488,7 @@ HOJAS_PUBLICAS = [
     "Registro_Ventas",
     "Kardex",
     "Costo_Produccion",
+    "Libro_Caja_Bancos",
     "LM",
     "HT",
     "ESF",
@@ -6235,6 +6534,8 @@ if _sig and st.session_state.get("tana_resuelto_signature") != _sig:
         _items_resueltos.append("Kardex")
     if crear_hoja_costos:
         _items_resueltos.append("Costo de producción/servicios")
+    if cb_hay_movs:
+        _items_resueltos.append("Libro Caja y Bancos")
     _lista_html = "<br>".join(f"&nbsp;&nbsp;• {x}" for x in _items_resueltos)
     _tana_chat_add(
         "assistant",
