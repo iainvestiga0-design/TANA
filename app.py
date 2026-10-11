@@ -689,6 +689,47 @@ def _tana_save_history(title, monografia_json=None):
     st.session_state["tana_historial"] = [i["title"] for i in items]
 
 
+def _tana_history_update(item_id, monografia_json):
+    """Actualiza el contenido guardado de un trabajo del historial (si ya está en Supabase)."""
+    if not item_id or str(item_id).startswith(("local-", "saved-")):
+        return None
+    query = urlencode({"id": f"eq.{item_id}", "user_id": f"eq.{_tana_history_user_id()}"})
+    return _tana_history_request(f"tana_historial?{query}", method="PATCH",
+                                 payload={"monografia_json": monografia_json})
+
+
+def _excel_estado_historial(nombre, chat_log, resultado=None, asientos_tana=None):
+    """Estado de una revisión de Excel para guardarlo en el historial (JSON seguro)."""
+    estado = {"tipo": "excel_revision", "archivo": str(nombre), "chat": list(chat_log or [])[-30:]}
+    if isinstance(resultado, dict):
+        r = {k: resultado.get(k) for k in ("objetivo", "cuadra", "resumen", "mensaje_error", "_archivo") if k in resultado}
+        r["hallazgos"] = list(resultado.get("hallazgos") or [])[:60]
+        r["correcciones_aplicadas"] = list(resultado.get("correcciones_aplicadas") or [])[:60]
+        estado["resultado"] = r
+    if asientos_tana:
+        estado["asientos_tana"] = asientos_tana
+    # Las celdas pueden traer fechas u otros tipos: todo se pasa a JSON simple.
+    return json.loads(json.dumps(estado, default=str, ensure_ascii=False))
+
+
+def _tana_save_history_excel(title, estado):
+    """Guarda (o actualiza) en el historial la revisión de un Excel, aunque solo haya una pregunta."""
+    title = str(title or "").strip()
+    if not title or not _tana_history_user_id():
+        return
+    items = st.session_state.setdefault("tana_historial_items", [])
+    existente = next((i for i in items if str(i.get("title") or "") == title), None)
+    if existente is None:
+        _tana_save_history(title, estado)
+        return
+    previo = existente.get("monografia_json")
+    if isinstance(previo, dict) and previo.get("tipo") != "excel_revision":
+        return  # es una monografía con el mismo nombre: no se pisa
+    existente["monografia_json"] = estado
+    if not _tana_history_is_local(existente):
+        _tana_history_update(existente.get("id"), estado)
+
+
 def _tana_retry_history_sync():
     """Reintenta subir los trabajos pendientes y vuelve a leer el historial."""
     user_id = _tana_history_user_id()
@@ -707,6 +748,30 @@ def _tana_open_history(item):
     """Abre una monografía guardada y regenera el motor contable para poder consultarla."""
     data = item.get("monografia_json") if isinstance(item, dict) else None
     title = str((item or {}).get("title") or "archivo").strip() if isinstance(item, dict) else str(item or "archivo")
+    if isinstance(data, dict) and data.get("tipo") == "excel_revision":
+        for key in (
+            "monografia_json", "monografia_texto", "monografia_nombre", "tana_file_signature",
+            "asientos_contables", "asientos_validos", "errores_asientos", "alertas_asientos",
+            "respuesta_tana", "respuesta_tana_ruta", "audio_tana_processed",
+            "registro_compras", "registro_ventas", "kardex", "costos", "tipo_empresa",
+            "excel_auditoria", "excel_auditoria_buffer", "excel_auditoria_filename",
+            "tana_excel_buffer", "tana_resuelto_signature", "tana_desde_excel",
+        ):
+            st.session_state.pop(key, None)
+        chat_guardado = [m for m in (data.get("chat") or []) if isinstance(m, dict) and m.get("role") and m.get("content")]
+        st.session_state["tana_chat"] = [{"role": "user", "content": f"📂 Abrí del historial: <b>{title}</b>"}] + chat_guardado
+        st.session_state["excel_chat_log"] = chat_guardado
+        st.session_state["excel_chat_archivo"] = data.get("archivo") or title
+        if isinstance(data.get("resultado"), dict):
+            resultado = dict(data["resultado"])
+            resultado["_archivo"] = data.get("archivo") or title
+            st.session_state["excel_auditoria"] = resultado
+        if data.get("asientos_tana"):
+            st.session_state["asientos_contables"] = data["asientos_tana"]
+            st.session_state["tana_desde_excel"] = True
+            st.session_state["tana_file_signature"] = f"excel-hist|{item.get('id')}|{time.time()}"
+        st.rerun()
+        return
     if not data:
         st.warning("Este registro histórico solo contiene el nombre del archivo. Los registros nuevos sí podrán abrirse y consultarse.")
         return
@@ -2753,6 +2818,7 @@ with st.sidebar:
             "registro_compras", "registro_ventas", "kardex", "costos", "tipo_empresa",
             "excel_auditoria", "excel_auditoria_buffer", "excel_auditoria_filename", "excel_auditoria_signature",
             "tana_desde_excel", "tana_excel_buffer", "tana_resuelto_signature",
+            "excel_chat_log", "excel_chat_archivo",
         ):
             st.session_state.pop(_key, None)
         st.rerun()
@@ -2766,7 +2832,7 @@ with st.sidebar:
             if st.button(f"📄 {title}", key=f"tana_history_open_{item.get('id', idx)}", use_container_width=True):
                 _tana_open_history(item)
     else:
-        st.markdown('<div class="tana-side-empty">Aún no hay monografías guardadas.</div>', unsafe_allow_html=True)
+        st.markdown('<div class="tana-side-empty">Aún no hay trabajos guardados.</div>', unsafe_allow_html=True)
 
     _hist_err = st.session_state.get("tana_history_last_error")
     _hist_pending = any(_tana_history_is_local(_i) for _i in historial_items)
@@ -3160,6 +3226,13 @@ _es_excel_subido = bool(uploaded_file) and Path(uploaded_file.name).suffix.lower
 if _es_excel_subido:
     if enviar_top and pregunta_top.strip():
         _q_excel = pregunta_top.strip()
+        # Historial: se guarda el trabajo apenas se envía cualquier pregunta con este Excel.
+        if st.session_state.get("excel_chat_archivo") != uploaded_file.name:
+            st.session_state["excel_chat_log"] = []
+            st.session_state["excel_chat_archivo"] = uploaded_file.name
+        _log_excel = st.session_state["excel_chat_log"]
+        _log_excel.append({"role": "user", "content": __import__("html").escape(_q_excel)})
+        _tana_save_history_excel(uploaded_file.name, _excel_estado_historial(uploaded_file.name, _log_excel))
         # Se muestra de inmediato lo que escribió el usuario y que TANA está trabajando.
         st.markdown(
             f'<div class="tana-bubble-user">{__import__("html").escape(_q_excel)}</div>',
@@ -3178,7 +3251,9 @@ if _es_excel_subido:
                 _tana_chat_add("user", __import__("html").escape(_q_excel))
                 _r = _excel_result["resultado"]
                 _tana_chat_add("assistant", _r.get("resumen", "Revisión de Excel realizada."))
+                _log_excel.append({"role": "assistant", "content": _r.get("resumen", "Revisión de Excel realizada.")})
                 _at = _excel_result.get("asientos_tana")
+                _tana_save_history_excel(uploaded_file.name, _excel_estado_historial(uploaded_file.name, _log_excel, _r, _at))
                 if _at:
                     # El motor de TANA genera LM, HT, ERF, ERN y ESF en su formato estándar.
                     for _k in ("monografia_json", "monografia_texto", "monografia_nombre", "registro_compras",
@@ -3190,6 +3265,8 @@ if _es_excel_subido:
                     st.session_state["tana_file_signature"] = f"excel-tana|{uploaded_file.name}|{time.time()}"
                 st.rerun()
             except Exception as exc:
+                _log_excel.append({"role": "assistant", "content": f"No se pudo revisar el Excel: {_gemini_error_message(exc)}"})
+                _tana_save_history_excel(uploaded_file.name, _excel_estado_historial(uploaded_file.name, _log_excel))
                 st.error(f"No se pudo revisar el Excel: {_gemini_error_message(exc)}")
                 st.stop()
     elif not pregunta_top.strip() and not st.session_state.get("excel_auditoria"):
@@ -3208,17 +3285,17 @@ if st.session_state.get("excel_auditoria") and (not uploaded_file or _es_excel_s
             st.write(f"**{_h.get('hoja','')} { _h.get('celda','') }**: {_detalle}")
     if _r.get("mensaje_error"):
         st.info(str(_r.get("mensaje_error")))
+    if _r.get("correcciones_aplicadas"):
+        st.success("📊 TANA realizó los cambios seguros y preparó el Excel.")
+        for _c in _r.get("correcciones_aplicadas", []) or []:
+            _nuevo = _c.get("formula") or _c.get("valor")
+            st.markdown(
+                f"✏️ **{_c.get('hoja','')} {_c.get('celda','')}**: {_c.get('anterior','(vacío)')} → {_nuevo}"
+                + (f"  \n*Por qué:* {_c.get('motivo')}" if _c.get("motivo") else "")
+            )
+    elif st.session_state.get("excel_auditoria_buffer"):
+        st.info("📊 TANA revisó el Excel. No se aplicaron cambios automáticos; se entrega una copia del archivo revisado.")
     if st.session_state.get("excel_auditoria_buffer"):
-        if _r.get("correcciones_aplicadas"):
-            st.success("📊 TANA realizó los cambios seguros y preparó el Excel.")
-            for _c in _r.get("correcciones_aplicadas", []) or []:
-                _nuevo = _c.get("formula") or _c.get("valor")
-                st.markdown(
-                    f"✏️ **{_c.get('hoja','')} {_c.get('celda','')}**: {_c.get('anterior','(vacío)')} → {_nuevo}"
-                    + (f"  \n*Por qué:* {_c.get('motivo')}" if _c.get("motivo") else "")
-                )
-        else:
-            st.info("📊 TANA revisó el Excel. No se aplicaron cambios automáticos; se entrega una copia del archivo revisado.")
         st.download_button(
             "⬇️ Tu archivo con las correcciones (formato original)",
             data=st.session_state["excel_auditoria_buffer"],
@@ -3226,6 +3303,8 @@ if st.session_state.get("excel_auditoria") and (not uploaded_file or _es_excel_s
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             key="download_excel_corregido",
         )
+    elif _r.get("correcciones_aplicadas") or _r.get("hallazgos"):
+        st.caption("Este trabajo viene del historial. Para volver a descargar tu archivo con las correcciones, súbelo de nuevo y pide la revisión.")
 
 # El archivo NO Excel sigue el flujo normal de monografías.
 if uploaded_file and Path(uploaded_file.name).suffix.lower() not in {".xls", ".xlsx", ".xlsm", ".xltx", ".xltm"}:
