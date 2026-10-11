@@ -1545,6 +1545,90 @@ def _excel_aplicar_hoja_nueva(wb, h):
             "valor": f"Hoja creada ({min(len(filas), 300)} filas)", "motivo": str(h.get("motivo") or "")}
 
 
+def _excel_codigo_5d(code, pcge_5d):
+    """Lleva un código del Diario al código PCGE de 5 dígitos que usa el motor de TANA."""
+    code = str(code).strip()
+    if re.fullmatch(r"\d{5}", code):
+        return code, None
+    if len(code) > 5 and code.isdigit():
+        return code[:5], f"{code} → {code[:5]}"
+    cand = sorted(c for c in pcge_5d if c.startswith(code))
+    if cand:
+        return cand[0], f"{code} → {cand[0]}"
+    return None, None
+
+
+def _excel_asientos_tana(uploaded_bytes, suffix, aplicadas):
+    """Lee el Libro Diario del Excel (con las correcciones ya aplicadas) y lo convierte a los
+    asientos que usa el motor de TANA para generar LM, HT, ERF, ERN y ESF en su formato estándar.
+    Devuelve {"ok": bool, ...}. Solo ok=True cuando todos los asientos cuadran."""
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    path = tmp.name
+    try:
+        tmp.write(uploaded_bytes)
+        tmp.close()
+        wb_f = openpyxl.load_workbook(path)
+        wb_v = openpyxl.load_workbook(path, data_only=True)
+        enc0 = _excel_buscar_diario(wb_f, wb_v)
+        if not enc0:
+            return {"ok": False, "motivo": "No encontré el Libro Diario para armar el Excel en formato TANA."}
+        hoja = enc0[0].title
+        # Fórmulas del Diario que nunca se calcularon: no hay forma confiable de leer sus montos.
+        sin_calcular = 0
+        for row in wb_f[hoja].iter_rows():
+            if not any(_excel_codigo(wb_v[hoja][c.coordinate].value) for c in row):
+                continue          # filas sin cuenta (títulos, totales) no cuentan
+            sin_calcular += sum(
+                1 for c in row
+                if isinstance(c.value, str) and c.value.startswith("=") and wb_v[hoja][c.coordinate].value is None
+            )
+        if sin_calcular:
+            return {"ok": False, "motivo": "El Libro Diario tiene fórmulas sin valor calculado; ábrelo en Excel, guárdalo y vuelve a subirlo."}
+        # Correcciones de valores sobre la copia de valores (las fórmulas no se pueden evaluar aquí).
+        no_reflejadas = 0
+        for c in aplicadas or []:
+            h, cell = str(c.get("hoja", "")), str(c.get("celda", ""))
+            if h in wb_v.sheetnames and re.fullmatch(r"[A-Z]{1,3}[1-9][0-9]*", cell, re.I):
+                if str(c.get("formula", "") or "").strip():
+                    no_reflejadas += 1
+                elif c.get("valor") is not None:
+                    wb_v[h][cell] = c["valor"]
+        enc = _excel_buscar_diario(wb_v, wb_v)
+        if not enc:
+            return {"ok": False, "motivo": "Tras las correcciones no pude leer el Libro Diario."}
+        _ws, (asientos, nombres) = enc
+        pcge = {str(c).strip(): str(d) for c, d in PCGE_DATA}
+        pcge_5d = [c for c in pcge if re.fullmatch(r"\d{5}", c)]
+        notas, sin_cuenta, out, descuadres = [], [], [], []
+        for a in asientos:
+            lineas = []
+            for l in a["lineas"]:
+                cod, nota = _excel_codigo_5d(l["codigo"], pcge_5d)
+                if cod is None:
+                    sin_cuenta.append(l["codigo"])
+                    continue
+                if nota and nota not in notas:
+                    notas.append(nota)
+                lineas.append({"codigo": cod, "denominacion": pcge.get(cod) or nombres.get(l["codigo"], ""),
+                               "concepto": "", "debe": _lm_num(l["debe"]), "haber": _lm_num(l["haber"])})
+            d = round(sum(x["debe"] for x in lineas), 2)
+            h = round(sum(x["haber"] for x in lineas), 2)
+            if abs(d - h) > 0.005:
+                descuadres.append(f"asiento {a['numero']} (Debe {d:,.2f} / Haber {h:,.2f})")
+            out.append({"numero": a["numero"], "fecha": a["fecha"], "glosa": a["glosa"],
+                        "documento": "", "operacion_numero": "", "lineas": lineas})
+        if sin_cuenta:
+            return {"ok": False, "motivo": "Hay cuentas del Diario que no encontré en el PCGE: " + ", ".join(sorted(set(sin_cuenta))) + "."}
+        if descuadres:
+            return {"ok": False, "motivo": "Aún hay asientos que no cuadran: " + "; ".join(descuadres[:8]) + "."}
+        return {"ok": True, "asientos": out, "notas": notas, "hoja": hoja, "no_reflejadas": no_reflejadas}
+    finally:
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+
+
 def _excel_agregar_libro_mayor(uploaded_bytes, suffix):
     """Agrega la hoja LM (Libro Mayor) a un Excel que no la tiene, leyendo su Libro Diario."""
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
@@ -1727,6 +1811,13 @@ que existe en el archivo:
   debe ser el mismo en ERN, ERF, y el que entra al patrimonio del ESF.
 - Kardex / Registros: cantidades, costos y saldos consistentes con los asientos.
 - Coherencia entre hojas: los mismos importes deben coincidir entre HT, estados y asientos.
+IMPORTANTE - FORMATO ÚNICO: TANA genera ella misma la Hoja de Trabajo, el Libro Mayor y los
+estados financieros (ERN, ERF, ESF) en su formato estándar, a partir de los ASIENTOS del Libro
+Diario ya corregidos. Por eso NO crees en "hojas_nuevas" una HT, un ERN, un ERF, un ESF ni un
+Libro Mayor. Tu trabajo es dejar el LIBRO DIARIO correcto y completo (cuentas PCGE correctas,
+Debe = Haber, importes de las operaciones, y los asientos que falten, como apertura, ajustes,
+cierre o distribución, escribiéndolos en las filas libres siguientes del Diario), y revisar las
+demás hojas del archivo solo para detectar errores y explicarlos.
 Si falta una parte que una práctica completa debería tener (por ejemplo una hoja o un
 estado), repórtala como hallazgo de tipo "advertencia" indicando qué falta. NO inventes
 datos ni importes: solo completa lo que puede calcularse con certeza a partir de los datos
@@ -2042,7 +2133,30 @@ def _excel_auditar_y_corregir(uploaded_file, question, previos=None):
     if corrected_buffer is None:
         corrected_buffer = base_bytes
     result["excel_descargable"] = True
-    return {"resultado": result, "buffer": corrected_buffer, "filename": filename}
+
+    # Formato TANA: HT, ERN, ERF, ESF y LM los genera el motor de TANA (siempre en el mismo formato
+    # y cuadrados) a partir de los asientos ya corregidos. Solo si todos los asientos cuadran.
+    asientos_tana, notas_tana = None, []
+    if target == "completo" and es_xlsx:
+        try:
+            tana = _excel_asientos_tana(uploaded_bytes, suffix, applied)
+        except Exception as exc:
+            tana = {"ok": False, "motivo": f"No pude convertir el Diario al formato TANA: {exc}"}
+        if tana.get("ok"):
+            asientos_tana, notas_tana = tana["asientos"], tana.get("notas", [])
+            extra = (" Armé tu práctica en formato TANA (Asientos, LM, HT, ERF, ERN y ESF) a partir de los asientos "
+                     "corregidos: descárgala con el botón «Descargar Excel».")
+            if notas_tana:
+                extra += " Cuentas llevadas al PCGE de 5 dígitos: " + ", ".join(notas_tana[:12]) + "."
+            if tana.get("no_reflejadas"):
+                extra += " Ojo: hubo correcciones con fórmulas que no pude reflejar en el formato TANA; revísalas."
+            result["resumen"] = str(result.get("resumen") or "") + extra
+        else:
+            result["resumen"] = (str(result.get("resumen") or "") +
+                                 " No generé el Excel en formato TANA: " + str(tana.get("motivo") or "") +
+                                 " Corrígelo y vuelve a pedirme la revisión completa.")
+    return {"resultado": result, "buffer": corrected_buffer, "filename": filename,
+            "asientos_tana": asientos_tana}
 
 
 def _gemini_error_message(exc):
@@ -2638,6 +2752,7 @@ with st.sidebar:
             "respuesta_tana", "respuesta_tana_ruta", "audio_tana_processed",
             "registro_compras", "registro_ventas", "kardex", "costos", "tipo_empresa",
             "excel_auditoria", "excel_auditoria_buffer", "excel_auditoria_filename", "excel_auditoria_signature",
+            "tana_desde_excel", "tana_excel_buffer", "tana_resuelto_signature",
         ):
             st.session_state.pop(_key, None)
         st.rerun()
@@ -3063,6 +3178,16 @@ if _es_excel_subido:
                 _tana_chat_add("user", __import__("html").escape(_q_excel))
                 _r = _excel_result["resultado"]
                 _tana_chat_add("assistant", _r.get("resumen", "Revisión de Excel realizada."))
+                _at = _excel_result.get("asientos_tana")
+                if _at:
+                    # El motor de TANA genera LM, HT, ERF, ERN y ESF en su formato estándar.
+                    for _k in ("monografia_json", "monografia_texto", "monografia_nombre", "registro_compras",
+                               "registro_ventas", "kardex", "costos", "tipo_empresa",
+                               "tana_resuelto_signature", "tana_excel_buffer"):
+                        st.session_state.pop(_k, None)
+                    st.session_state["asientos_contables"] = _at
+                    st.session_state["tana_desde_excel"] = True
+                    st.session_state["tana_file_signature"] = f"excel-tana|{uploaded_file.name}|{time.time()}"
                 st.rerun()
             except Exception as exc:
                 st.error(f"No se pudo revisar el Excel: {_gemini_error_message(exc)}")
@@ -3095,7 +3220,7 @@ if st.session_state.get("excel_auditoria") and (not uploaded_file or _es_excel_s
         else:
             st.info("📊 TANA revisó el Excel. No se aplicaron cambios automáticos; se entrega una copia del archivo revisado.")
         st.download_button(
-            "⬇️ Descargar Excel revisado por TANA",
+            "⬇️ Tu archivo con las correcciones (formato original)",
             data=st.session_state["excel_auditoria_buffer"],
             file_name=st.session_state.get("excel_auditoria_filename", "Excel - TANA.xlsx"),
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -3120,6 +3245,7 @@ if uploaded_file and Path(uploaded_file.name).suffix.lower() not in {".xls", ".x
                 st.session_state["monografia_texto"] = extraction_to_text(extracted)
                 st.session_state["monografia_nombre"] = uploaded_file.name
                 st.session_state["tana_file_signature"] = file_signature
+                st.session_state.pop("tana_desde_excel", None)
                 # Fuerza una nueva ejecución para continuar con el desarrollo.
                 st.rerun()
             except json.JSONDecodeError:
@@ -5847,7 +5973,8 @@ if _sig and st.session_state.get("tana_resuelto_signature") != _sig:
     _lista_html = "<br>".join(f"&nbsp;&nbsp;• {x}" for x in _items_resueltos)
     _tana_chat_add(
         "assistant",
-        "TANA ha resuelto tu monografía:<br>" + _lista_html,
+        ("TANA armó tu práctica en formato TANA:<br>" if st.session_state.get("tana_desde_excel")
+         else "TANA ha resuelto tu monografía:<br>") + _lista_html,
     )
     st.session_state["tana_resuelto_signature"] = _sig
     st.session_state["tana_excel_buffer"] = buffer.getvalue()
