@@ -3979,6 +3979,154 @@ def asegurar_cuenta_79_en_destinos(asientos, pcge_map):
     return resultado
 
 
+def corregir_planilla_neto(asientos):
+    """
+    Regla determinista para planillas: el EsSalud (40311) es un costo del
+    EMPLEADOR; no se descuenta de la remuneración neta del trabajador.
+    Si un asiento de planilla descuadra exactamente por el importe del EsSalud
+    (el neto por pagar 411xx salió menor), se corrige el neto y, en el asiento de
+    pago de la misma operación, se actualiza el pago (411xx Debe / 10xxx Haber).
+    Solo actúa cuando la diferencia coincide con el EsSalud; en otro caso no toca nada.
+    """
+    asientos = list(asientos or [])
+    cambios = []
+    for a in asientos:
+        if not isinstance(a, dict):
+            continue
+        lineas = [l for l in (a.get("lineas", []) or []) if isinstance(l, dict)]
+        debe_t = round(sum(_to_float(l.get("debe"), 0.0) or 0.0 for l in lineas), 2)
+        haber_t = round(sum(_to_float(l.get("haber"), 0.0) or 0.0 for l in lineas), 2)
+        diff = round(debe_t - haber_t, 2)
+        if diff <= 0.01:
+            continue
+        essalud = [l for l in lineas if str(l.get("codigo", "")).strip() == "40311"
+                   and (_to_float(l.get("haber"), 0.0) or 0.0) > 0]
+        neto = [l for l in lineas if str(l.get("codigo", "")).strip().startswith("411")
+                and (_to_float(l.get("haber"), 0.0) or 0.0) > 0]
+        if len(essalud) != 1 or len(neto) != 1:
+            continue
+        if abs(diff - (_to_float(essalud[0].get("haber"), 0.0) or 0.0)) > 0.02:
+            continue
+        viejo = round(_to_float(neto[0].get("haber"), 0.0) or 0.0, 2)
+        nuevo = round(viejo + diff, 2)
+        neto[0]["haber"] = nuevo
+        nota = (f"Se corrigió el neto por pagar de S/ {viejo:,.2f} a S/ {nuevo:,.2f}: "
+                "el EsSalud lo asume el empleador y no se descuenta al trabajador.")
+        a["observacion"] = (str(a.get("observacion", "") or "").strip() + " " + nota).strip()
+        cambios.append((a, viejo, nuevo))
+
+    for origen, viejo, nuevo in cambios:
+        for b in asientos:
+            if b is origen or not isinstance(b, dict):
+                continue
+            if str(b.get("operacion_numero", "")) != str(origen.get("operacion_numero", "")):
+                continue
+            ls = [l for l in (b.get("lineas", []) or []) if isinstance(l, dict)]
+            deuda = [l for l in ls if str(l.get("codigo", "")).strip().startswith("411")
+                     and abs((_to_float(l.get("debe"), 0.0) or 0.0) - viejo) < 0.02]
+            salida = [l for l in ls if str(l.get("codigo", "")).strip().startswith("10")
+                      and abs((_to_float(l.get("haber"), 0.0) or 0.0) - viejo) < 0.02]
+            if len(deuda) == 1 and len(salida) == 1:
+                deuda[0]["debe"] = nuevo
+                salida[0]["haber"] = nuevo
+                b["observacion"] = (str(b.get("observacion", "") or "").strip()
+                                    + f" Pago ajustado al neto corregido de S/ {nuevo:,.2f}.").strip()
+    return asientos
+
+
+def completar_destinos_gastos(asientos, pcge_map):
+    """
+    Destino de los gastos por función. Los gastos por naturaleza de las cuentas
+    62, 63, 64, 65, 66 y 68 que aún no tengan destino a 94/95 se destinan así:
+        94xxx (Debe) y/o 95xxx (Debe)  /  79111 (Haber)
+    Criterio por defecto (se avisa al usuario): comisiones (6212) y publicidad (637)
+    van a gastos de ventas (95); todo lo demás va a gastos de administración (94).
+    No altera los gastos por naturaleza: el ERN y el resultado del ejercicio no cambian.
+    Devuelve (asientos, mensaje o None).
+    """
+    asientos = list(asientos or [])
+    if not asientos:
+        return asientos, None
+
+    # Si ya existe un destino a 94/95 (hecho por la IA o por esta misma función), no se duplica.
+    for a in asientos:
+        if isinstance(a, dict):
+            for l in a.get("lineas", []) or []:
+                if (isinstance(l, dict) and str(l.get("codigo", "")).strip().startswith(("94", "95"))
+                        and (_to_float(l.get("debe"), 0.0) or 0.0) > 0):
+                    return asientos, None
+
+    ya_destinadas = set()
+    for a in asientos:
+        lineas = [l for l in (a.get("lineas", []) or []) if isinstance(l, dict)] if isinstance(a, dict) else []
+        if any(str(l.get("codigo", "")).strip().startswith(("94", "95")) for l in lineas):
+            for l in lineas:
+                c = str(l.get("codigo", "")).strip()
+                if c[:1] == "6" and len(c) == 5:
+                    ya_destinadas.add(c)
+
+    saldos = {}
+    for a in asientos:
+        if not isinstance(a, dict):
+            continue
+        for l in a.get("lineas", []) or []:
+            if not isinstance(l, dict):
+                continue
+            c = str(l.get("codigo", "")).strip()
+            if re.fullmatch(r"(62|63|64|65|66|68)\d{3}", c) and c not in ya_destinadas:
+                saldos[c] = saldos.get(c, 0.0) + (_to_float(l.get("debe"), 0.0) or 0.0) - (_to_float(l.get("haber"), 0.0) or 0.0)
+    saldos = {c: round(v, 2) for c, v in saldos.items() if v > 0.009}
+    if not saldos:
+        return asientos, None
+
+    def _codigo(preferido, prefijo):
+        if preferido in pcge_map:
+            return preferido
+        return next((c for c in pcge_map if str(c).startswith(prefijo) and len(str(c)) == 5), None)
+
+    c94, c95, c79 = _codigo("94111", "94"), _codigo("95111", "95"), _codigo("79111", "79")
+    if not (c94 and c95 and c79):
+        return asientos, "No se pudo generar el destino de gastos: faltan cuentas 94, 95 o 79 en el PCGE."
+
+    ventas = round(sum(v for c, v in saldos.items() if c[:4] == "6212" or c[:3] == "637"), 2)
+    admin = round(sum(saldos.values()) - ventas, 2)
+    total = round(admin + ventas, 2)
+
+    lineas = []
+    if admin > 0.009:
+        lineas.append({"codigo": c94, "denominacion": pcge_map.get(c94, ""), "debe": admin, "haber": 0.0,
+                       "concepto": "Destino de gastos de administración"})
+    if ventas > 0.009:
+        lineas.append({"codigo": c95, "denominacion": pcge_map.get(c95, ""), "debe": ventas, "haber": 0.0,
+                       "concepto": "Destino de gastos de ventas"})
+    lineas.append({"codigo": c79, "denominacion": pcge_map.get(c79, ""), "debe": 0.0, "haber": total,
+                   "concepto": "Cargas imputables a cuentas de costos y gastos"})
+
+    numeros = []
+    for a in asientos:
+        try:
+            numeros.append(int(float(str(a.get("numero")))))
+        except Exception:
+            pass
+    nuevo_numero = (max(numeros) + 1) if numeros else len(asientos) + 1
+    criterio = ("Criterio asumido por TANA: comisiones y publicidad → gastos de ventas (95); "
+                "los demás gastos → gastos de administración (94). Ajusta el reparto si tu enunciado indica otro.")
+    nuevo = {
+        "numero": nuevo_numero,
+        "fecha": asientos[-1].get("fecha", "") if isinstance(asientos[-1], dict) else "",
+        "glosa": "Por el destino de los gastos por función del período",
+        "documento": "Asiento de destino",
+        "operacion_numero": "",
+        "requiere_revision": True,
+        "observacion": criterio,
+        "cuentas_destinadas": sorted(saldos.keys()),
+        "lineas": lineas,
+    }
+    asientos.append(nuevo)
+    return asientos, (f"Asiento {nuevo_numero}: se destinaron S/ {total:,.2f} de gastos por función "
+                      f"(administración S/ {admin:,.2f}, ventas S/ {ventas:,.2f}). " + criterio)
+
+
 def corregir_retiro_socio(asientos, monografia_json):
     """
     Regla contable de la práctica para separación de socio:
@@ -4524,6 +4672,10 @@ if "monografia_json" in st.session_state and "asientos_contables" not in st.sess
 
             asientos_generados = asegurar_cuenta_79_en_destinos(asientos_generados, pcge_map)
             asientos_generados = corregir_retiro_socio(asientos_generados, st.session_state.get("monografia_json", {}))
+            asientos_generados = corregir_planilla_neto(asientos_generados)
+            asientos_generados, _aviso_destinos = completar_destinos_gastos(asientos_generados, pcge_map)
+            if _aviso_destinos:
+                alertas_gemini = list(alertas_gemini) + [_aviso_destinos]
 
             # Sincroniza el costo de venta de los asientos con el Kardex
             # ANTES de validar, para que HT/ERN/ERF hereden el importe
@@ -4993,6 +5145,10 @@ def es_naturaleza(code):
 def detectar_cuentas_6_con_destino(asientos):
     con_destino = set()
     for asiento in asientos or []:
+        # Destino generado por TANA: ya indica qué cuentas 6 fueron destinadas.
+        if isinstance(asiento, dict):
+            for _c in asiento.get("cuentas_destinadas", []) or []:
+                con_destino.add(str(_c).strip())
         lineas = asiento.get("lineas", []) if isinstance(asiento, dict) else []
         hay_94_95 = any(
             str(x.get("codigo", "")).strip().startswith(("94", "95"))
@@ -5660,7 +5816,7 @@ r = 5
 _write_label(ws8, r, 'INGRESOS OPERACIONALES', True); r += 1
 ventas_row = r
 _write_label(ws8, r, 'VENTAS')
-_write_amount(ws8, r, _sum_ht('70', 'N'), False)
+_write_amount(ws8, r, _sum_ht_net('70', 'N', 'M'), False)
 r += 1
 
 # Líneas de detalle de ventas: solo se muestran cuando existen cuentas 70 adicionales.
@@ -5668,7 +5824,7 @@ ventas_codes = sorted(c for c in cuentas_reporte if c.startswith('70'))
 if len(ventas_codes) > 1:
     for code in ventas_codes:
         _write_label(ws8, r, f'{code} - {pcge_map.get(code, code)}')
-        _write_amount(ws8, r, _sum_ht_codes([code], 'N'))
+        _write_amount(ws8, r, _sum_ht_codes_net([code], 'N', 'M'))
         r += 1
 
 ventas_total_row = r
@@ -6547,6 +6703,15 @@ if _sig and st.session_state.get("tana_resuelto_signature") != _sig:
     st.rerun()
 
 if st.session_state.get("tana_excel_buffer"):
+    _errs_v = st.session_state.get("errores_asientos") or []
+    _alertas_v = st.session_state.get("alertas_asientos") or []
+    if _errs_v and not st.session_state.get("tana_desde_excel"):
+        st.warning("⚠️ TANA detectó asientos con errores; los estados pueden no cuadrar hasta corregirlos:\n\n"
+                   + "\n".join(f"- {e}" for e in _errs_v[:15]))
+    if _alertas_v and not st.session_state.get("tana_desde_excel"):
+        with st.expander("Avisos de TANA sobre este desarrollo"):
+            for _al in _alertas_v[:30]:
+                st.markdown(f"- {_al}")
     st.markdown(
         '<div class="tana-bubble-assistant" style="max-width:340px;">'
         '<div class="tana-result-card"><span style="font-size:22px;">📊</span>'
