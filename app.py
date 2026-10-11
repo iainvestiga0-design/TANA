@@ -1446,16 +1446,103 @@ def _excel_leer_diario_hoja(ws, wsv):
         nombre = valor(rr, nom_c) if nom_c else None
         if nombre and code not in nombres:
             nombres[code] = str(nombre).strip()
+        dv_raw, hv_raw = valor(rr, debe_c), valor(rr, haber_c)
         actual["lineas"].append({
             "codigo": code,
-            "debe": valor(rr, debe_c) if isinstance(valor(rr, debe_c), (int, float)) else 0,
-            "haber": valor(rr, haber_c) if isinstance(valor(rr, haber_c), (int, float)) else 0,
+            "debe": dv_raw if isinstance(dv_raw, (int, float)) else 0,
+            "haber": hv_raw if isinstance(hv_raw, (int, float)) else 0,
+            "sin_valor": any(isinstance(x, str) and x.strip().startswith("=") for x in (dv_raw, hv_raw)),
             "ref": (ws.title, dcell.coordinate, hcell.coordinate),
         })
     total_lineas = sum(len(a["lineas"]) for a in asientos)
     if total_lineas < 2:
         return None
     return asientos, nombres
+
+
+def _excel_buscar_diario(wb_f, wb_v):
+    """Busca en el libro la hoja del Libro Diario. Devuelve (hoja, (asientos, nombres)) o None."""
+    prioridad, otros = [], []
+    for ws in wb_f.worksheets:
+        n = _excel_normalize_text(ws.title)
+        if re.search(r"ht\b|hoja de trabajo|esf|erf|ern|kardex|situacion|resultado|compra|venta|costo|monograf|balance", n):
+            continue
+        (prioridad if re.search(r"asiento|diario|^ld$", n) else otros).append(ws)
+    for ws in prioridad + otros:
+        res = _excel_leer_diario_hoja(ws, wb_v[ws.title])
+        if res:
+            return ws, res
+    return None
+
+
+def _excel_chequeo_diario(uploaded_bytes, suffix):
+    """Verificación matemática del Libro Diario del archivo (sin IA): asientos que no cuadran
+    y balance de comprobación por cuenta. Devuelve None si no encuentra el Diario."""
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    path = tmp.name
+    try:
+        tmp.write(uploaded_bytes)
+        tmp.close()
+        wb_f = openpyxl.load_workbook(path)
+        wb_v = openpyxl.load_workbook(path, data_only=True)
+        enc = _excel_buscar_diario(wb_f, wb_v)
+        if not enc:
+            return None
+        ws, (asientos, nombres) = enc
+        if any(l.get("sin_valor") for a in asientos for l in a["lineas"]):
+            return {"hoja": ws.title, "confiable": False}
+        pcge_map = {str(c).strip(): str(d) for c, d in PCGE_DATA}
+        descuadres, balance, td, th = [], {}, 0.0, 0.0
+        for a in asientos:
+            d = round(sum(_lm_num(l["debe"]) for l in a["lineas"]), 2)
+            h = round(sum(_lm_num(l["haber"]) for l in a["lineas"]), 2)
+            td += d
+            th += h
+            if abs(d - h) > 0.005:
+                p, u = a["lineas"][0]["ref"], a["lineas"][-1]["ref"]
+                descuadres.append({"asiento": a["numero"], "debe": d, "haber": h, "hoja": ws.title, "rango": f"{p[1]}:{u[2]}"})
+            for l in a["lineas"]:
+                v = balance.setdefault(l["codigo"], [0.0, 0.0])
+                v[0] += _lm_num(l["debe"])
+                v[1] += _lm_num(l["haber"])
+        bal = [{"cuenta": c, "nombre": (pcge_map.get(c) or nombres.get(c) or ""), "debe": round(v[0], 2), "haber": round(v[1], 2)}
+               for c, v in sorted(balance.items(), key=lambda x: x[0].ljust(7, "0"))]
+        return {"hoja": ws.title, "confiable": True, "n_asientos": len(asientos),
+                "total_debe": round(td, 2), "total_haber": round(th, 2),
+                "descuadres": descuadres, "balance": bal[:200]}
+    finally:
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+
+
+def _excel_aplicar_hoja_nueva(wb, h):
+    """Crea una hoja nueva propuesta por la revisión (por ejemplo el reparto del haber social).
+    Nunca sobrescribe una hoja existente. Devuelve el registro del cambio o None."""
+    if not isinstance(h, dict):
+        return None
+    nombre = re.sub(r"[\[\]:*?/\\]", " ", str(h.get("nombre") or "").strip())[:31].strip()
+    filas = h.get("filas")
+    if not nombre or nombre in wb.sheetnames or not isinstance(filas, list) or not filas:
+        return None
+    ws = wb.create_sheet(nombre)
+    prohibido = re.compile(r"\[|https?:|(?i:\b(cmd|hyperlink|webservice|importdata|dde|exec)\b)")
+    for i, fila in enumerate(filas[:300], start=1):
+        if not isinstance(fila, list):
+            continue
+        for j, v in enumerate(fila[:14], start=1):
+            if isinstance(v, str) and v.startswith("=") and (prohibido.search(v) or len(v) > 300):
+                v = v.lstrip("=")
+            c = ws.cell(row=i, column=j, value=v)
+            c.font = Font(name="Arial", size=10, bold=(i == 1))
+            if isinstance(v, (int, float)) or (isinstance(v, str) and v.startswith("=")):
+                c.number_format = "#,##0.00"
+    ws.column_dimensions["A"].width = 40
+    for j in range(2, 15):
+        ws.column_dimensions[get_column_letter(j)].width = 18
+    return {"hoja": nombre, "celda": "A1", "anterior": "(hoja nueva)",
+            "valor": f"Hoja creada ({min(len(filas), 300)} filas)", "motivo": str(h.get("motivo") or "")}
 
 
 def _excel_agregar_libro_mayor(uploaded_bytes, suffix):
@@ -1473,18 +1560,7 @@ def _excel_agregar_libro_mayor(uploaded_bytes, suffix):
                 return {"creado": False, "existente": ws.title,
                         "mensaje": f"El archivo ya tiene la hoja «{ws.title}» (Libro Mayor); no la modifiqué."}
 
-        prioridad, otros = [], []
-        for ws in wb_f.worksheets:
-            n = _excel_normalize_text(ws.title)
-            if re.search(r"ht\b|hoja de trabajo|esf|erf|ern|kardex|situacion|resultado|compra|venta|costo|monograf|balance", n):
-                continue
-            (prioridad if re.search(r"asiento|diario|^ld$", n) else otros).append(ws)
-        encontrado = None
-        for ws in prioridad + otros:
-            res = _excel_leer_diario_hoja(ws, wb_v[ws.title])
-            if res:
-                encontrado = (ws, res)
-                break
+        encontrado = _excel_buscar_diario(wb_f, wb_v)
         if not encontrado:
             return {"creado": False,
                     "mensaje": "No encontré un Libro Diario (hoja de asientos con columnas Código, Debe y Haber) "
@@ -1672,8 +1748,47 @@ corregirse cuando pueda determinarlo con seguridad. No inventes datos.
 """
 
 
+_EXCEL_CORRECCION_AUTORIZADA = """CORRECCIÓN (AUTORIZADA POR EL USUARIO):
+El usuario te pidió que CORRIJAS. Por cada error que encuentres devuelve la corrección en
+"correcciones" (hoja, celda, y valor o formula) para que TANA la aplique al Excel.
+- En "motivo" EXPLICA siempre: qué estaba mal, qué cuenta del PCGE elegiste (código y nombre)
+  y por qué corresponde según la operación o la glosa, y cómo queda el asiento.
+- Asiento que no cuadra: corrige la celda equivocada (importe o cuenta) deduciéndola de la
+  glosa, de los demás asientos y de las demás hojas. Si hay más de una causa posible, elige
+  la más coherente con el resto de la práctica y dilo en el motivo.
+- Si una hoja (LM, HT, ERN, ERF, ESF) no cuadra o no coincide con las demás, corrige la
+  fórmula o celda que origina la diferencia; prefiere fórmulas a valores fijos.
+- Solo deja de corregir si realmente falta información para decidirlo (no inventes importes);
+  en ese caso explica qué dato falta.
+"""
+
+_EXCEL_CORRECCION_CAUTA = """CORRECCIÓN:
+Si puedes determinar inequívocamente la celda y el valor/formula correcto, devuelve
+una corrección. Si no puedes determinarlo sin inventar información, NO corrijas: indica
+el error y qué debe revisar el estudiante.
+"""
+
+_EXCEL_REGLA_REPARTO = """REPARTO DEL HABER SOCIAL:
+Si la práctica es de disolución, liquidación, fusión o escisión, o hay socios con porcentajes
+de participación o capital aportado, verifica si existe el reparto del haber social
+(patrimonio neto a repartir = Activo - Pasivo, o el patrimonio del ESF) entre los socios
+según su participación. Si falta o está mal, créalo en "hojas_nuevas" con nombre
+"Reparto_Haber_Social": columnas Socio, % de participación, Importe del haber social, con
+fórmulas (importe = haber social x %) y una fila TOTAL que sume 100% y el haber social total.
+Enlaza el haber social con la celda del ESF/patrimonio mediante fórmula cuando conozcas la
+celda; si no, usa el valor numérico y explícalo en "motivo". Verifica además que el ESF
+(después del reparto, si corresponde) cuadre. Si la práctica NO tiene socios ni
+participaciones, ignora este punto y no crees la hoja.
+"""
+
+
 def _excel_auditoria_prompt(question, filename, snapshot, target, nota_extra=""):
     bloque_regla = _EXCEL_REGLA_COMPLETO if target == "completo" else _EXCEL_REGLA_ESPECIFICA
+    q_norm = _excel_normalize_text(question)
+    autoriza = target == "completo" or bool(re.search(r"corrig|correg|arregl|repar|solucion|complet|agreg|haz\b", q_norm))
+    bloque_correccion = _EXCEL_CORRECCION_AUTORIZADA if autoriza else _EXCEL_CORRECCION_CAUTA
+    if target == "completo" or re.search(r"haber social|reparto|reparti|particip|socio|liquidaci|disoluci", q_norm):
+        bloque_correccion += "\n" + _EXCEL_REGLA_REPARTO
     limite = 150000 if target == "completo" else 50000
     return f"""
 Eres TANA, auditor contable de un archivo Excel peruano.
@@ -1695,11 +1810,7 @@ REGLAS POR OBJETIVO:
 - ASIENTOS: revisa Debe = Haber de los asientos indicados, sin desarrollar estados.
 - KARDEX: revisa cantidades, costos y saldos SOLO del Kardex solicitado.
 
-CORRECCIÓN:
-Si puedes determinar inequívocamente la celda y el valor/formula correcto, devuelve
-una corrección. Si no puedes determinarlo sin inventar información, NO corrijas: indica
-el error y qué debe revisar el estudiante.
-
+{bloque_correccion}
 Devuelve ÚNICAMENTE JSON válido:
 {{
   "objetivo": "ERN|ERF|ESF|HT|ASIENTOS|KARDEX|COMPLETO|OTRO",
@@ -1712,6 +1823,9 @@ Devuelve ÚNICAMENTE JSON válido:
   "correcciones": [
     {{"hoja":"", "celda":"", "valor":0, "formula":"", "motivo":""}}
   ],
+  "hojas_nuevas": [
+    {{"nombre":"", "motivo":"", "filas":[["Encabezado A","Encabezado B"],["dato",0]]}}
+  ],
   "mensaje_error": ""
 }}
 
@@ -1722,7 +1836,7 @@ VISTA ESTRUCTURAL DEL ARCHIVO:
 """
 
 
-def _excel_auditar_y_corregir(uploaded_file, question):
+def _excel_auditar_y_corregir(uploaded_file, question, previos=None):
     """Revisa un Excel según el pedido. Si el pedido es general, revisa todo el libro y
     agrega lo que falta y se puede armar con certeza (por ejemplo el Libro Mayor)."""
     target = _excel_target_from_question(question)
@@ -1770,7 +1884,30 @@ def _excel_auditar_y_corregir(uploaded_file, question):
     nota_extra = ""
     if lm_creado:
         nota_extra = ("NOTA: TANA acaba de agregar automáticamente la hoja «LM» con el Libro Mayor, armada desde el "
-                      "Libro Diario de este archivo (enlazada con fórmulas). No la reportes como faltante.")
+                      "Libro Diario de este archivo (enlazada con fórmulas). No la reportes como faltante.\n")
+    # Verificación matemática (sin IA) del Libro Diario: asientos que no cuadran y balance de comprobación.
+    chequeo = None
+    if es_xlsx and target in ("completo", "asientos"):
+        try:
+            chequeo = _excel_chequeo_diario(uploaded_bytes, suffix)
+        except Exception:
+            chequeo = None
+    if chequeo and chequeo.get("confiable"):
+        nota_extra += (
+            f"VERIFICACIÓN MATEMÁTICA DE TANA (calculada con Python sobre la hoja «{chequeo['hoja']}»; es confiable): "
+            f"{chequeo['n_asientos']} asientos, total Debe {chequeo['total_debe']:,.2f}, total Haber {chequeo['total_haber']:,.2f}.\n")
+        if chequeo["descuadres"]:
+            nota_extra += ("Asientos que NO cuadran (inclúyelos en hallazgos, explica la causa y corrígelos): "
+                           + json.dumps(chequeo["descuadres"], ensure_ascii=False) + "\n")
+        else:
+            nota_extra += "Todos los asientos del Diario cuadran (Debe = Haber).\n"
+        nota_extra += ("BALANCE DE COMPROBACIÓN calculado desde el Diario (úsalo para validar HT, LM, ERN, ERF y ESF): "
+                       + json.dumps(chequeo["balance"], ensure_ascii=False) + "\n")
+    if isinstance(previos, dict) and (previos.get("hallazgos") or previos.get("resumen")):
+        lineas_prev = [f"- {h.get('hoja','')} {h.get('celda','')}: {h.get('detalle','')}"
+                       for h in (previos.get("hallazgos") or [])[:40] if h.get("detalle")]
+        nota_extra += ("REVISIÓN ANTERIOR de este mismo archivo (el usuario te pide corregir esos errores):\n"
+                       + str(previos.get("resumen") or "") + "\n" + "\n".join(lineas_prev) + "\n")
     snapshot = _excel_workbook_snapshot(uploaded_bytes, uploaded_file.name, compacto=(target == "completo"))
     prompt = _excel_auditoria_prompt(question, uploaded_file.name, snapshot, target, nota_extra)
 
@@ -1831,7 +1968,10 @@ def _excel_auditar_y_corregir(uploaded_file, question):
     corrections = result.get("correcciones", []) if isinstance(result, dict) else []
     corrected_buffer = None
     applied = []
-    can_correct = bool(result.get("puede_corregir")) and bool(corrections)
+    hojas_nuevas = result.get("hojas_nuevas") if isinstance(result.get("hojas_nuevas"), list) else []
+    if not isinstance(corrections, list):
+        corrections = []
+    can_correct = bool(corrections) or bool(hojas_nuevas)
     if can_correct and es_xlsx:
         tmp_in = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
         in_path = tmp_in.name
@@ -1857,6 +1997,10 @@ def _excel_auditar_y_corregir(uploaded_file, question):
                 corr["anterior"] = wb[sheet][cell].value
                 wb[sheet][cell] = value
                 applied.append(corr)
+            for _h in hojas_nuevas:
+                _rec = _excel_aplicar_hoja_nueva(wb, _h)
+                if _rec:
+                    applied.append(_rec)
             if applied:
                 out = io.BytesIO()
                 wb.calculation.fullCalcOnLoad = True
@@ -1875,6 +2019,18 @@ def _excel_auditar_y_corregir(uploaded_file, question):
     result["puede_corregir"] = bool(todas)
     if todas:
         result["correcciones_aplicadas"] = todas
+    # Descuadres comprobados por TANA que la revisión no haya mencionado: se agregan como hallazgos.
+    if chequeo and chequeo.get("confiable") and chequeo.get("descuadres"):
+        result["hallazgos"] = list(result.get("hallazgos") or [])
+        _txt = json.dumps(result["hallazgos"], ensure_ascii=False)
+        for _d in chequeo["descuadres"]:
+            if str(_d["asiento"]) not in _txt:
+                result["hallazgos"].append({
+                    "hoja": _d["hoja"], "celda": _d["rango"], "tipo": "error",
+                    "detalle": (f"El asiento {_d['asiento']} no cuadra: Debe {_d['debe']:,.2f} y Haber {_d['haber']:,.2f} "
+                                f"(diferencia {_d['debe'] - _d['haber']:,.2f}). Verificado por TANA.")})
+        if not applied:
+            result["cuadra"] = False
     if lm_creado:
         result["resumen"] = lm["mensaje"] + " " + str(result.get("resumen") or "")
     elif lm is not None and lm.get("mensaje"):
@@ -2896,7 +3052,11 @@ if _es_excel_subido:
         )
         with st.spinner("TANA está revisando tu Excel… puede tardar uno o dos minutos."):
             try:
-                _excel_result = _excel_auditar_y_corregir(uploaded_file, _q_excel)
+                _prev = st.session_state.get("excel_auditoria")
+                if not (isinstance(_prev, dict) and _prev.get("_archivo") == uploaded_file.name):
+                    _prev = None
+                _excel_result = _excel_auditar_y_corregir(uploaded_file, _q_excel, previos=_prev)
+                _excel_result["resultado"]["_archivo"] = uploaded_file.name
                 st.session_state["excel_auditoria"] = _excel_result["resultado"]
                 st.session_state["excel_auditoria_buffer"] = _excel_result["buffer"]
                 st.session_state["excel_auditoria_filename"] = _excel_result["filename"]
@@ -2928,7 +3088,10 @@ if st.session_state.get("excel_auditoria") and (not uploaded_file or _es_excel_s
             st.success("📊 TANA realizó los cambios seguros y preparó el Excel.")
             for _c in _r.get("correcciones_aplicadas", []) or []:
                 _nuevo = _c.get("formula") or _c.get("valor")
-                st.caption(f"✏️ {_c.get('hoja','')} {_c.get('celda','')}: {_c.get('anterior','(vacío)')} → {_nuevo}  —  {_c.get('motivo','')}")
+                st.markdown(
+                    f"✏️ **{_c.get('hoja','')} {_c.get('celda','')}**: {_c.get('anterior','(vacío)')} → {_nuevo}"
+                    + (f"  \n*Por qué:* {_c.get('motivo')}" if _c.get("motivo") else "")
+                )
         else:
             st.info("📊 TANA revisó el Excel. No se aplicaron cambios automáticos; se entrega una copia del archivo revisado.")
         st.download_button(
