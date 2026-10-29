@@ -1,7 +1,7 @@
 {
-  "name": "Tana Inteligencia Artificial Contable",
-  "short_name": "TANA",
-  "description": "TANA desarrolla asientos contables, hoja de trabajo y estados financieros a partir de tu monografía, usando el PCGE.",
+  "name": "Cora - Tu asistente contable con IA",
+  "short_name": "CORA",
+  "description": "CORA desarrolla asientos contables, hoja de trabajo y estados financieros a partir de tu monografía, usando el PCGE.",
   "start_url": ".",
   "scope": ".",
   "display": "standalone",
