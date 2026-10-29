@@ -1142,50 +1142,11 @@ def get_gemini_profiles():
     return profiles
 
 
-def _cora_record_usage(response, model):
-    """Guarda los tokens de cada llamada a Gemini (solo para medir costos)."""
-    try:
-        um = getattr(response, "usage_metadata", None)
-        if um is None:
-            return
-        entrada = int(getattr(um, "prompt_token_count", 0) or 0)
-        salida = int(getattr(um, "candidates_token_count", 0) or 0)
-        pensamiento = int(getattr(um, "thoughts_token_count", 0) or 0)
-        total = int(getattr(um, "total_token_count", 0) or 0) or (entrada + salida + pensamiento)
-        log = st.session_state.setdefault("_cora_usage_log", [])
-        log.append({
-            "hora": _dt.datetime.now().strftime("%H:%M:%S"),
-            "modelo": str(model or "").replace("models/", ""),
-            "entrada": entrada,
-            "salida": salida,
-            "pensamiento": pensamiento,
-            "total": total,
-        })
-    except Exception:
-        pass
-
-
-def _cora_instrument_client(client):
-    """Envuelve generate_content para registrar tokens sin alterar su resultado."""
-    try:
-        _orig = client.models.generate_content
-
-        def _wrapped(*args, **kwargs):
-            resp = _orig(*args, **kwargs)
-            _cora_record_usage(resp, kwargs.get("model"))
-            return resp
-
-        client.models.generate_content = _wrapped
-    except Exception:
-        pass
-    return client
-
-
 def get_gemini_client(api_key=None):
     api_key = api_key or _secret_or_env("GEMINI_API_KEY")
     if not api_key:
         return None
-    return _cora_instrument_client(genai.Client(api_key=api_key))
+    return genai.Client(api_key=api_key)
 
 
 def _is_gemini_fallback_error(exc):
@@ -6788,51 +6749,3 @@ if st.session_state.get("tana_excel_buffer"):
     )
     if "monografia_nombre" in st.session_state:
         st.caption("La hoja Monografia conserva el texto extraído para revisión.")
-
-
-# ============================================================
-# MEDIDOR DE CONSUMO (solo visible si CORA_SHOW_USAGE = "1" en Secrets)
-# ============================================================
-if str(_secret_or_env("CORA_SHOW_USAGE", "")).strip().lower() in ("1", "true", "si", "sí", "yes"):
-    _ulog = st.session_state.get("_cora_usage_log", [])
-    with st.expander("📊 Consumo de tokens (solo administrador)", expanded=bool(_ulog)):
-        if not _ulog:
-            st.caption("Aún no hay llamadas a Gemini en esta sesión. Resuelve una monografía y vuelve a mirar aquí.")
-        else:
-            _PRECIOS_BASE = {"gemini-3.5-flash": (1.50, 9.00)}
-            st.caption(
-                "Precios en dólares por millón de tokens. Los tokens de pensamiento se cobran como salida. "
-                "Verifica los precios en la página oficial de Gemini API: si un modelo sale en 0, escríbelo tú."
-            )
-            _modelos = sorted({r["modelo"] for r in _ulog})
-            _precios = {}
-            for _m in _modelos:
-                _pi, _po = _PRECIOS_BASE.get(_m, (0.0, 0.0))
-                _c1, _c2 = st.columns(2)
-                _precios[_m] = (
-                    _c1.number_input(f"{_m} · entrada USD/1M", min_value=0.0, value=float(_pi), step=0.05, key=f"_pin_{_m}"),
-                    _c2.number_input(f"{_m} · salida USD/1M", min_value=0.0, value=float(_po), step=0.05, key=f"_pout_{_m}"),
-                )
-            _tc = st.number_input("Tipo de cambio (S/ por USD)", min_value=1.0, value=3.70, step=0.05, key="_cora_tc")
-
-            _filas, _tot_usd = [], 0.0
-            for _r in _ulog:
-                _pi, _po = _precios.get(_r["modelo"], (0.0, 0.0))
-                _usd = (_r["entrada"] * _pi + (_r["salida"] + _r["pensamiento"]) * _po) / 1_000_000
-                _tot_usd += _usd
-                _filas.append({**_r, "USD": round(_usd, 5), "S/": round(_usd * _tc, 4)})
-            st.dataframe(_filas, use_container_width=True)
-
-            _n = len(_ulog)
-            st.markdown(
-                f"**Llamadas:** {_n} · **Tokens totales:** {sum(r['total'] for r in _ulog):,} · "
-                f"**Costo total estimado:** USD {_tot_usd:.4f} (≈ S/ {_tot_usd * _tc:.3f})"
-            )
-            st.caption(
-                "Para el precio por monografía: resuelve varias monografías distintas, "
-                "reinicia el contador antes de cada una y anota el costo total de cada una."
-            )
-            if st.button("🔄 Reiniciar contador", key="_cora_usage_reset"):
-                st.session_state["_cora_usage_log"] = []
-                st.rerun()
-
