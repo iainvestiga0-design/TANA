@@ -1,4 +1,4 @@
-TANA V6 - Enter + Costos industriales y de servicios
+CORA V6 - Enter + Costos industriales y de servicios
 
 1. Enter envía la pregunta y el formulario se limpia automáticamente.
 2. Se identifica COMERCIAL / INDUSTRIAL / SERVICIOS / MIXTA.
@@ -7,7 +7,7 @@ TANA V6 - Enter + Costos industriales y de servicios
    producción terminada, costo de ventas y costo unitario.
 4. Se añadió soporte estructurado para costos de servicios.
 5. Se añade la hoja Excel Costo_Produccion cuando corresponde.
-6. El tutor TANA recibe el modelo de costos para explicar los cálculos.
+6. El tutor CORA recibe el modelo de costos para explicar los cálculos.
 7. Se conserva el flujo comercial, Kardex, HT, ERN, ERF y ESF.
 
 IMPORTANTE:

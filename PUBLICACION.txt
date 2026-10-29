@@ -1,4 +1,4 @@
-TANA IA - PAQUETE DE PUBLICACION ESTABLE
+CORA IA - PAQUETE DE PUBLICACION ESTABLE
 
 IMPORTANTE:
 - app.py es exactamente el archivo recibido del usuario.
@@ -11,7 +11,7 @@ En Streamlit Community Cloud:
 1. Crear/seleccionar el repositorio de GitHub.
 2. Subir app.py, requirements.txt y packages.txt en la raiz.
 3. Crear la aplicacion apuntando a app.py.
-4. Elegir el subdominio definitivo antes de publicar, por ejemplo tanaia.
+4. Elegir el subdominio definitivo antes de publicar, por ejemplo coraia.
 5. Configurar Secrets en Advanced settings.
 6. Mantener la configuracion [auth] de Google OAuth y actualizar redirect_uri
    si cambia la URL publica.

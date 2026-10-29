@@ -1,2 +1,2 @@
-# TANA
-TANA - Asistente inteligente de automatización contable.
+# CORA
+CORA - Tu asistente contable con IA.
