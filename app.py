@@ -360,6 +360,17 @@ def _tana_auth_screen():
     if st.session_state.get("tana_no_restore"):
         _tana_emit_cookie_script(clear=True)  # cierre de sesión o token vencido
 
+    _auth_logo_html = ""
+    _auth_logo_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "LOGO_CORA_web.png")
+    if os.path.exists(_auth_logo_file):
+        import base64 as _b64a
+        with open(_auth_logo_file, "rb") as _alf:
+            _auth_logo_html = (
+                "<div style='text-align:center;margin-bottom:4px;'><img src='data:image/png;base64,"
+                + _b64a.b64encode(_alf.read()).decode()
+                + "' alt='CORA' style='width:120px;height:auto;'></div>"
+            )
+
     st.markdown("""
     <style>
     .tana-auth-wrap { max-width: 470px; margin: 7vh auto 0 auto; padding: 0 16px; }
@@ -369,10 +380,11 @@ def _tana_auth_screen():
     </style>
     <div class="tana-auth-wrap">
       <div class="tana-auth-card">
+        __CORA_LOGO__
         <div class="tana-auth-logo">CORA</div>
         <div class="tana-auth-sub">Inteligencia Artificial Contable</div>
     </div></div>
-    """, unsafe_allow_html=True)
+    """.replace("__CORA_LOGO__", _auth_logo_html), unsafe_allow_html=True)
 
     # El formulario real queda debajo del encabezado visual.
     _, center, _ = st.columns([0.15, 0.70, 0.15])
@@ -2889,7 +2901,9 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .t
 # Logo: solo el símbolo (PNG recortado, sin la frase "Inteligencia Artificial").
 # Si el PNG no está en el repositorio, usa el JPG anterior como respaldo.
 _BASE_DIR = os.path.dirname(__file__)
-LOGO_PATH = os.path.join(_BASE_DIR, "LOGO_CORA.png")
+LOGO_PATH = os.path.join(_BASE_DIR, "LOGO_CORA_web.png")
+if not os.path.exists(LOGO_PATH):
+    LOGO_PATH = os.path.join(_BASE_DIR, "LOGO_CORA.png")
 LOGO_MIME = "image/png" if LOGO_PATH.lower().endswith(".png") else "image/jpeg"
 
 # Cabecera móvil: solo presentación. El botón abre el sidebar nativo de Streamlit.
@@ -3031,9 +3045,19 @@ def _tana_chat_add(role, content):
     st.session_state["tana_chat"].append({"role": role, "content": content})
 
 if not st.session_state["tana_chat"]:
+    _logo_html = ""
+    if os.path.exists(LOGO_PATH):
+        import base64 as _b64
+        with open(LOGO_PATH, "rb") as _lf:
+            _logo_b64 = _b64.b64encode(_lf.read()).decode()
+        _logo_html = (
+            "<img src='data:" + LOGO_MIME + ";base64," + _logo_b64 + "' alt='CORA' "
+            "style='width:96px;height:auto;background:#fff;padding:14px;border-radius:24px;"
+            "box-shadow:0 4px 18px rgba(0,0,0,.28);'>"
+        )
     st.markdown(
         '<div class="tana-welcome" style="text-align:center; padding:70px 0 20px 0;">'
-        f'{"<img src=\'data:" + LOGO_MIME + ";base64," + __import__("base64").b64encode(open(LOGO_PATH,"rb").read()).decode() + "\' alt=\'CORA\' style=\'width:96px;height:auto;background:#fff;padding:14px;border-radius:24px;box-shadow:0 4px 18px rgba(0,0,0,.28);\'>" if os.path.exists(LOGO_PATH) else ""}'
+        + _logo_html +
         '<div class="tana-welcome-title" style="font-size:26px;font-weight:800;margin-top:14px;">¿Qué monografía resolvemos hoy?</div>'
         '<div class="tana-welcome-subtitle" style="font-size:14.5px;margin-top:6px;">'
         'Sube tu monografía abajo y CORA desarrolla los asientos, la HT y los estados financieros.</div>'
