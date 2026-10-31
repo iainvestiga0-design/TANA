@@ -1,7 +1,7 @@
 {
-  "name": "Cora - Tu asistente contable con IA",
-  "short_name": "CORA",
-  "description": "CORA desarrolla asientos contables, hoja de trabajo y estados financieros a partir de tu monografía, usando el PCGE.",
+  "name": "Leda - Tu asistente contable con IA",
+  "short_name": "LEDA",
+  "description": "LEDA desarrolla asientos contables, hoja de trabajo y estados financieros a partir de tu monografía, usando el PCGE.",
   "start_url": ".",
   "scope": ".",
   "display": "standalone",

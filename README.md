@@ -1,2 +1,2 @@
-# CORA
-CORA - Tu asistente contable con IA.
+# LEDA
+LEDA - Tu asistente contable con IA.

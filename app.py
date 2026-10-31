@@ -15,16 +15,16 @@ from decimal import Decimal, InvalidOperation
 def _tana_nombre_descarga(nombre_original, extension=".xlsx"):
     """Genera un nombre de descarga basado en el archivo que subió el usuario.
 
-    Ejemplo: "Practica Final 03.xlsx" -> "Practica Final 03 - CORA.xlsx".
-    Evita duplicar "- CORA" si ya aparece al final del nombre.
+    Ejemplo: "Practica Final 03.xlsx" -> "Practica Final 03 - LEDA.xlsx".
+    Evita duplicar "- LEDA" si ya aparece al final del nombre.
     """
     nombre = Path(str(nombre_original or "Practica")).stem.strip()
     nombre = re.sub(r"[\\/:*?\"<>|]+", " ", nombre)
     nombre = re.sub(r"\s+", " ", nombre).strip(" .")
     if not nombre:
         nombre = "Practica"
-    if not re.search(r"(?:[-_]\s*)(?:CORA|TANA)$", nombre, flags=re.IGNORECASE):
-        nombre = f"{nombre} - CORA"
+    if not re.search(r"(?:[-_]\s*)(?:LEDA|CORA|TANA)$", nombre, flags=re.IGNORECASE):
+        nombre = f"{nombre} - LEDA"
     extension = extension if str(extension).startswith(".") else f".{extension}"
     return f"{nombre}{extension.lower()}"
 
@@ -48,16 +48,16 @@ from PIL import Image
 # ============================================================
 # CONFIGURACIÓN GENERAL / PÁGINA PÚBLICA
 # ============================================================
-_CORA_ICON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "LOGO_CORA.png")
+_CORA_ICON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "LOGO_LEDA.png")
 st.set_page_config(
-    page_title="CORA | Inteligencia Artificial Contable",
+    page_title="LEDA | Inteligencia Artificial Contable",
     page_icon=_CORA_ICON if os.path.exists(_CORA_ICON) else "📊",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
 # ============================================================
-# AUTENTICACIÓN CORA — SUPABASE
+# AUTENTICACIÓN LEDA — SUPABASE
 # Solo controla acceso de usuarios. NO modifica ningún motor
 # contable, Gemini, PCGE, cálculos, asientos, estados ni Excel.
 # Requiere en Streamlit Secrets:
@@ -97,14 +97,14 @@ def _tana_supabase_config():
 
 
 def _tana_app_url():
-    """URL pública de CORA (a donde vuelve la persona tras confirmar su correo).
+    """URL pública de LEDA (a donde vuelve la persona tras confirmar su correo).
     Se puede cambiar con el Secret APP_URL; por defecto, la app actual."""
     url = ""
     try:
         url = str(dict(st.secrets).get("APP_URL", "") or "").strip()
     except Exception:
         pass
-    url = url or os.getenv("APP_URL", "").strip() or "https://coraia.streamlit.app"
+    url = url or os.getenv("APP_URL", "").strip() or "https://ledaia.streamlit.app"
     return url.rstrip("/")
 
 
@@ -116,9 +116,9 @@ def _tana_supabase_request(path, method="POST", payload=None, access_token=None)
         except Exception:
             _tana_secret_names = []
         raise RuntimeError(
-            "CORA no pudo leer la configuración de Supabase. "
+            "LEDA no pudo leer la configuración de Supabase. "
             f"Variables detectadas en Secrets: {_tana_secret_names}. "
-            "CORA acepta SUPABASE_URL y SUPABASE_PUBLISHABLE_KEY "
+            "LEDA acepta SUPABASE_URL y SUPABASE_PUBLISHABLE_KEY "
             "o SUPABASE_ANON_KEY. No se muestran valores por seguridad."
         )
 
@@ -175,7 +175,7 @@ def _tana_clear_auth_state():
 # SESIÓN PERSISTENTE (30 días en este dispositivo)
 #
 # Lectura : st.context.cookies -> llega en la PRIMERA ejecución, sin esperar
-#           a ningún componente, así que CORA sabe si hay sesión antes de
+#           a ningún componente, así que LEDA sabe si hay sesión antes de
 #           dibujar la pantalla de login.
 # Escritura: un <script> sin altura que guarda el refresh token en una cookie.
 #           Se dibuja en cada ejecución (es idempotente) y NUNCA justo antes
@@ -282,7 +282,7 @@ def _tana_refresh_request(refresh_token):
 
 
 def _tana_restore_auth_from_cookie():
-    """Restaura la sesión al volver a abrir/recargar CORA. True si hay sesión."""
+    """Restaura la sesión al volver a abrir/recargar LEDA. True si hay sesión."""
     if st.session_state.get("tana_auth_user"):
         return True
     if st.session_state.get("tana_no_restore"):
@@ -356,19 +356,19 @@ def _tana_sync_cookie():
 
 
 def _tana_auth_screen():
-    """Pantalla de acceso. Se ejecuta antes de cualquier motor de CORA."""
+    """Pantalla de acceso. Se ejecuta antes de cualquier motor de LEDA."""
     if st.session_state.get("tana_no_restore"):
         _tana_emit_cookie_script(clear=True)  # cierre de sesión o token vencido
 
     _auth_logo_html = ""
-    _auth_logo_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "LOGO_CORA_web.png")
+    _auth_logo_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "LOGO_LEDA_web.png")
     if os.path.exists(_auth_logo_file):
         import base64 as _b64a
         with open(_auth_logo_file, "rb") as _alf:
             _auth_logo_html = (
                 "<div style='text-align:center;margin-bottom:4px;'><img src='data:image/png;base64,"
                 + _b64a.b64encode(_alf.read()).decode()
-                + "' alt='CORA' style='width:120px;height:auto;'></div>"
+                + "' alt='LEDA' style='width:120px;height:auto;'></div>"
             )
 
     st.markdown("""
@@ -381,7 +381,7 @@ def _tana_auth_screen():
     <div class="tana-auth-wrap">
       <div class="tana-auth-card">
         __CORA_LOGO__
-        <div class="tana-auth-logo">CORA</div>
+        <div class="tana-auth-logo">LEDA</div>
         <div class="tana-auth-sub">Inteligencia Artificial Contable</div>
     </div></div>
     """.replace("__CORA_LOGO__", _auth_logo_html), unsafe_allow_html=True)
@@ -417,7 +417,7 @@ def _tana_auth_screen():
               <div style="font-size:22px;font-weight:800;margin-bottom:6px;">✅ ¡Correo verificado!</div>
               <div style="font-size:15px;line-height:1.5;">
                 Tu cuenta ya está activa. Ahora puedes disfrutar de todos los beneficios de
-                <b>CORA</b>: sube tu monografía y recibe los asientos, la HT y los estados
+                <b>LEDA</b>: sube tu monografía y recibe los asientos, la HT y los estados
                 financieros, con tu historial guardado.<br>
                 <b>Inicia sesión</b> abajo con tu correo y tu contraseña para empezar.
               </div>
@@ -451,7 +451,7 @@ def _tana_auth_screen():
             with st.form("tana_login_form", clear_on_submit=False):
                 email = st.text_input("Correo electrónico", key="tana_login_email", placeholder="tu@correo.com")
                 password = st.text_input("Contraseña", type="password", key="tana_login_password")
-                submit = st.form_submit_button("Entrar a CORA", type="primary", use_container_width=True)
+                submit = st.form_submit_button("Entrar a LEDA", type="primary", use_container_width=True)
 
             if submit:
                 if not email.strip() or not password:
@@ -492,17 +492,17 @@ def _tana_auth_screen():
                         session = data.get("session") or (data if data.get("access_token") else None)
                         if session:
                             _tana_store_session(session)
-                            st.success("Cuenta creada. Entrando a CORA…")
+                            st.success("Cuenta creada. Entrando a LEDA…")
                             st.rerun()
                         else:
                             st.success(
                                 "Cuenta creada correctamente. Revisa tu correo, confirma tu cuenta "
-                                "y después vuelve a CORA para iniciar sesión."
+                                "y después vuelve a LEDA para iniciar sesión."
                             )
                     except Exception as exc:
                         st.error(_tana_auth_error_message(exc))
 
-        st.caption("El acceso se gestiona mediante Supabase Authentication. CORA no guarda contraseñas.")
+        st.caption("El acceso se gestiona mediante Supabase Authentication. LEDA no guarda contraseñas.")
         _d = st.session_state.get("tana_diag") or {}
         with st.expander("Diagnóstico de sesión", expanded=False):
             st.caption(
@@ -539,7 +539,7 @@ if not st.session_state.get("tana_auth_user"):  # el token ya no era válido
 _tana_sync_cookie()
 
 TANA_AUTH_USER = st.session_state.get("tana_auth_user") or {}
-TANA_AUTH_EMAIL = str(TANA_AUTH_USER.get("email") or "Usuario CORA")
+TANA_AUTH_EMAIL = str(TANA_AUTH_USER.get("email") or "Usuario LEDA")
 
 
 # ============================================================
@@ -600,7 +600,7 @@ def _tana_history_request(path, method="GET", payload=None):
             raw = response.read().decode("utf-8")
             return json.loads(raw) if raw else {}
     except HTTPError as exc:
-        # No rompe CORA: guarda un mensaje técnico breve (sin claves) que se
+        # No rompe LEDA: guarda un mensaje técnico breve (sin claves) que se
         # muestra en el panel Historial.
         try:
             detail = exc.read().decode("utf-8", errors="replace")
@@ -901,7 +901,7 @@ st.components.v1.html(
 
         const appleTitle = document.createElement('meta');
         appleTitle.name = 'apple-mobile-web-app-title';
-        appleTitle.content = 'CORA';
+        appleTitle.content = 'LEDA';
         head.appendChild(appleTitle);
 
         if ('serviceWorker' in window.parent.navigator) {
@@ -925,7 +925,7 @@ from google.genai import types
 
 SUPPORTED_TYPES = ["pdf", "doc", "docx", "xls", "xlsx", "jpg", "jpeg", "png"]
 
-# Gemini se configura con una cadena de respaldo para que CORA no se detenga
+# Gemini se configura con una cadena de respaldo para que LEDA no se detenga
 # cuando se agota la cuota de un modelo/proyecto. La primera opción conserva
 # el comportamiento actual; las siguientes se usan solo si hay 429/cuota o
 # si el modelo configurado no está disponible.
@@ -1209,7 +1209,7 @@ def _fallback_error_message(errors):
         else:
             details.append(f"{label} ({model}): {str(exc)[:180]}")
     return (
-        "CORA intentó las rutas disponibles de Gemini y ninguna pudo procesar "
+        "LEDA intentó las rutas disponibles de Gemini y ninguna pudo procesar "
         "la solicitud. Revisiones realizadas: " + "; ".join(details) + ". "
         "Puedes configurar GEMINI_API_KEY_2/GEMINI_API_KEY_3 y sus modelos "
         "alternativos en Streamlit Secrets."
@@ -1221,7 +1221,7 @@ def _generate_with_fallback(contents_factory, config):
     profiles = get_gemini_profiles()
     if not profiles:
         raise RuntimeError(
-            "CORA no tiene configurada ninguna GEMINI_API_KEY. En Streamlit "
+            "LEDA no tiene configurada ninguna GEMINI_API_KEY. En Streamlit "
             "abre App settings → Secrets y agrega GEMINI_API_KEY = \"TU_CLAVE\"."
         )
 
@@ -1244,7 +1244,7 @@ def _generate_with_fallback(contents_factory, config):
 
 
 EXTRACTION_PROMPT = """
-Eres el módulo de extracción documental de CORA, un sistema contable peruano.
+Eres el módulo de extracción documental de LEDA, un sistema contable peruano.
 
 Analiza la monografía completa que se te proporciona. NO resuelvas todavía
 los asientos contables. Tu trabajo es EXTRAER fielmente la información.
@@ -1293,7 +1293,7 @@ REGLAS:
 - Conserva datos que permitan identificar materia prima, mano de obra, costos indirectos,
   producción terminada, productos en proceso, servicios prestados y cualquier base de
   distribución de costos. No calcules todavía el costo si el dato no está sustentado.
-- La información extraída servirá después para el motor contable de CORA.
+- La información extraída servirá después para el motor contable de LEDA.
 """
 
 
@@ -1317,7 +1317,7 @@ EXCEL_TARGET_ALIASES = {
 # LIBRO MAYOR GENERAL (helpers)
 # Se definen ANTES del flujo de Excel porque el flujo de revisión de Excel
 # los usa para agregar la hoja LM a una práctica que no la tiene, y la hoja
-# LM del Excel que genera CORA se arma con la misma función.
+# LM del Excel que genera LEDA se arma con la misma función.
 # Cada cuenta que aparece en el Diario sale UNA sola vez, con sus
 # movimientos y su TOTAL GENERAL.
 # ============================================================
@@ -1715,7 +1715,7 @@ def _excel_aplicar_hoja_nueva(wb, h):
 
 
 def _excel_codigo_5d(code, pcge_5d):
-    """Lleva un código del Diario al código PCGE de 5 dígitos que usa el motor de CORA."""
+    """Lleva un código del Diario al código PCGE de 5 dígitos que usa el motor de LEDA."""
     code = str(code).strip()
     if re.fullmatch(r"\d{5}", code):
         return code, None
@@ -1729,7 +1729,7 @@ def _excel_codigo_5d(code, pcge_5d):
 
 def _excel_asientos_tana(uploaded_bytes, suffix, aplicadas):
     """Lee el Libro Diario del Excel (con las correcciones ya aplicadas) y lo convierte a los
-    asientos que usa el motor de CORA para generar LM, HT, ERF, ERN y ESF en su formato estándar.
+    asientos que usa el motor de LEDA para generar LM, HT, ERF, ERN y ESF en su formato estándar.
     Devuelve {"ok": bool, ...}. Solo ok=True cuando todos los asientos cuadran."""
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
     path = tmp.name
@@ -1740,7 +1740,7 @@ def _excel_asientos_tana(uploaded_bytes, suffix, aplicadas):
         wb_v = openpyxl.load_workbook(path, data_only=True)
         enc0 = _excel_buscar_diario(wb_f, wb_v)
         if not enc0:
-            return {"ok": False, "motivo": "No encontré el Libro Diario para armar el Excel en formato CORA."}
+            return {"ok": False, "motivo": "No encontré el Libro Diario para armar el Excel en formato LEDA."}
         hoja = enc0[0].title
         # Fórmulas del Diario que nunca se calcularon: no hay forma confiable de leer sus montos.
         sin_calcular = 0
@@ -1981,7 +1981,7 @@ que existe en el archivo:
   debe ser el mismo en ERN, ERF, y el que entra al patrimonio del ESF.
 - Kardex / Registros: cantidades, costos y saldos consistentes con los asientos.
 - Coherencia entre hojas: los mismos importes deben coincidir entre HT, estados y asientos.
-IMPORTANTE - FORMATO ÚNICO: CORA genera ella misma la Hoja de Trabajo, el Libro Mayor y los
+IMPORTANTE - FORMATO ÚNICO: LEDA genera ella misma la Hoja de Trabajo, el Libro Mayor y los
 estados financieros (ERN, ERF, ESF) en su formato estándar, a partir de los ASIENTOS del Libro
 Diario ya corregidos. Por eso NO crees en "hojas_nuevas" una HT, un ERN, un ERF, un ESF ni un
 Libro Mayor. Tu trabajo es dejar el LIBRO DIARIO correcto y completo (cuentas PCGE correctas,
@@ -2011,7 +2011,7 @@ corregirse cuando pueda determinarlo con seguridad. No inventes datos.
 
 _EXCEL_CORRECCION_AUTORIZADA = """CORRECCIÓN (AUTORIZADA POR EL USUARIO):
 El usuario te pidió que CORRIJAS. Por cada error que encuentres devuelve la corrección en
-"correcciones" (hoja, celda, y valor o formula) para que CORA la aplique al Excel.
+"correcciones" (hoja, celda, y valor o formula) para que LEDA la aplique al Excel.
 - En "motivo" EXPLICA siempre: qué estaba mal, qué cuenta del PCGE elegiste (código y nombre)
   y por qué corresponde según la operación o la glosa, y cómo queda el asiento.
 - Asiento que no cuadra: corrige la celda equivocada (importe o cuenta) deduciéndola de la
@@ -2059,7 +2059,7 @@ def _excel_auditoria_prompt(question, filename, snapshot, target, nota_extra="")
         bloque_correccion += "\n" + _EXCEL_REGLA_REPARTO
     limite = 150000 if target == "completo" else 50000
     return f"""
-Eres CORA, auditor contable de un archivo Excel peruano.
+Eres LEDA, auditor contable de un archivo Excel peruano.
 
 ARCHIVO: {filename}
 PEDIDO DEL USUARIO: {question}
@@ -2194,7 +2194,7 @@ def _excel_aplicar_correcciones(base_bytes, suffix, target, corrections, hojas_n
 
 def _excel_auditar_y_corregir(uploaded_file, question, previos=None):
     """Revisa un Excel según el pedido. Si el pedido es general, revisa todo el libro, corrige
-    solo los montos o cuentas que están mal (con su sustento) y arma el Excel en formato CORA."""
+    solo los montos o cuentas que están mal (con su sustento) y arma el Excel en formato LEDA."""
     target = _excel_target_from_question(question)
     if target == "otro":
         target = "completo"      # con un Excel cargado, un pedido sin hoja concreta = revisión completa
@@ -2230,7 +2230,7 @@ def _excel_auditar_y_corregir(uploaded_file, question, previos=None):
     # 2) Revisión con Gemini (todo el libro si el pedido es general; si no, solo lo pedido).
     nota_extra = ""
     if lm_creado:
-        nota_extra = ("NOTA: CORA acaba de agregar automáticamente la hoja «LM» con el Libro Mayor, armada desde el "
+        nota_extra = ("NOTA: LEDA acaba de agregar automáticamente la hoja «LM» con el Libro Mayor, armada desde el "
                       "Libro Diario de este archivo (enlazada con fórmulas). No la reportes como faltante.\n")
     chequeo = None
     if es_xlsx and target in ("completo", "asientos"):
@@ -2240,7 +2240,7 @@ def _excel_auditar_y_corregir(uploaded_file, question, previos=None):
             chequeo = None
     if chequeo and chequeo.get("confiable"):
         nota_extra += (
-            f"VERIFICACIÓN MATEMÁTICA DE CORA (calculada con Python sobre la hoja «{chequeo['hoja']}»; es confiable): "
+            f"VERIFICACIÓN MATEMÁTICA DE LEDA (calculada con Python sobre la hoja «{chequeo['hoja']}»; es confiable): "
             f"{chequeo['n_asientos']} asientos, total Debe {chequeo['total_debe']:,.2f}, total Haber {chequeo['total_haber']:,.2f}.\n")
         if chequeo["descuadres"]:
             nota_extra += ("Asientos que NO cuadran (inclúyelos en hallazgos, explica la causa y corrígelos): "
@@ -2278,14 +2278,14 @@ def _excel_auditar_y_corregir(uploaded_file, question, previos=None):
     elif corrections or hojas_nuevas:
         result["mensaje_error"] = (result.get("mensaje_error") or "") + " Para corregir automáticamente, vuelve a subir el archivo en formato .xlsx."
 
-    # 4) Formato CORA (solo con revisión completa): se verifica que TODOS los asientos cuadren.
+    # 4) Formato LEDA (solo con revisión completa): se verifica que TODOS los asientos cuadren.
     #    Si tras las correcciones aún hay descuadres, se hace una segunda pasada con ese dato.
     tana, segunda_pasada = None, False
     if target == "completo" and es_xlsx:
         try:
             tana = _excel_asientos_tana(uploaded_bytes, suffix, applied)
         except Exception as exc:
-            tana = {"ok": False, "motivo": f"No pude convertir el Diario al formato CORA: {exc}"}
+            tana = {"ok": False, "motivo": f"No pude convertir el Diario al formato LEDA: {exc}"}
         if not tana.get("ok") and tana.get("descuadres"):
             segunda_pasada = True
             actual = corrected_buffer or base_bytes
@@ -2293,7 +2293,7 @@ def _excel_auditar_y_corregir(uploaded_file, question, previos=None):
                 "SEGUNDA PASADA: ya se aplicaron estas correcciones: "
                 + json.dumps([{"hoja": c.get("hoja"), "celda": c.get("celda"), "valor": c.get("valor"), "formula": c.get("formula")}
                               for c in applied if c.get("celda")], ensure_ascii=False, default=str)
-                + ". Aun así estos asientos siguen sin cuadrar (cálculo matemático de CORA): "
+                + ". Aun así estos asientos siguen sin cuadrar (cálculo matemático de LEDA): "
                 + json.dumps(tana["descuadres"], ensure_ascii=False)
                 + ". Entrega correcciones adicionales concretas (hoja, celda y monto nuevo) para que Debe = Haber en cada uno, "
                   "modificando solo lo estrictamente necesario y explicando el sustento de cada monto.\n")
@@ -2316,14 +2316,14 @@ def _excel_auditar_y_corregir(uploaded_file, question, previos=None):
                 try:
                     tana = _excel_asientos_tana(uploaded_bytes, suffix, applied)
                 except Exception as exc:
-                    tana = {"ok": False, "motivo": f"No pude convertir el Diario al formato CORA: {exc}"}
+                    tana = {"ok": False, "motivo": f"No pude convertir el Diario al formato LEDA: {exc}"}
 
     todas = ([lm["correccion"]] if lm_creado else []) + applied
     result["puede_corregir"] = bool(todas)
     if todas:
         result["correcciones_aplicadas"] = todas
 
-    # Descuadres comprobados por CORA que la revisión no haya mencionado: se agregan como hallazgos.
+    # Descuadres comprobados por LEDA que la revisión no haya mencionado: se agregan como hallazgos.
     if chequeo and chequeo.get("confiable") and chequeo.get("descuadres"):
         result["hallazgos"] = list(result.get("hallazgos") or [])
         _txt = json.dumps(result["hallazgos"], ensure_ascii=False)
@@ -2332,7 +2332,7 @@ def _excel_auditar_y_corregir(uploaded_file, question, previos=None):
                 result["hallazgos"].append({
                     "hoja": _d["hoja"], "celda": _d["rango"], "tipo": "error",
                     "detalle": (f"El asiento {_d['asiento']} no cuadra: Debe {_d['debe']:,.2f} y Haber {_d['haber']:,.2f} "
-                                f"(diferencia {_d['debe'] - _d['haber']:,.2f}). Verificado por CORA.")})
+                                f"(diferencia {_d['debe'] - _d['haber']:,.2f}). Verificado por LEDA.")})
     if lm_creado:
         result["resumen"] = lm["mensaje"] + " " + str(result.get("resumen") or "")
     elif lm is not None and lm.get("mensaje"):
@@ -2349,16 +2349,16 @@ def _excel_auditar_y_corregir(uploaded_file, question, previos=None):
             asientos_tana = tana["asientos"]
             result["cuadra"] = True
             extra = (" Cuadré los asientos modificando solo los montos indicados (con su sustento) y armé tu práctica en formato "
-                     "CORA (Asientos, LM, HT, ERF, ERN y ESF): descárgala con el botón «Descargar Excel».")
+                     "LEDA (Asientos, LM, HT, ERF, ERN y ESF): descárgala con el botón «Descargar Excel».")
             if tana.get("notas"):
                 extra += " Cuentas llevadas al PCGE de 5 dígitos: " + ", ".join(tana["notas"][:12]) + "."
             if tana.get("no_reflejadas"):
-                extra += " Ojo: hubo correcciones con fórmulas que no pude reflejar en el formato CORA; revísalas."
+                extra += " Ojo: hubo correcciones con fórmulas que no pude reflejar en el formato LEDA; revísalas."
             result["resumen"] = str(result.get("resumen") or "") + extra
         else:
             if tana.get("descuadres"):
                 result["cuadra"] = False
-            result["resumen"] = (str(result.get("resumen") or "") + " No generé el Excel en formato CORA: " +
+            result["resumen"] = (str(result.get("resumen") or "") + " No generé el Excel en formato LEDA: " +
                                  str(tana.get("motivo") or "") +
                                  " Puedes pedirme de nuevo «cuádralo y genera el Excel» o indicarme los montos correctos.")
     return {"resultado": result, "buffer": corrected_buffer, "filename": filename, "asientos_tana": asientos_tana}
@@ -2395,8 +2395,8 @@ def _excel_preguntar(archivo, question, previo=None):
         contexto = json.dumps(ctx, ensure_ascii=False, default=str)[:20000]
     asientos = st.session_state.get("asientos_contables")
     if asientos:
-        contexto += "\n\nASIENTOS EN FORMATO CORA:\n" + json.dumps(asientos, ensure_ascii=False, default=str)[:18000]
-    prompt = f"""Eres CORA, tutora y asistente contable para el Perú. Te apoyas en el Excel adjunto y en la revisión previa.
+        contexto += "\n\nASIENTOS EN FORMATO LEDA:\n" + json.dumps(asientos, ensure_ascii=False, default=str)[:18000]
+    prompt = f"""Eres LEDA, tutora y asistente contable para el Perú. Te apoyas en el Excel adjunto y en la revisión previa.
 
 REGLAS DE RESPUESTA:
 - Responde de forma clara y paso a paso, para que un estudiante o un empresario lo entienda.
@@ -2406,7 +2406,7 @@ REGLAS DE RESPUESTA:
   su nombre; si no estás seguro del artículo exacto, no lo inventes.
 - Usa solo datos del archivo y de la revisión; no inventes importes. Si falta información, dilo y pide el dato.
 - Si te piden cuadrar o corregir, indica qué monto debe ir en cada celda y por qué, y recuérdale que escriba
-  «cuádralo y genera el Excel» para que CORA aplique los cambios y entregue el archivo.
+  «cuádralo y genera el Excel» para que LEDA aplique los cambios y entregue el archivo.
 - Responsabilidad: si hay implicancias tributarias, legales o de negocio que dependan de hechos que no están en
   el archivo, indícalo y recomienda validar con un contador público colegiado. Este apoyo es de orientación y educativo.
 
@@ -2436,7 +2436,7 @@ def _gemini_error_message(exc):
     low = msg.lower()
     if "429" in low or "resource_exhausted" in low or "quota" in low:
         return (
-            "Se agotó una ruta de Gemini y CORA intentó automáticamente una ruta de respaldo. "
+            "Se agotó una ruta de Gemini y LEDA intentó automáticamente una ruta de respaldo. "
             "Si todas las rutas fallan, configura GEMINI_API_KEY_2 o GEMINI_API_KEY_3 "
             "en Streamlit Secrets. "
             f"Ruta principal: {GEMINI_MODEL}."
@@ -2448,7 +2448,7 @@ def extract_with_gemini(uploaded):
     profiles = get_gemini_profiles()
     if not profiles:
         raise RuntimeError(
-            "CORA no tiene configurada ninguna GEMINI_API_KEY. "
+            "LEDA no tiene configurada ninguna GEMINI_API_KEY. "
             "En Streamlit abre App settings → Secrets y agrega "
             'GEMINI_API_KEY = "TU_CLAVE".'
         )
@@ -2775,9 +2775,9 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .t
 
 
 /* ---- Celular: la barra superior de Streamlit (transparente) quedaba
-   ENCIMA de la cabecera de CORA y se quedaba con los toques, por eso el ☰
+   ENCIMA de la cabecera de LEDA y se quedaba con los toques, por eso el ☰
    "no hacía nada". Se le quita la captura de toques para que lleguen a
-   la cabecera de CORA y al panel del historial. ---- */
+   la cabecera de LEDA y al panel del historial. ---- */
 @media (max-width: 768px) {
     header[data-testid="stHeader"],
     header[data-testid="stHeader"] * { pointer-events: none !important; }
@@ -2840,7 +2840,7 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .t
     font-size: 10px !important;
 }
 
-/* ---- Botón enviar: círculo rojo con flecha, estilo CORA original ---- */
+/* ---- Botón enviar: círculo rojo con flecha, estilo LEDA original ---- */
 div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .tana-inputbar-anchor) button[kind="primary"] {
     border-radius: 50% !important;
     width: 40px !important; height: 40px !important;
@@ -2850,7 +2850,7 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .t
 }
 
 /* ============================================================
-   CORA MOBILE — SOLO PRESENTACIÓN
+   LEDA MOBILE — SOLO PRESENTACIÓN
    No modifica motores, prompts, cálculos, validaciones ni Excel.
    ============================================================ */
 .tana-mobile-header { display:none; }
@@ -2877,7 +2877,7 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .t
     #tana-mobile-header div { color:#F1F3F4 !important; }
 }
     /* ===== AJUSTES RESPONSIVE MÓVIL =====
-       Solo presentación. En móvil CORA usa todo el ancho disponible;
+       Solo presentación. En móvil LEDA usa todo el ancho disponible;
        no se altera ningún motor contable ni la lógica de sesión. */
     @media (max-width: 768px) {
         /* El contenido principal vuelve a ocupar todo el ancho */
@@ -2940,9 +2940,9 @@ div[data-testid="stVerticalBlock"]:has(> div[data-testid="element-container"] .t
 # Logo: solo el símbolo (PNG recortado, sin la frase "Inteligencia Artificial").
 # Si el PNG no está en el repositorio, usa el JPG anterior como respaldo.
 _BASE_DIR = os.path.dirname(__file__)
-LOGO_PATH = os.path.join(_BASE_DIR, "LOGO_CORA_web.png")
+LOGO_PATH = os.path.join(_BASE_DIR, "LOGO_LEDA_web.png")
 if not os.path.exists(LOGO_PATH):
-    LOGO_PATH = os.path.join(_BASE_DIR, "LOGO_CORA.png")
+    LOGO_PATH = os.path.join(_BASE_DIR, "LOGO_LEDA.png")
 LOGO_MIME = "image/png" if LOGO_PATH.lower().endswith(".png") else "image/jpeg"
 
 # Cabecera móvil: solo presentación. El botón abre el sidebar nativo de Streamlit.
@@ -2973,7 +2973,7 @@ st.components.v1.html(
             const h = d.createElement('div');
             h.id = ID;
             h.innerHTML = '<button type="button" aria-label="Abrir menú" style="border:1px solid #DDE5EA;background:#fff;color:#12304A;width:40px;height:40px;border-radius:12px;font-size:22px;line-height:1;box-shadow:0 1px 4px rgba(18,48,74,.08);">☰</button>' +
-                          '<div style="font-weight:800;font-size:18px;color:#12304A;">CORA</div>';
+                          '<div style="font-weight:800;font-size:18px;color:#12304A;">LEDA</div>';
             h.style.cssText = 'position:fixed;top:0;left:0;right:0;height:48px;z-index:999999;pointer-events:auto;display:flex;align-items:center;justify-content:space-between;padding:0 12px;background:rgba(255,255,255,.96);backdrop-filter:blur(8px);border-bottom:1px solid #E7EBEF;box-sizing:border-box;';
             d.body.appendChild(h);
             // (El ☰ y el historial se manejan con el delegado de clics de abajo.)
@@ -3014,7 +3014,7 @@ with st.sidebar:
         if os.path.exists(LOGO_PATH):
             st.image(LOGO_PATH, width=46)
     with title_col:
-        st.markdown('<div style="font-weight:800;font-size:19px;color:#12304A;padding-top:6px;">CORA</div>',
+        st.markdown('<div style="font-weight:800;font-size:19px;color:#12304A;padding-top:6px;">LEDA</div>',
                      unsafe_allow_html=True)
 
     if st.button("➕  Nuevo chat", use_container_width=True):
@@ -3090,7 +3090,7 @@ if not st.session_state["tana_chat"]:
         with open(LOGO_PATH, "rb") as _lf:
             _logo_b64 = _b64.b64encode(_lf.read()).decode()
         _logo_html = (
-            "<img src='data:" + LOGO_MIME + ";base64," + _logo_b64 + "' alt='CORA' "
+            "<img src='data:" + LOGO_MIME + ";base64," + _logo_b64 + "' alt='LEDA' "
             "style='width:96px;height:auto;background:#fff;padding:14px;border-radius:24px;"
             "box-shadow:0 4px 18px rgba(0,0,0,.28);'>"
         )
@@ -3099,7 +3099,7 @@ if not st.session_state["tana_chat"]:
         + _logo_html +
         '<div class="tana-welcome-title" style="font-size:26px;font-weight:800;margin-top:14px;">¿Qué monografía resolvemos hoy?</div>'
         '<div class="tana-welcome-subtitle" style="font-size:14.5px;margin-top:6px;">'
-        'Sube tu monografía abajo y CORA desarrolla los asientos, la HT y los estados financieros.</div>'
+        'Sube tu monografía abajo y LEDA desarrolla los asientos, la HT y los estados financieros.</div>'
         '</div>',
         unsafe_allow_html=True,
     )
@@ -3129,7 +3129,7 @@ with inputbar_container:
             )
         with bar[1]:
             pregunta_top = st.text_input(
-                "Consulta", placeholder="Pregunta a CORA…",
+                "Consulta", placeholder="Pregunta a LEDA…",
                 key="pregunta_tana_top", label_visibility="collapsed"
             )
         with bar[2]:
@@ -3462,14 +3462,14 @@ if _modo_excel:
         _log_excel = st.session_state["excel_chat_log"]
         _log_excel.append({"role": "user", "content": __import__("html").escape(_q_excel)})
         _tana_save_history_excel(_nombre_x, _excel_estado_historial(_nombre_x, _log_excel))
-        # Se muestra de inmediato lo que escribió el usuario y que CORA está trabajando.
+        # Se muestra de inmediato lo que escribió el usuario y que LEDA está trabajando.
         st.markdown(
             f'<div class="tana-bubble-user">{__import__("html").escape(_q_excel)}</div>',
             unsafe_allow_html=True,
         )
         _es_consulta = _excel_es_consulta(_q_excel)
-        with st.spinner("CORA está preparando la respuesta…" if _es_consulta
-                        else "CORA está revisando tu Excel… puede tardar uno o dos minutos."):
+        with st.spinner("LEDA está preparando la respuesta…" if _es_consulta
+                        else "LEDA está revisando tu Excel… puede tardar uno o dos minutos."):
             try:
                 try:   # copia en el historial para poder seguir trabajando al reabrir el trabajo
                     _tana_excel_guardar_bytes(_nombre_x, _archivo_excel.getvalue())
@@ -3497,7 +3497,7 @@ if _modo_excel:
                 _at = _excel_result.get("asientos_tana")
                 _tana_save_history_excel(_nombre_x, _excel_estado_historial(_nombre_x, _log_excel, _r, _at))
                 if _at:
-                    # El motor de CORA genera LM, HT, ERF, ERN y ESF en su formato estándar.
+                    # El motor de LEDA genera LM, HT, ERF, ERN y ESF en su formato estándar.
                     for _k in ("monografia_json", "monografia_texto", "monografia_nombre", "registro_compras",
                                "registro_ventas", "kardex", "costos", "tipo_empresa",
                                "tana_resuelto_signature", "tana_excel_buffer"):
@@ -3513,7 +3513,7 @@ if _modo_excel:
                 st.error(_msg_err)
                 st.stop()
     elif _es_excel_subido and not pregunta_top.strip() and not st.session_state.get("excel_auditoria"):
-        st.warning("📊 Para archivos Excel, indícale a CORA qué quieres. Ejemplos: «Revisa toda la práctica y agrega lo que falte» o «¿Cuadra el Estado de Resultados por Naturaleza?»")
+        st.warning("📊 Para archivos Excel, indícale a LEDA qué quieres. Ejemplos: «Revisa toda la práctica y agrega lo que falte» o «¿Cuadra el Estado de Resultados por Naturaleza?»")
 
 # Resultado de la revisión del Excel: se muestra aunque el cuadro de carga ya se haya limpiado.
 if st.session_state.get("excel_auditoria") and (not uploaded_file or _es_excel_subido):
@@ -3529,7 +3529,7 @@ if st.session_state.get("excel_auditoria") and (not uploaded_file or _es_excel_s
     if _r.get("mensaje_error"):
         st.info(str(_r.get("mensaje_error")))
     if _r.get("correcciones_aplicadas"):
-        st.success("📊 CORA realizó los cambios seguros y preparó el Excel.")
+        st.success("📊 LEDA realizó los cambios seguros y preparó el Excel.")
         for _c in _r.get("correcciones_aplicadas", []) or []:
             _nuevo = _c.get("formula") or _c.get("valor")
             st.markdown(
@@ -3537,12 +3537,12 @@ if st.session_state.get("excel_auditoria") and (not uploaded_file or _es_excel_s
                 + (f"  \n*Por qué:* {_c.get('motivo')}" if _c.get("motivo") else "")
             )
     elif st.session_state.get("excel_auditoria_buffer"):
-        st.info("📊 CORA revisó el Excel. No se aplicaron cambios automáticos; se entrega una copia del archivo revisado.")
+        st.info("📊 LEDA revisó el Excel. No se aplicaron cambios automáticos; se entrega una copia del archivo revisado.")
     if st.session_state.get("excel_auditoria_buffer"):
         st.download_button(
             "⬇️ Tu archivo con las correcciones (formato original)",
             data=st.session_state["excel_auditoria_buffer"],
-            file_name=st.session_state.get("excel_auditoria_filename", "Excel - CORA.xlsx"),
+            file_name=st.session_state.get("excel_auditoria_filename", "Excel - LEDA.xlsx"),
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             key="download_excel_corregido",
         )
@@ -3560,7 +3560,7 @@ if uploaded_file and Path(uploaded_file.name).suffix.lower() not in {".xls", ".x
             "registro_compras", "registro_ventas", "kardex",
         ):
             st.session_state.pop(_key, None)
-        with st.spinner("CORA está leyendo y procesando la monografía…"):
+        with st.spinner("LEDA está leyendo y procesando la monografía…"):
             try:
                 extracted = extract_with_gemini(uploaded_file)
                 st.session_state["monografia_json"] = extracted
@@ -3593,11 +3593,11 @@ if "monografia_json" in st.session_state:
 # ============================================================
 
 ASIENTOS_PROMPT = """
-Eres el motor contable de CORA, una aplicación de contabilidad peruana.
+Eres el motor contable de LEDA, una aplicación de contabilidad peruana.
 
 Tienes dos fuentes obligatorias:
 1) Las operaciones extraídas de la monografía.
-2) El PCGE de CORA que se adjunta abajo.
+2) El PCGE de LEDA que se adjunta abajo.
 
 OBJETIVO:
 Desarrollar los asientos contables de TODAS las operaciones detectadas y, cuando la
@@ -3639,7 +3639,7 @@ REGLA CRÍTICA SOBRE CUENTAS DE DESTINO (79):
 - No confundas la cuenta 79 con la cuenta 70 ni con la cuenta 69. La 79 es una cuenta puente de destino y debe quedar fuera de los estados de resultados.
 
 ANEXOS ADICIONALES (Registro de Compras, Registro de Ventas, Kardex):
-CORA solo genera estos tres anexos cuando la monografía los pide explícitamente.
+LEDA solo genera estos tres anexos cuando la monografía los pide explícitamente.
 Estos indicadores ya fueron calculados a partir de "solicitudes" y "datos_importantes":
 - INCLUIR_REGISTRO_COMPRAS = {incluir_rc}
 - INCLUIR_REGISTRO_VENTAS = {incluir_rv}
@@ -3669,7 +3669,7 @@ monografía, cada una con sus movimientos cronológicos usando el método
   después de ese movimiento (no el movimiento aislado).
 - Incluye "operacion_numero" en cada movimiento, igual al número de la
   operación de la monografía que lo originó: es indispensable para que
-  CORA pueda cruzar el Kardex con los asientos.
+  LEDA pueda cruzar el Kardex con los asientos.
 - CRÍTICO PARA LA SINCRONIZACIÓN: en cada asiento de venta que reconozca
   el costo de venta (cuenta 69xxx contra la cuenta de existencias 20xxx),
   el importe DEBE ser EXACTAMENTE igual a "salida_costo_total" del
@@ -3823,7 +3823,7 @@ REGLAS PARA "costos":
 - Si un importe no puede determinarse con seguridad, marca "requiere_revision": true
   y explica el motivo. No inventes importes.
 
-PCGE DE CORA:
+PCGE DE LEDA:
 {pcge}
 
 OPERACIONES DE LA MONOGRAFÍA:
@@ -3854,7 +3854,7 @@ def validate_asientos(data, pcge_map):
             if not re.fullmatch(r"\d{5}", code):
                 asiento_errors.append(f"Línea {l_idx}: código '{code}' no tiene 5 dígitos.")
             elif code not in pcge_map:
-                asiento_errors.append(f"Línea {l_idx}: código {code} no existe en el PCGE de CORA.")
+                asiento_errors.append(f"Línea {l_idx}: código {code} no existe en el PCGE de LEDA.")
 
             debe = _money(line.get("debe"))
             haber = _money(line.get("haber"))
@@ -3939,7 +3939,7 @@ def _find_operation(operations, number):
 
 # ============================================================
 # DETECCIÓN: ¿la monografía pide Registro de Compras, Registro de
-# Ventas y/o Kardex? CORA nunca los genera "porque sí": solo cuando
+# Ventas y/o Kardex? LEDA nunca los genera "porque sí": solo cuando
 # el enunciado ("solicitudes" / "datos_importantes") los pide de forma
 # explícita. Esto evita anexos inventados o sobrantes.
 # ============================================================
@@ -3977,7 +3977,7 @@ def requiere_kardex(monografia_json):
 
 def metodo_kardex_sugerido(monografia_json):
     """PEPS solo si el enunciado lo pide explícitamente. Por defecto,
-    CORA usa PROMEDIO PONDERADO (método que ya usa en sus prácticas)."""
+    LEDA usa PROMEDIO PONDERADO (método que ya usa en sus prácticas)."""
     t = _texto_solicitudes_monografia(monografia_json)
     if "peps" in t or "fifo" in t:
         return "PEPS"
@@ -3986,11 +3986,11 @@ def metodo_kardex_sugerido(monografia_json):
 
 def asegurar_cuenta_79_en_destinos(asientos, pcge_map):
     """
-    Regla determinista de CORA para destinos por función.
+    Regla determinista de LEDA para destinos por función.
 
     Cuando un asiento contiene una cuenta del Elemento 9 (94, 95, etc.)
     con importe en el DEBE, ese destino debe quedar compensado mediante
-    una cuenta de destino 79 en el HABER. Para el PCGE operativo de CORA
+    una cuenta de destino 79 en el HABER. Para el PCGE operativo de LEDA
     la cuenta estándar es 79111.
 
     Esta regla evita depender de que Gemini recuerde escribir la 79.
@@ -4171,7 +4171,7 @@ def completar_destinos_gastos(asientos, pcge_map):
         except Exception:
             pass
     nuevo_numero = (max(numeros) + 1) if numeros else len(asientos) + 1
-    criterio = ("Criterio asumido por CORA: comisiones y publicidad → gastos de ventas (95); "
+    criterio = ("Criterio asumido por LEDA: comisiones y publicidad → gastos de ventas (95); "
                 "los demás gastos → gastos de administración (94). Ajusta el reparto si tu enunciado indica otro.")
     nuevo = {
         "numero": nuevo_numero,
@@ -4545,7 +4545,7 @@ def validar_kardex(kardex):
     """Revalida de forma puramente aritmética (sin juicio contable) que
     cada tarjeta del Kardex cuadre: saldo = saldo anterior + entrada -
     salida. No corrige nada: solo devuelve alertas, igual que el resto
-    de validaciones de CORA.
+    de validaciones de LEDA.
     """
     alertas = []
     if not isinstance(kardex, list):
@@ -4597,7 +4597,7 @@ def sincronizar_costo_ventas_con_kardex(asientos, kardex):
     trae ese dato y el asiento de esa operación tiene una línea de costo
     de venta (69xxx) contra una línea de existencias (20xxx), se ajustan
     sus importes al costo_total de esa salida. Si no hay coincidencia
-    clara, no se toca nada (CORA no adivina).
+    clara, no se toca nada (LEDA no adivina).
     """
     if not kardex or not asientos:
         return asientos, []
@@ -4664,7 +4664,7 @@ def resolve_asientos_with_gemini():
         raise RuntimeError("No está configurada ninguna GEMINI_API_KEY en Streamlit Secrets.")
 
     pcge_map = {str(cod).strip(): str(desc) for cod, desc in PCGE_DATA}
-    # Solo cuentas de 5 dígitos: el usuario indicó que este es el nivel operativo de CORA.
+    # Solo cuentas de 5 dígitos: el usuario indicó que este es el nivel operativo de LEDA.
     pcge_5 = [[code, desc] for code, desc in pcge_map.items() if re.fullmatch(r"\d{5}", code)]
 
     monografia_json = st.session_state.get("monografia_json", {})
@@ -4699,7 +4699,7 @@ def resolve_asientos_with_gemini():
     return data, pcge_map
 
 if "monografia_json" in st.session_state and "asientos_contables" not in st.session_state:
-    with st.spinner("CORA está desarrollando y validando los asientos contables…"):
+    with st.spinner("LEDA está desarrollando y validando los asientos contables…"):
         try:
             resolved, pcge_map = resolve_asientos_with_gemini()
             if isinstance(resolved, dict):
@@ -4762,7 +4762,7 @@ if "monografia_json" in st.session_state and "asientos_contables" not in st.sess
             st.stop()
 
 # ============================================================
-# TUTOR INTERACTIVO CORA
+# TUTOR INTERACTIVO LEDA
 # ============================================================
 def _tana_contexto_tutor():
     mono = st.session_state.get("monografia_texto", "")
@@ -4770,7 +4770,7 @@ def _tana_contexto_tutor():
     asientos_txt = json.dumps(asientos, ensure_ascii=False, indent=2)
     return (
         "MONOGRAFÍA:\n" + mono[:14000]
-        + "\n\nASIENTOS GENERADOS POR CORA:\n" + asientos_txt[:18000]
+        + "\n\nASIENTOS GENERADOS POR LEDA:\n" + asientos_txt[:18000]
         + "\n\nREVISIÓN DEL EXCEL:\n" + json.dumps(st.session_state.get("excel_auditoria") or {}, ensure_ascii=False, default=str)[:12000]
         + "\n\nMODELO DE COSTOS:\n" + json.dumps(
             st.session_state.get("costos", {}), ensure_ascii=False, indent=2
@@ -4779,7 +4779,7 @@ def _tana_contexto_tutor():
 
 def _preguntar_a_tana(pregunta):
     contexto = _tana_contexto_tutor()
-    prompt = f"""Eres CORA, tutor de contabilidad peruana.
+    prompt = f"""Eres LEDA, tutor de contabilidad peruana.
 Responde la pregunta del estudiante usando únicamente el contexto proporcionado.
 Explica con claridad por qué se hizo el asiento, cómo se obtuvo el importe, por qué
 una cuenta va al Debe o Haber y, cuando corresponda, cómo se relaciona con la HT,
@@ -4815,7 +4815,7 @@ PREGUNTA:
 if (enviar_top or audio_top is not None) and (pregunta_top.strip() or audio_top is not None) and st.session_state.get("asientos_contables"):
     if enviar_top and pregunta_top.strip():
         _tana_chat_add("user", pregunta_top.strip())
-        with st.spinner("CORA está preparando la explicación…"):
+        with st.spinner("LEDA está preparando la explicación…"):
             try:
                 respuesta, ruta = _preguntar_a_tana(pregunta_top.strip())
                 st.session_state["respuesta_tana"] = respuesta
@@ -4832,7 +4832,7 @@ if (enviar_top or audio_top is not None) and (pregunta_top.strip() or audio_top 
             st.session_state["audio_tana_processed"] = _audio_sig
         if audio_top is not None:
             _tana_chat_add("user", "🎤 Pregunta enviada por voz")
-            with st.spinner("CORA está escuchando y preparando la respuesta…"):
+            with st.spinner("LEDA está escuchando y preparando la respuesta…"):
                 temp_audio = None
                 try:
                     with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
@@ -4853,7 +4853,7 @@ if (enviar_top or audio_top is not None) and (pregunta_top.strip() or audio_top 
                         os.remove(temp_audio)
     st.rerun()
 
-# Nota: el aviso "CORA terminó el desarrollo contable..." se muestra más
+# Nota: el aviso "LEDA terminó el desarrollo contable..." se muestra más
 # abajo, como burbuja de chat, SOLO cuando el workbook ya se generó de
 # verdad (ver bloque con tana_resuelto_signature). La línea que estaba
 # aquí antes se ejecutaba siempre, incluso sin haber subido nada.
@@ -5116,7 +5116,7 @@ print("Hoja LM (Libro Mayor) lista:", _n_cuentas_lm, "cuentas")
 # ============================================================
 # HOJA: HT - Hoja de Trabajo / Balance de Comprobación
 # La HT se construye directamente desde los asientos contables
-# validados por CORA. No depende de las reglas auxiliares del Excel.
+# validados por LEDA. No depende de las reglas auxiliares del Excel.
 # ============================================================
 
 asientos_export = st.session_state.get("asientos_contables", [])
@@ -5201,13 +5201,13 @@ def es_naturaleza(code):
     return True
 
 # Cuentas del Elemento 6 que ya tienen un destino explícito a 94/95.
-# Se detectan a partir de los asientos desarrollados por CORA, para que
+# Se detectan a partir de los asientos desarrollados por LEDA, para que
 # el ERF no vuelva a incluir un gasto por naturaleza que ya fue llevado
 # a una cuenta de función.
 def detectar_cuentas_6_con_destino(asientos):
     con_destino = set()
     for asiento in asientos or []:
-        # Destino generado por CORA: ya indica qué cuentas 6 fueron destinadas.
+        # Destino generado por LEDA: ya indica qué cuentas 6 fueron destinadas.
         if isinstance(asiento, dict):
             for _c in asiento.get("cuentas_destinadas", []) or []:
                 con_destino.add(str(_c).strip())
@@ -5435,7 +5435,7 @@ def ht_sum(code, col):
 # HOJAS: REGISTRO DE COMPRAS, REGISTRO DE VENTAS Y KARDEX
 # Solo se crean cuando la monografía los pide explícitamente
 # (ver requiere_registro_compras / requiere_registro_ventas /
-# requiere_kardex). Se alimentan directamente de lo que CORA
+# requiere_kardex). Se alimentan directamente de lo que LEDA
 # resolvió junto con los asientos, para que el costo de venta que
 # aquí se ve sea el MISMO que ya quedó registrado en Asientos_
 # Contables, HT, ERF y ERN (ver sincronizar_costo_ventas_con_kardex).
@@ -5576,7 +5576,7 @@ if kardex_data:
 # ============================================================
 # HOJA: COSTO DE PRODUCCIÓN / COSTO DE SERVICIOS
 # ============================================================
-# Esta hoja amplía CORA para prácticas de ciclos avanzados. No se genera
+# Esta hoja amplía LEDA para prácticas de ciclos avanzados. No se genera
 # para una empresa comercial si no existe información de costos de producción.
 costos_data = st.session_state.get("costos", {}) or {}
 tipo_costos = str(
@@ -5767,7 +5767,7 @@ if crear_hoja_costos:
 # se generan diferencias artificiales entre ERN, ERF y ESF.
 
 # ------------------------------------------------------------
-# ESTADOS FINANCIEROS — PRESENTACIÓN FINAL CORA
+# ESTADOS FINANCIEROS — PRESENTACIÓN FINAL LEDA
 # ------------------------------------------------------------
 # IMPORTANTE:
 # - La HT queda intacta y es la única fuente de datos.
@@ -6090,7 +6090,7 @@ ws7.freeze_panes = 'B5'
 # ESF — ESTADO DE SITUACIÓN FINANCIERA
 # ============================================================
 # Regla de presentación final:
-# 1) Se muestran TODAS las cuentas de balance realmente utilizadas por CORA.
+# 1) Se muestran TODAS las cuentas de balance realmente utilizadas por LEDA.
 # 2) En las hojas públicas se muestra únicamente la DESCRIPCIÓN; no se
 #    imprimen códigos de cuenta en el ESF.
 # 3) La ubicación se decide por el saldo real de la cuenta en la HT:
@@ -6471,7 +6471,7 @@ def construir_libro_caja_bancos(ws, asientos, pcge_map, ops, empresa, ht_last_ro
             c.fill = INPUT_FILL
         ws.row_dimensions[r].height = 30 if len(etiqueta) > 20 else 16
         r += 1
-    ws.cell(r, 3, "El RUC (celda amarilla) debe completarse; CORA no lo obtiene de la monografía.").font = GRAY
+    ws.cell(r, 3, "El RUC (celda amarilla) debe completarse; LEDA no lo obtiene de la monografía.").font = GRAY
     r += 2
 
     grupos_ht = f"HT!$A$4:$A${ht_last_row}"
@@ -6594,9 +6594,9 @@ def construir_libro_caja_bancos(ws, asientos, pcge_map, ops, empresa, ht_last_ro
 
     ws.cell(r, 1, "Notas").font = BOLD
     notas = [
-        "Fuente: asientos del Libro Diario de CORA (cuentas 10). Deudores = ingresos de efectivo; Acreedores = salidas.",
+        "Fuente: asientos del Libro Diario de LEDA (cuentas 10). Deudores = ingresos de efectivo; Acreedores = salidas.",
         "Formato 1.1: cuentas 101, 102 y 103. Formato 1.2: cuenta 104 y demás cuentas 10 (por cuenta bancaria).",
-        "Medio de pago (Tabla 1 SUNAT): CORA lo deduce de la glosa o del medio de pago de la monografía; si no hay pista usa 999. Verifícalo antes de presentarlo.",
+        "Medio de pago (Tabla 1 SUNAT): LEDA lo deduce de la glosa o del medio de pago de la monografía; si no hay pista usa 999. Verifícalo antes de presentarlo.",
         "Medios usados: " + "; ".join(f"{k} {v}" for k, v in _CB_MEDIOS.items()) + ".",
         "La columna Saldo es referencial (no figura en el formato oficial). La fila «Saldo según HT» valida el libro contra la Hoja de Trabajo.",
     ]
@@ -6636,7 +6636,7 @@ except Exception as _cb_exc:
         wb.remove(wb["Libro_Caja_Bancos"])
     st.warning(f"No se pudo generar el Libro Caja y Bancos: {_cb_exc}. El resto del Excel no se vio afectado.")
 
-# HOJA: ASIENTOS_CONTABLES (resueltos y validados por CORA)
+# HOJA: ASIENTOS_CONTABLES (resueltos y validados por LEDA)
 # ============================================================
 if "asientos_contables" in st.session_state:
     ws_ac = wb.create_sheet("Asientos_Contables")
@@ -6681,7 +6681,7 @@ if "asientos_contables" in st.session_state:
     ws_ac.freeze_panes = "A2"
 
 # ============================================================
-# HOJA: MONOGRAFIA (fuente leída por CORA)
+# HOJA: MONOGRAFIA (fuente leída por LEDA)
 # ============================================================
 if "monografia_texto" in st.session_state:
     ws_mono = wb.create_sheet("Monografia")
@@ -6757,8 +6757,8 @@ if _sig and st.session_state.get("tana_resuelto_signature") != _sig:
     _lista_html = "<br>".join(f"&nbsp;&nbsp;• {x}" for x in _items_resueltos)
     _tana_chat_add(
         "assistant",
-        ("CORA armó tu práctica en formato CORA:<br>" if st.session_state.get("tana_desde_excel")
-         else "CORA ha resuelto tu monografía:<br>") + _lista_html,
+        ("LEDA armó tu práctica en formato LEDA:<br>" if st.session_state.get("tana_desde_excel")
+         else "LEDA ha resuelto tu monografía:<br>") + _lista_html,
     )
     st.session_state["tana_resuelto_signature"] = _sig
     st.session_state["tana_excel_buffer"] = buffer.getvalue()
@@ -6768,16 +6768,16 @@ if st.session_state.get("tana_excel_buffer"):
     _errs_v = st.session_state.get("errores_asientos") or []
     _alertas_v = st.session_state.get("alertas_asientos") or []
     if _errs_v and not st.session_state.get("tana_desde_excel"):
-        st.warning("⚠️ CORA detectó asientos con errores; los estados pueden no cuadrar hasta corregirlos:\n\n"
+        st.warning("⚠️ LEDA detectó asientos con errores; los estados pueden no cuadrar hasta corregirlos:\n\n"
                    + "\n".join(f"- {e}" for e in _errs_v[:15]))
     if _alertas_v and not st.session_state.get("tana_desde_excel"):
-        with st.expander("Avisos de CORA sobre este desarrollo"):
+        with st.expander("Avisos de LEDA sobre este desarrollo"):
             for _al in _alertas_v[:30]:
                 st.markdown(f"- {_al}")
     st.markdown(
         '<div class="tana-bubble-assistant" style="max-width:340px;">'
         '<div class="tana-result-card"><span style="font-size:22px;">📊</span>'
-        '<span class="name">CORA · Excel · Desarrollo</span></div></div>',
+        '<span class="name">LEDA · Excel · Desarrollo</span></div></div>',
         unsafe_allow_html=True,
     )
     st.download_button(
