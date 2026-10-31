@@ -6799,7 +6799,18 @@ if str(_secret_or_env("CORA_SHOW_USAGE", "")).strip().lower() in ("1", "true", "
         if not _ulog:
             st.caption("Aún no hay llamadas a Gemini en esta sesión. Resuelve una monografía y vuelve a mirar aquí.")
         else:
-            _PRECIOS_BASE = {"gemini-3.5-flash": (1.50, 9.00)}
+            _y27 = st.checkbox(
+                "Usar precios de 2027 (vigentes desde el 1 de enero de 2027)",
+                value=False, key="_cora_precios_2027",
+            )
+            # Precios oficiales (nivel pagado, estándar), USD por millón de tokens.
+            # gemini-3.5-flash está deprecado y Google lo redirige a gemini-3.6-flash.
+            _flash = (1.50, 7.50) if _y27 else (0.75, 3.75)
+            _PRECIOS_BASE = {
+                "gemini-3.6-flash": _flash,
+                "gemini-3.5-flash": _flash,
+                "gemini-3.5-flash-lite": (0.30, 2.50),
+            }
             st.caption(
                 "Precios en dólares por millón de tokens. Los tokens de pensamiento se cobran como salida. "
                 "Verifica los precios en la página oficial de Gemini API: si un modelo sale en 0, escríbelo tú."
@@ -6810,8 +6821,8 @@ if str(_secret_or_env("CORA_SHOW_USAGE", "")).strip().lower() in ("1", "true", "
                 _pi, _po = _PRECIOS_BASE.get(_m, (0.0, 0.0))
                 _c1, _c2 = st.columns(2)
                 _precios[_m] = (
-                    _c1.number_input(f"{_m} · entrada USD/1M", min_value=0.0, value=float(_pi), step=0.05, key=f"_pin_{_m}"),
-                    _c2.number_input(f"{_m} · salida USD/1M", min_value=0.0, value=float(_po), step=0.05, key=f"_pout_{_m}"),
+                    _c1.number_input(f"{_m} · entrada USD/1M", min_value=0.0, value=float(_pi), step=0.05, key=f"_pin_{_m}_{int(_y27)}"),
+                    _c2.number_input(f"{_m} · salida USD/1M", min_value=0.0, value=float(_po), step=0.05, key=f"_pout_{_m}_{int(_y27)}"),
                 )
             _tc = st.number_input("Tipo de cambio (S/ por USD)", min_value=1.0, value=3.70, step=0.05, key="_cora_tc")
 
